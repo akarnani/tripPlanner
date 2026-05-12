@@ -1,0 +1,24 @@
+name: Validate aircraft performance YAML
+
+on:
+  pull_request:
+    paths:
+      - "aircraft/**"
+      - "pipelines/validate_perf.mjs"
+  push:
+    branches: [main]
+    paths:
+      - "aircraft/**"
+      - "pipelines/validate_perf.mjs"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: node pipelines/validate_perf.mjs
