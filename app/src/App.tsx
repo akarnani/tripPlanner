@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
-import { airports } from "@/data/loaders";
+import { airports, airportByIdent } from "@/data/loaders";
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
 import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
 import { usableRange } from "@/engine/performance";
+import { plan, type PlannedRoute } from "@/engine/plan";
 import { MapView } from "./ui/MapView";
 import { FilterPanel } from "./ui/FilterPanel";
 import { AircraftPanel } from "./ui/AircraftPanel";
+import { TripPanel } from "./ui/TripPanel";
+import { LegTable } from "./ui/LegTable";
 
 export function App() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
@@ -14,6 +17,13 @@ export function App() {
   );
   const [altitude_ft, setAltitude] = useState(6500);
   const [reserve_min, setReserve] = useState(45);
+  const [origin, setOrigin] = useState("KSEA");
+  const [destination, setDestination] = useState("KBOI");
+  const [costFnId, setCostFnId] = useState("fewestStops");
+  const [maxLegHr, setMaxLegHr] = useState(2);
+  const [routes, setRoutes] = useState<PlannedRoute[]>([]);
+  const [selectedRoute, setSelectedRoute] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
   const selectedAircraft = aircraftBySlug(aircraftSlug) ?? allAircraft[0];
 
@@ -29,6 +39,54 @@ export function App() {
 
   const matches = useMemo(() => applyFilters(airports, filters), [filters]);
 
+  function handlePlan() {
+    setError(null);
+    const o = airportByIdent(origin);
+    const d = airportByIdent(destination);
+    if (!o) {
+      setError(`unknown origin: ${origin}`);
+      return;
+    }
+    if (!d) {
+      setError(`unknown destination: ${destination}`);
+      return;
+    }
+    if (range.range_nm <= 0) {
+      setError("range is zero — check fuel reserve");
+      return;
+    }
+    // Ensure origin and destination are included in the candidate set even
+    // if the hard filters would exclude them.
+    const candidates = Array.from(
+      new Map(
+        [...matches, o, d].map((a) => [a.id, a]),
+      ).values(),
+    );
+    try {
+      const result = plan({
+        airports: candidates,
+        origin: o.id,
+        destination: d.id,
+        aircraft: selectedAircraft,
+        range,
+        costFnId,
+        costFnParams: { max_hr: maxLegHr },
+        K: 3,
+      });
+      if (result.length === 0) {
+        setError("no route found — try relaxing filters or raising reserve");
+        setRoutes([]);
+        return;
+      }
+      setRoutes(result);
+      setSelectedRoute(0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  const currentRoute = routes[selectedRoute] ?? null;
+
   return (
     <div className="flex h-full w-full">
       <aside className="w-80 shrink-0 space-y-5 overflow-y-auto border-r border-slate-200 bg-slate-50 p-4">
@@ -39,6 +97,21 @@ export function App() {
             filters.
           </p>
         </header>
+        <section>
+          <h2 className="mb-2 text-sm font-semibold text-slate-800">Trip</h2>
+          <TripPanel
+            origin={origin}
+            destination={destination}
+            onOriginChange={setOrigin}
+            onDestinationChange={setDestination}
+            costFnId={costFnId}
+            onCostFnChange={setCostFnId}
+            maxLegHr={maxLegHr}
+            onMaxLegHrChange={setMaxLegHr}
+            onPlan={handlePlan}
+            error={error}
+          />
+        </section>
         <section>
           <h2 className="mb-2 text-sm font-semibold text-slate-800">
             Aircraft &amp; cruise
@@ -65,13 +138,19 @@ export function App() {
             totalCount={airports.length}
           />
         </section>
-        <p className="text-xs text-slate-500">
-          Routing, terrain warnings, and exports land in later phases.
-        </p>
       </aside>
       <main className="relative flex-1">
-        <MapView airports={matches} />
+        <MapView airports={matches} route={currentRoute} />
       </main>
+      {routes.length > 0 && (
+        <aside className="w-80 shrink-0 border-l border-slate-200 bg-slate-50">
+          <LegTable
+            routes={routes}
+            selected={selectedRoute}
+            onSelect={setSelectedRoute}
+          />
+        </aside>
+      )}
     </div>
   );
 }
