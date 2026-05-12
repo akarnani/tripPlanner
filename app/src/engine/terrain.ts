@@ -2,9 +2,13 @@ import type { Airport, Obstacle } from "@/data/loaders";
 import { greatCircleNM, interpolateGreatCircle, type LatLon } from "./geo";
 import {
   hemisphericAltitude,
-  initialCourseDeg,
+  initialTrueCourseDeg,
+  magneticCourseDeg,
   type FlightRule,
 } from "./hemispheric";
+
+/** East-positive magnetic variation in degrees, or null if unavailable. */
+export type VariationFn = (point: LatLon) => number | null;
 
 export const TERRAIN_BUFFER_FT = 2000;
 /** Width of the per-leg corridor in nautical miles used for obstacle pickup. */
@@ -72,6 +76,7 @@ export interface AnalyzeInput {
   obstacles: readonly Obstacle[];
   flightRule: FlightRule;
   dem?: DEMSampler;
+  variation?: VariationFn;
 }
 
 export function analyzeTerrain(input: AnalyzeInput): TerrainAnalysis {
@@ -125,10 +130,15 @@ export function analyzeTerrain(input: AnalyzeInput): TerrainAnalysis {
     for (const s of legSamples)
       if (s.elevation_ft > worst.elevation_ft) worst = s;
 
-    const courseDeg = initialCourseDeg(leg.from, leg.to);
+    const trueCourse = initialTrueCourseDeg(leg.from, leg.to);
+    const variation = input.variation?.(leg.from) ?? null;
+    const magneticCourse =
+      variation !== null
+        ? magneticCourseDeg(trueCourse, variation)
+        : trueCourse;
     const minSafeAltFt = hemisphericAltitude(
       worst.elevation_ft + TERRAIN_BUFFER_FT,
-      courseDeg,
+      magneticCourse,
       input.flightRule,
     );
     perLeg.push({ legIndex: i, worst, minSafeAltFt });

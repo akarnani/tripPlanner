@@ -7,7 +7,9 @@ import { obstaclesNearRoute } from "@/engine/obstacles";
 import { analyzeTerrain, type TerrainAnalysis } from "@/engine/terrain";
 import type { FlightRule } from "@/engine/hemispheric";
 import { TerrainGridDEMSampler } from "@/engine/terrainGrid";
+import { MagneticVariationGrid } from "@/engine/magneticVariation";
 import terrainGridUrl from "@data/terrain_grid.bin.gz?url";
+import magneticGridUrl from "@data/magnetic_grid.bin.gz?url";
 import { MapView } from "./ui/MapView";
 import { FilterPanel } from "./ui/FilterPanel";
 import { AircraftPanel } from "./ui/AircraftPanel";
@@ -17,6 +19,9 @@ import { TerrainPanel } from "./ui/TerrainPanel";
 import { ExportPanel } from "./ui/ExportPanel";
 
 const demSampler = new TerrainGridDEMSampler(terrainGridUrl);
+const magGrid = new MagneticVariationGrid(magneticGridUrl);
+const variationFn = (p: { lat: number; lon: number }) =>
+  magGrid.variationDeg(p);
 
 export function App() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
@@ -38,6 +43,9 @@ export function App() {
       .load()
       .then(() => setDemReady(true))
       .catch((e) => console.warn("DEM grid failed to load:", e));
+    magGrid
+      .load()
+      .catch((e) => console.warn("magnetic grid failed to load:", e));
   }, []);
 
   const selectedAircraft = aircraftBySlug(aircraftSlug) ?? allAircraft[0];
@@ -69,6 +77,7 @@ export function App() {
         targetAltFt: targetFt,
         flightRule,
         reserveHr: reserveMin / 60,
+        variation: variationFn,
         costFnId,
         costFnParams: { max_hr: maxLegHr },
         K: 3,
@@ -105,6 +114,7 @@ export function App() {
       obstacles: routeObstacles,
       flightRule,
       dem: demReady ? demSampler : undefined,
+      variation: variationFn,
     });
   }, [currentRoute, routeObstacles, flightRule, demReady]);
 

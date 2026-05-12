@@ -1,6 +1,12 @@
 import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
-import { buildGraph, kShortestPaths, type Edge, type Path } from "./routing";
+import {
+  buildGraph,
+  kShortestPaths,
+  type Edge,
+  type Path,
+  type VariationFn,
+} from "./routing";
 import { costFnById } from "./costFns";
 import type { FlightRule } from "./hemispheric";
 
@@ -14,6 +20,7 @@ export interface PlanInput {
   targetAltFt: number;
   flightRule: FlightRule;
   reserveHr: number;
+  variation?: VariationFn;
   costFnId: string;
   costFnParams?: Record<string, number>;
   K?: number;
@@ -57,6 +64,7 @@ export function plan(input: PlanInput): PlannedRoute[] {
     targetAltFt,
     flightRule,
     reserveHr,
+    variation: input.variation,
   });
   const def = costFnById(costFnId);
   if (!def) throw new Error(`unknown cost function: ${costFnId}`);

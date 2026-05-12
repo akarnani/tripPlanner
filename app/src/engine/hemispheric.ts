@@ -8,15 +8,8 @@ const toDeg = (r: number) => (r * 180) / Math.PI;
 /**
  * Initial great-circle course from `a` to `b`, in degrees true,
  * normalized to [0, 360).
- *
- * v1 uses true course as a proxy for magnetic course in the
- * hemispheric-altitude rule. The error vs. real magnetic course is at
- * most ~20° in CONUS (worst-case isogonic line, far Maine or far
- * Washington), and only affects the cruise-altitude direction
- * boundary when the course is within that band of due N/S. A future
- * pass can fold in WMM to do this exactly.
  */
-export function initialCourseDeg(a: LatLon, b: LatLon): number {
+export function initialTrueCourseDeg(a: LatLon, b: LatLon): number {
   const φ1 = toRad(a.lat);
   const φ2 = toRad(b.lat);
   const Δλ = toRad(b.lon - a.lon);
@@ -25,6 +18,18 @@ export function initialCourseDeg(a: LatLon, b: LatLon): number {
     Math.cos(φ1) * Math.sin(φ2) -
     Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+/**
+ * Magnetic course from a true course and a magnetic variation. East
+ * variation is positive; magnetic = true − variation. Result normalized
+ * to [0, 360).
+ */
+export function magneticCourseDeg(
+  trueCourseDeg: number,
+  variationDeg: number,
+): number {
+  return ((trueCourseDeg - variationDeg) % 360 + 360) % 360;
 }
 
 /**

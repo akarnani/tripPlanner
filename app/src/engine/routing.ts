@@ -1,12 +1,18 @@
 import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
-import { greatCircleNM } from "./geo";
+import { greatCircleNM, type LatLon } from "./geo";
 import { cruiseAt } from "./performance";
 import {
   hemisphericAltitude,
-  initialCourseDeg,
+  initialTrueCourseDeg,
+  magneticCourseDeg,
   type FlightRule,
 } from "./hemispheric";
+
+/** East-positive magnetic variation in degrees at a point, or null if
+ *  unavailable. v1 routes that fall outside the WMM grid silently use
+ *  true course (variation = 0). */
+export type VariationFn = (point: LatLon) => number | null;
 
 export interface Edge {
   from: string; // airport id
@@ -14,8 +20,14 @@ export interface Edge {
   distance_nm: number;
   time_hr: number;
   fuel_gal: number;
-  /** Course at the start of this leg, degrees true [0, 360). */
-  course_deg: number;
+  /** Initial true course on the great-circle path, degrees [0, 360). */
+  true_course_deg: number;
+  /** Magnetic course used by the hemispheric rule; equals true course
+   *  when no variation data is available. */
+  magnetic_course_deg: number;
+  /** East-positive magnetic variation at the leg origin; null if the
+   *  WMM grid didn't cover the point. */
+  variation_deg: number | null;
   /** Hemispheric-valid cruise altitude actually flown on this leg. */
   cruise_alt_ft: number;
   /** TAS and burn used to compute time/fuel, at `cruise_alt_ft`. */
@@ -42,6 +54,10 @@ export interface BuildGraphInput {
   targetAltFt: number;
   flightRule: FlightRule;
   reserveHr: number;
+  /** Optional magnetic-variation provider. When omitted or returning
+   *  null at the leg origin, true course is used in place of magnetic
+   *  course for the hemispheric rule. */
+  variation?: VariationFn;
 }
 
 export interface Graph {
@@ -69,6 +85,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
     targetAltFt,
     flightRule,
     reserveHr,
+    variation,
   } = input;
   const byId = new Map<string, Airport>();
   for (const a of airports) byId.set(a.id, a);
@@ -84,13 +101,18 @@ export function buildGraph(input: BuildGraphInput): Graph {
     const from = byId.get(fromId);
     if (!from) return [];
     const edges: Edge[] = [];
+    const variation_deg = variation?.(from) ?? null;
     for (const to of airports) {
       if (to.id === from.id) continue;
       const distance_nm = greatCircleNM(from, to);
-      const course_deg = initialCourseDeg(from, to);
+      const true_course_deg = initialTrueCourseDeg(from, to);
+      const magnetic_course_deg =
+        variation_deg !== null
+          ? magneticCourseDeg(true_course_deg, variation_deg)
+          : true_course_deg;
       const cruise_alt_ft = hemisphericAltitude(
         targetAltFt,
-        course_deg,
+        magnetic_course_deg,
         flightRule,
       );
       const c = cruiseAt(aircraft, cruise_alt_ft);
@@ -109,7 +131,9 @@ export function buildGraph(input: BuildGraphInput): Graph {
         distance_nm,
         time_hr,
         fuel_gal: time_hr * c.fuel_gph,
-        course_deg,
+        true_course_deg,
+        magnetic_course_deg,
+        variation_deg,
         cruise_alt_ft,
         tas_kt: c.tas_kt,
         fuel_gph: c.fuel_gph,

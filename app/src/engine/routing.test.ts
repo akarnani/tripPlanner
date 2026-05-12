@@ -91,10 +91,50 @@ describe("buildGraph + kShortestPaths", () => {
     });
     const [path] = kShortestPaths(graph, () => 1, 1);
     expect(path.edges[0].cruise_alt_ft).toBe(7500);
-    // Great-circle initial course bends slightly north of due east
+    // No variation provider — magnetic course equals true course.
+    expect(path.edges[0].variation_deg).toBeNull();
+    expect(path.edges[0].magnetic_course_deg).toBe(
+      path.edges[0].true_course_deg,
+    );
+    // Great-circle initial true course bends slightly north of due east
     // (~83°) at mid-latitudes; just confirm we're in the east half.
-    expect(path.edges[0].course_deg).toBeGreaterThanOrEqual(0);
-    expect(path.edges[0].course_deg).toBeLessThan(180);
+    expect(path.edges[0].true_course_deg).toBeGreaterThanOrEqual(0);
+    expect(path.edges[0].true_course_deg).toBeLessThan(180);
+  });
+
+  test("variation provider flips altitude when course straddles N/S", () => {
+    // A great-circle course of true 005° with 15°E variation gives
+    // magnetic 350°, flipping the leg from eastbound (odd thousands)
+    // to westbound (even thousands). This is the exact case the
+    // magnetic-course refactor was meant to handle.
+    const south = mkAirport("S", 35, -120);
+    const north = mkAirport("N", 45, -119.13); // ~true 005° great-circle
+    const noVar = buildGraph({
+      airports: [south, north],
+      origin: "S",
+      destination: "N",
+      aircraft: mkAircraft(120, 10, 200),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+    });
+    const withVar = buildGraph({
+      airports: [south, north],
+      origin: "S",
+      destination: "N",
+      aircraft: mkAircraft(120, 10, 200),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      variation: () => 15,
+    });
+    const [noVarPath] = kShortestPaths(noVar, () => 1, 1);
+    const [withVarPath] = kShortestPaths(withVar, () => 1, 1);
+    expect(noVarPath.edges[0].cruise_alt_ft).toBe(7500); // east VFR
+    expect(withVarPath.edges[0].cruise_alt_ft).toBe(6500); // west VFR
+    expect(withVarPath.edges[0].variation_deg).toBe(15);
+    expect(withVarPath.edges[0].magnetic_course_deg).toBeLessThan(360);
+    expect(withVarPath.edges[0].magnetic_course_deg).toBeGreaterThan(180);
   });
 
   test("westbound legs round to even+500 for VFR", () => {
@@ -111,8 +151,8 @@ describe("buildGraph + kShortestPaths", () => {
     // Course is roughly westbound (~276°); target 6500 → next legal
     // westbound VFR altitude 6500.
     expect(path.edges[0].cruise_alt_ft).toBe(6500);
-    expect(path.edges[0].course_deg).toBeGreaterThanOrEqual(180);
-    expect(path.edges[0].course_deg).toBeLessThan(360);
+    expect(path.edges[0].true_course_deg).toBeGreaterThanOrEqual(180);
+    expect(path.edges[0].true_course_deg).toBeLessThan(360);
   });
 
   test("mock cheapestFuel cost can be injected at runtime", () => {

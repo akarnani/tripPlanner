@@ -51,7 +51,7 @@ export function toPDF(input: Input): Blob {
     { label: "From", x: m },
     { label: "To", x: m + 60 },
     { label: "Alt", x: m + 140, align: "right" },
-    { label: "Crs", x: m + 200, align: "right" },
+    { label: "MC", x: m + 200, align: "right" },
     { label: "NM", x: m + 250, align: "right" },
     { label: "Time", x: m + 310, align: "right" },
     { label: "Fuel", x: m + 370, align: "right" },
@@ -67,9 +67,12 @@ export function toPDF(input: Input): Blob {
     doc.text(leg.cruise_alt_ft.toLocaleString(), m + 140, y, {
       align: "right",
     });
-    doc.text(`${leg.course_deg.toFixed(0).padStart(3, "0")}°`, m + 200, y, {
-      align: "right",
-    });
+    doc.text(
+      `${leg.magnetic_course_deg.toFixed(0).padStart(3, "0")}°`,
+      m + 200,
+      y,
+      { align: "right" },
+    );
     doc.text(leg.distance_nm.toFixed(0), m + 250, y, { align: "right" });
     doc.text(`${(leg.time_hr * 60).toFixed(0)}m`, m + 310, y, {
       align: "right",

@@ -1,26 +1,45 @@
 import { describe, expect, test } from "vitest";
-import { hemisphericAltitude, initialCourseDeg } from "./hemispheric";
+import {
+  hemisphericAltitude,
+  initialTrueCourseDeg,
+  magneticCourseDeg,
+} from "./hemispheric";
 
-describe("initialCourseDeg", () => {
+describe("initialTrueCourseDeg", () => {
   test("due east is ~90°", () => {
-    const c = initialCourseDeg({ lat: 40, lon: -100 }, { lat: 40, lon: -90 });
+    const c = initialTrueCourseDeg({ lat: 40, lon: -100 }, { lat: 40, lon: -90 });
     expect(c).toBeGreaterThan(85);
     expect(c).toBeLessThan(95);
   });
   test("due west is ~270°", () => {
-    const c = initialCourseDeg({ lat: 40, lon: -90 }, { lat: 40, lon: -100 });
+    const c = initialTrueCourseDeg({ lat: 40, lon: -90 }, { lat: 40, lon: -100 });
     expect(c).toBeGreaterThan(265);
     expect(c).toBeLessThan(275);
   });
   test("due north is ~0°", () => {
-    const c = initialCourseDeg({ lat: 30, lon: -100 }, { lat: 40, lon: -100 });
+    const c = initialTrueCourseDeg({ lat: 30, lon: -100 }, { lat: 40, lon: -100 });
     expect(c).toBeGreaterThanOrEqual(0);
     expect(c).toBeLessThan(2);
   });
   test("due south is ~180°", () => {
-    const c = initialCourseDeg({ lat: 40, lon: -100 }, { lat: 30, lon: -100 });
+    const c = initialTrueCourseDeg({ lat: 40, lon: -100 }, { lat: 30, lon: -100 });
     expect(c).toBeGreaterThan(178);
     expect(c).toBeLessThan(182);
+  });
+});
+
+describe("magneticCourseDeg", () => {
+  test("subtracts east variation from true course", () => {
+    expect(magneticCourseDeg(90, 15)).toBe(75); // KSEA-ish
+    expect(magneticCourseDeg(180, 15)).toBe(165);
+  });
+  test("adds west (negative) variation to true course", () => {
+    expect(magneticCourseDeg(90, -15)).toBe(105); // east coast
+    expect(magneticCourseDeg(0, -15)).toBe(15);
+  });
+  test("wraps around 360", () => {
+    expect(magneticCourseDeg(5, 15)).toBeCloseTo(350, 6);
+    expect(magneticCourseDeg(355, -15)).toBeCloseTo(10, 6);
   });
 });
 

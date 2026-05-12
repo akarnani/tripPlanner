@@ -100,3 +100,29 @@ jobs:
           git add data/terrain_grid.bin.gz
           git commit -m "Refresh CONUS terrain DEM grid"
           git push
+
+  magnetic:
+    # Magnetic variation drifts slowly; WMM coefficients refresh every
+    # five years. Rebuild monthly so the committed grid never lags by
+    # more than ~0.1°.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy pygeomag
+      - run: python pipelines/magnetic_build.py data
+      - name: Commit refreshed magnetic grid
+        run: |
+          if [[ -z "$(git status --porcelain data/magnetic_grid.bin.gz)" ]]; then
+            echo "No magnetic-grid changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/magnetic_grid.bin.gz
+          git commit -m "Refresh CONUS magnetic variation grid"
+          git push
