@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { airports, airportByIdent, obstacles } from "@/data/loaders";
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
 import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
@@ -6,6 +6,10 @@ import { usableRange } from "@/engine/performance";
 import { plan, type PlannedRoute } from "@/engine/plan";
 import { obstaclesNearRoute } from "@/engine/obstacles";
 import { analyzeTerrain, type TerrainAnalysis } from "@/engine/terrain";
+import { TerrainGridDEMSampler } from "@/engine/terrainGrid";
+import terrainGridUrl from "@data/terrain_grid.bin.gz?url";
+
+const demSampler = new TerrainGridDEMSampler(terrainGridUrl);
 import { MapView } from "./ui/MapView";
 import { FilterPanel } from "./ui/FilterPanel";
 import { AircraftPanel } from "./ui/AircraftPanel";
@@ -28,6 +32,13 @@ export function App() {
   const [routes, setRoutes] = useState<PlannedRoute[]>([]);
   const [selectedRoute, setSelectedRoute] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [demReady, setDemReady] = useState(false);
+
+  useEffect(() => {
+    demSampler.load().then(() => setDemReady(true)).catch((e) => {
+      console.warn("DEM grid failed to load:", e);
+    });
+  }, []);
 
   const selectedAircraft = aircraftBySlug(aircraftSlug) ?? allAircraft[0];
 
@@ -110,8 +121,9 @@ export function App() {
       })),
       obstacles: routeObstacles,
       cruiseAltFt: altitude_ft,
+      dem: demReady ? demSampler : undefined,
     });
-  }, [currentRoute, routeObstacles, altitude_ft]);
+  }, [currentRoute, routeObstacles, altitude_ft, demReady]);
 
   function handleReplanAtMinSafe() {
     if (!terrain) return;

@@ -74,3 +74,29 @@ jobs:
           git add data/airports.json data/runways.json data/approaches.json data/obstacles.json
           git commit -m "Refresh NASR / CIFP / DOF datasets"
           git push
+
+  dem:
+    # Terrain doesn't change month-to-month; refresh annually to pick up
+    # source data revisions. Triggered manually or via the same workflow_dispatch.
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy pillow
+      - run: python pipelines/dem_build.py data
+      - name: Commit refreshed DEM
+        run: |
+          if [[ -z "$(git status --porcelain data/terrain_grid.bin.gz)" ]]; then
+            echo "No DEM changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/terrain_grid.bin.gz
+          git commit -m "Refresh CONUS terrain DEM grid"
+          git push
