@@ -5,11 +5,13 @@ import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
 import { usableRange } from "@/engine/performance";
 import { plan, type PlannedRoute } from "@/engine/plan";
 import { obstaclesNearRoute } from "@/engine/obstacles";
+import { analyzeTerrain, type TerrainAnalysis } from "@/engine/terrain";
 import { MapView } from "./ui/MapView";
 import { FilterPanel } from "./ui/FilterPanel";
 import { AircraftPanel } from "./ui/AircraftPanel";
 import { TripPanel } from "./ui/TripPanel";
 import { LegTable } from "./ui/LegTable";
+import { TerrainPanel } from "./ui/TerrainPanel";
 
 export function App() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
@@ -40,7 +42,7 @@ export function App() {
 
   const matches = useMemo(() => applyFilters(airports, filters), [filters]);
 
-  function handlePlan() {
+  function runPlan(atAltitudeFt: number) {
     setError(null);
     const o = airportByIdent(origin);
     const d = airportByIdent(destination);
@@ -52,16 +54,19 @@ export function App() {
       setError(`unknown destination: ${destination}`);
       return;
     }
-    if (range.range_nm <= 0) {
+    const r = usableRange({
+      aircraft: selectedAircraft,
+      altitude_ft: atAltitudeFt,
+      reserve_hours: reserve_min / 60,
+    });
+    if (r.range_nm <= 0) {
       setError("range is zero — check fuel reserve");
       return;
     }
     // Ensure origin and destination are included in the candidate set even
     // if the hard filters would exclude them.
     const candidates = Array.from(
-      new Map(
-        [...matches, o, d].map((a) => [a.id, a]),
-      ).values(),
+      new Map([...matches, o, d].map((a) => [a.id, a])).values(),
     );
     try {
       const result = plan({
@@ -69,7 +74,7 @@ export function App() {
         origin: o.id,
         destination: d.id,
         aircraft: selectedAircraft,
-        range,
+        range: r,
         costFnId,
         costFnParams: { max_hr: maxLegHr },
         K: 3,
@@ -86,11 +91,32 @@ export function App() {
     }
   }
 
+  const handlePlan = () => runPlan(altitude_ft);
+
   const currentRoute = routes[selectedRoute] ?? null;
   const routeObstacles = useMemo(
     () => obstaclesNearRoute(obstacles, currentRoute),
     [currentRoute],
   );
+  const terrain: TerrainAnalysis | null = useMemo(() => {
+    if (!currentRoute) return null;
+    return analyzeTerrain({
+      legs: currentRoute.legs.map((l) => ({
+        from: l.fromAirport,
+        to: l.toAirport,
+        fromIdent: l.fromAirport.icao ?? l.fromAirport.lid,
+        toIdent: l.toAirport.icao ?? l.toAirport.lid,
+      })),
+      obstacles: routeObstacles,
+      cruiseAltFt: altitude_ft,
+    });
+  }, [currentRoute, routeObstacles, altitude_ft]);
+
+  function handleReplanAtMinSafe() {
+    if (!terrain) return;
+    setAltitude(terrain.minSafeAltFt);
+    runPlan(terrain.minSafeAltFt);
+  }
 
   return (
     <div className="flex h-full w-full">
@@ -152,11 +178,18 @@ export function App() {
         />
       </main>
       {routes.length > 0 && (
-        <aside className="w-80 shrink-0 border-l border-slate-200 bg-slate-50">
-          <LegTable
-            routes={routes}
-            selected={selectedRoute}
-            onSelect={setSelectedRoute}
+        <aside className="flex w-80 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
+          <div className="flex-1 overflow-y-auto">
+            <LegTable
+              routes={routes}
+              selected={selectedRoute}
+              onSelect={setSelectedRoute}
+            />
+          </div>
+          <TerrainPanel
+            analysis={terrain}
+            cruiseAltFt={altitude_ft}
+            onReplanAtMinSafe={handleReplanAtMinSafe}
           />
         </aside>
       )}
