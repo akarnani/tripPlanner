@@ -15,7 +15,12 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["app/src/*"],
+      "@data/*": ["data/*"]
+    }
   },
-  "include": ["app/src"]
+  "include": ["app/src", "data/**/*.json"]
 }

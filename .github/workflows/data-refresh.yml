@@ -1,0 +1,51 @@
+name: Refresh static datasets
+
+on:
+  schedule:
+    # Every Wednesday at 12:00 UTC. FAA NASR/CIFP follow a 28-day cycle
+    # so we'll usually catch a cycle change within a week.
+    - cron: "0 12 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data-refresh
+  cancel-in-progress: false
+
+jobs:
+  nasr:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: pipelines/swift/.build
+          key: swift-build-${{ runner.os }}-${{ hashFiles('pipelines/swift/Package.swift', 'pipelines/swift/Package.resolved') }}
+          restore-keys: |
+            swift-build-${{ runner.os }}-
+
+      - name: Build pipeline
+        working-directory: pipelines/swift
+        run: swift build -c release
+
+      - name: Run NASR pipeline
+        working-directory: pipelines/swift
+        run: swift run -c release pipeline-nasr ./distribution.zip ../../data
+
+      - name: Commit refreshed data
+        run: |
+          if [[ -z "$(git status --porcelain data)" ]]; then
+            echo "No data changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/airports.json data/runways.json
+          git commit -m "Refresh NASR airports/runways data"
+          git push
