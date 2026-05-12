@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import { airports, airportByIdent } from "@/data/loaders";
+import { airports, airportByIdent, obstacles } from "@/data/loaders";
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
 import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
 import { usableRange } from "@/engine/performance";
 import { plan, type PlannedRoute } from "@/engine/plan";
+import { obstaclesNearRoute } from "@/engine/obstacles";
 import { MapView } from "./ui/MapView";
 import { FilterPanel } from "./ui/FilterPanel";
 import { AircraftPanel } from "./ui/AircraftPanel";
@@ -86,6 +87,10 @@ export function App() {
   }
 
   const currentRoute = routes[selectedRoute] ?? null;
+  const routeObstacles = useMemo(
+    () => obstaclesNearRoute(obstacles, currentRoute),
+    [currentRoute],
+  );
 
   return (
     <div className="flex h-full w-full">
@@ -140,7 +145,11 @@ export function App() {
         </section>
       </aside>
       <main className="relative flex-1">
-        <MapView airports={matches} route={currentRoute} />
+        <MapView
+          airports={matches}
+          route={currentRoute}
+          obstacles={routeObstacles}
+        />
       </main>
       {routes.length > 0 && (
         <aside className="w-80 shrink-0 border-l border-slate-200 bg-slate-50">

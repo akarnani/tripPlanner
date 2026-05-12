@@ -2,8 +2,8 @@ name: Refresh static datasets
 
 on:
   schedule:
-    # Every Wednesday at 12:00 UTC. FAA NASR/CIFP follow a 28-day cycle
-    # so we'll usually catch a cycle change within a week.
+    # Every Wednesday at 12:00 UTC. FAA NASR/CIFP follow a 28-day cycle,
+    # so a weekly cadence catches each cycle within a week of release.
     - cron: "0 12 * * 3"
   workflow_dispatch:
 
@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  nasr:
+  refresh:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,13 +30,38 @@ jobs:
           restore-keys: |
             swift-build-${{ runner.os }}-
 
-      - name: Build pipeline
+      - name: Build pipelines
         working-directory: pipelines/swift
         run: swift build -c release
 
       - name: Run NASR pipeline
         working-directory: pipelines/swift
-        run: swift run -c release pipeline-nasr ./distribution.zip ../../data
+        run: swift run -c release pipeline-nasr ./nasr-distribution.zip ../../data
+
+      - name: Download CIFP
+        working-directory: pipelines/swift
+        run: |
+          if [[ ! -f FAACIFP18 ]]; then
+            curl -sLfO https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_$(date -u +%y%m).zip || \
+              curl -sLfO https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_$(date -u -v-28d +%y%m).zip
+            unzip -o CIFP_*.zip FAACIFP18
+          fi
+
+      - name: Run CIFP pipeline
+        working-directory: pipelines/swift
+        run: swift run -c release pipeline-cifp ./FAACIFP18 ../../data
+
+      - name: Download DOF
+        working-directory: pipelines/swift
+        run: |
+          if [[ ! -f DOF.DAT ]]; then
+            curl -sLfO https://aeronav.faa.gov/Obst_Data/DAILY_DOF.ZIP
+            unzip -o DAILY_DOF.ZIP DOF.DAT
+          fi
+
+      - name: Run DOF pipeline
+        working-directory: pipelines/swift
+        run: swift run -c release pipeline-dof ./DOF.DAT ../../data
 
       - name: Commit refreshed data
         run: |
@@ -46,6 +71,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/airports.json data/runways.json
-          git commit -m "Refresh NASR airports/runways data"
+          git add data/airports.json data/runways.json data/approaches.json data/obstacles.json
+          git commit -m "Refresh NASR / CIFP / DOF datasets"
           git push

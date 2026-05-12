@@ -1,4 +1,9 @@
-import type { HardFilters, TowerMode } from "@/engine/filters";
+import type {
+  ApproachRequirement,
+  HardFilters,
+  TowerMode,
+} from "@/engine/filters";
+import { hasApproachData } from "@/data/loaders";
 
 interface Props {
   filters: HardFilters;
@@ -48,6 +53,31 @@ export function FilterPanel({
           <option value="required">Towered only</option>
           <option value="forbidden">Non-towered only</option>
         </select>
+      </div>
+      <div>
+        <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+          Approach
+        </label>
+        <select
+          value={filters.approach}
+          disabled={!hasApproachData}
+          onChange={(e) =>
+            onChange({
+              ...filters,
+              approach: e.target.value as ApproachRequirement,
+            })
+          }
+          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm disabled:bg-slate-100"
+        >
+          <option value="any">Any</option>
+          <option value="precision">Precision (ILS / LPV / RNP AR)</option>
+          <option value="rnav">Any RNAV/GPS</option>
+        </select>
+        {!hasApproachData && (
+          <p className="mt-1 text-[11px] text-slate-500">
+            CIFP data not yet built — filter disabled.
+          </p>
+        )}
       </div>
       <p className="text-xs text-slate-500">
         {matchCount.toLocaleString()} of {totalCount.toLocaleString()} airports
