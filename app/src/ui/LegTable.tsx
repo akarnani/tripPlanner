@@ -59,6 +59,8 @@ function RouteDetail({ route }: { route: PlannedRoute }) {
         <thead>
           <tr className="border-b border-slate-200 text-left text-slate-500">
             <th className="py-1">Leg</th>
+            <th className="py-1 text-right">Alt</th>
+            <th className="py-1 text-right">Crs</th>
             <th className="py-1 text-right">NM</th>
             <th className="py-1 text-right">Time</th>
             <th className="py-1 text-right">Fuel</th>
@@ -71,6 +73,12 @@ function RouteDetail({ route }: { route: PlannedRoute }) {
                 {leg.fromAirport.icao ?? leg.fromAirport.lid}
                 <span className="px-1 text-slate-400">→</span>
                 {leg.toAirport.icao ?? leg.toAirport.lid}
+              </td>
+              <td className="py-1 text-right">
+                {leg.cruise_alt_ft.toLocaleString()}
+              </td>
+              <td className="py-1 text-right">
+                {leg.course_deg.toFixed(0).padStart(3, "0")}°
               </td>
               <td className="py-1 text-right">{leg.distance_nm.toFixed(0)}</td>
               <td className="py-1 text-right">

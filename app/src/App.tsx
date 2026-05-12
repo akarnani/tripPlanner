@@ -2,14 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { airports, airportByIdent, obstacles } from "@/data/loaders";
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
 import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
-import { usableRange } from "@/engine/performance";
 import { plan, type PlannedRoute } from "@/engine/plan";
 import { obstaclesNearRoute } from "@/engine/obstacles";
 import { analyzeTerrain, type TerrainAnalysis } from "@/engine/terrain";
+import type { FlightRule } from "@/engine/hemispheric";
 import { TerrainGridDEMSampler } from "@/engine/terrainGrid";
 import terrainGridUrl from "@data/terrain_grid.bin.gz?url";
-
-const demSampler = new TerrainGridDEMSampler(terrainGridUrl);
 import { MapView } from "./ui/MapView";
 import { FilterPanel } from "./ui/FilterPanel";
 import { AircraftPanel } from "./ui/AircraftPanel";
@@ -18,15 +16,16 @@ import { LegTable } from "./ui/LegTable";
 import { TerrainPanel } from "./ui/TerrainPanel";
 import { ExportPanel } from "./ui/ExportPanel";
 
+const demSampler = new TerrainGridDEMSampler(terrainGridUrl);
+
 export function App() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
-  const [aircraftSlug, setAircraftSlug] = useState(
-    allAircraft[0]?.slug ?? "",
-  );
-  const [altitude_ft, setAltitude] = useState(6500);
-  const [reserve_min, setReserve] = useState(45);
+  const [aircraftSlug, setAircraftSlug] = useState(allAircraft[0]?.slug ?? "");
+  const [targetAltFt, setTargetAltFt] = useState(6500);
+  const [reserveMin, setReserveMin] = useState(45);
   const [origin, setOrigin] = useState("KSEA");
   const [destination, setDestination] = useState("KBOI");
+  const [flightRule, setFlightRule] = useState<FlightRule>("VFR");
   const [costFnId, setCostFnId] = useState("fewestStops");
   const [maxLegHr, setMaxLegHr] = useState(2);
   const [routes, setRoutes] = useState<PlannedRoute[]>([]);
@@ -35,26 +34,16 @@ export function App() {
   const [demReady, setDemReady] = useState(false);
 
   useEffect(() => {
-    demSampler.load().then(() => setDemReady(true)).catch((e) => {
-      console.warn("DEM grid failed to load:", e);
-    });
+    demSampler
+      .load()
+      .then(() => setDemReady(true))
+      .catch((e) => console.warn("DEM grid failed to load:", e));
   }, []);
 
   const selectedAircraft = aircraftBySlug(aircraftSlug) ?? allAircraft[0];
-
-  const range = useMemo(
-    () =>
-      usableRange({
-        aircraft: selectedAircraft,
-        altitude_ft,
-        reserve_hours: reserve_min / 60,
-      }),
-    [selectedAircraft, altitude_ft, reserve_min],
-  );
-
   const matches = useMemo(() => applyFilters(airports, filters), [filters]);
 
-  function runPlan(atAltitudeFt: number) {
+  function runPlan(targetFt: number) {
     setError(null);
     const o = airportByIdent(origin);
     const d = airportByIdent(destination);
@@ -66,17 +55,8 @@ export function App() {
       setError(`unknown destination: ${destination}`);
       return;
     }
-    const r = usableRange({
-      aircraft: selectedAircraft,
-      altitude_ft: atAltitudeFt,
-      reserve_hours: reserve_min / 60,
-    });
-    if (r.range_nm <= 0) {
-      setError("range is zero — check fuel reserve");
-      return;
-    }
-    // Ensure origin and destination are included in the candidate set even
-    // if the hard filters would exclude them.
+    // Ensure origin and destination are in the candidate set even if
+    // the hard filters would exclude them.
     const candidates = Array.from(
       new Map([...matches, o, d].map((a) => [a.id, a])).values(),
     );
@@ -86,7 +66,9 @@ export function App() {
         origin: o.id,
         destination: d.id,
         aircraft: selectedAircraft,
-        range: r,
+        targetAltFt: targetFt,
+        flightRule,
+        reserveHr: reserveMin / 60,
         costFnId,
         costFnParams: { max_hr: maxLegHr },
         K: 3,
@@ -103,7 +85,7 @@ export function App() {
     }
   }
 
-  const handlePlan = () => runPlan(altitude_ft);
+  const handlePlan = () => runPlan(targetAltFt);
 
   const currentRoute = routes[selectedRoute] ?? null;
   const routeObstacles = useMemo(
@@ -118,17 +100,18 @@ export function App() {
         to: l.toAirport,
         fromIdent: l.fromAirport.icao ?? l.fromAirport.lid,
         toIdent: l.toAirport.icao ?? l.toAirport.lid,
+        cruise_alt_ft: l.cruise_alt_ft,
       })),
       obstacles: routeObstacles,
-      cruiseAltFt: altitude_ft,
+      flightRule,
       dem: demReady ? demSampler : undefined,
     });
-  }, [currentRoute, routeObstacles, altitude_ft, demReady]);
+  }, [currentRoute, routeObstacles, flightRule, demReady]);
 
   function handleReplanAtMinSafe() {
     if (!terrain) return;
-    setAltitude(terrain.minSafeAltFt);
-    runPlan(terrain.minSafeAltFt);
+    setTargetAltFt(terrain.replanTargetFt);
+    runPlan(terrain.replanTargetFt);
   }
 
   return (
@@ -148,6 +131,8 @@ export function App() {
             destination={destination}
             onOriginChange={setOrigin}
             onDestinationChange={setDestination}
+            flightRule={flightRule}
+            onFlightRuleChange={setFlightRule}
             costFnId={costFnId}
             onCostFnChange={setCostFnId}
             maxLegHr={maxLegHr}
@@ -164,11 +149,10 @@ export function App() {
             aircraft={allAircraft}
             selectedSlug={selectedAircraft.slug}
             onSelect={setAircraftSlug}
-            altitude_ft={altitude_ft}
-            onAltitudeChange={setAltitude}
-            reserve_min={reserve_min}
-            onReserveChange={setReserve}
-            range={range}
+            targetAltFt={targetAltFt}
+            onTargetAltChange={setTargetAltFt}
+            reserveMin={reserveMin}
+            onReserveChange={setReserveMin}
           />
         </section>
         <section>
@@ -201,14 +185,13 @@ export function App() {
           </div>
           <TerrainPanel
             analysis={terrain}
-            cruiseAltFt={altitude_ft}
+            targetAltFt={targetAltFt}
             onReplanAtMinSafe={handleReplanAtMinSafe}
           />
           {currentRoute && (
             <ExportPanel
               route={currentRoute}
               aircraft={selectedAircraft}
-              altitude_ft={altitude_ft}
               terrain={terrain}
             />
           )}

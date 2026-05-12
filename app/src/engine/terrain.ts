@@ -1,5 +1,10 @@
 import type { Airport, Obstacle } from "@/data/loaders";
 import { greatCircleNM, interpolateGreatCircle, type LatLon } from "./geo";
+import {
+  hemisphericAltitude,
+  initialCourseDeg,
+  type FlightRule,
+} from "./hemispheric";
 
 export const TERRAIN_BUFFER_FT = 2000;
 /** Width of the per-leg corridor in nautical miles used for obstacle pickup. */
@@ -8,10 +13,8 @@ export const CORRIDOR_NM = 1;
 export const SAMPLE_SPACING_NM = 1;
 
 /**
- * Elevation provider abstraction. v1 ships a null sampler that returns no
- * DEM data; the only "terrain" comes from airport elevations and DOF
- * obstacles. When the PMTiles DEM build lands, drop in a sampler that
- * returns the underlying ground elevation at the queried point.
+ * Elevation provider abstraction. The browser plugs in a sampler that
+ * decodes the committed CONUS DEM grid; tests can inject anything.
  */
 export interface DEMSampler {
   /** Returns the ground elevation in feet MSL at the given lat/lon, or
@@ -35,13 +38,26 @@ export interface TerrainWarning {
   toIdent: string;
   worst: TerrainSample;
   clearance_ft: number;
+  /** The leg's actual planned cruise altitude (hemispheric-correct). */
+  cruise_alt_ft: number;
+}
+
+export interface PerLegAnalysis {
+  legIndex: number;
+  /** Highest single sample (terrain or obstacle MSL) along the leg. */
+  worst: TerrainSample;
+  /** Minimum safe altitude on this leg, hemispheric-rounded for its course. */
+  minSafeAltFt: number;
 }
 
 export interface TerrainAnalysis {
   samples: TerrainSample[];
   warnings: TerrainWarning[];
-  /** Suggested minimum safe cruise altitude, rounded up to next 500 ft. */
-  minSafeAltFt: number;
+  perLeg: PerLegAnalysis[];
+  /** Single global "if you replan, target at least this" altitude, the
+   *  max of all legs' hemispheric min-safe altitudes. The engine then
+   *  re-rounds per leg as legs go opposite directions. */
+  replanTargetFt: number;
 }
 
 export interface AnalyzeInput {
@@ -50,9 +66,11 @@ export interface AnalyzeInput {
     to: Airport;
     fromIdent: string;
     toIdent: string;
+    /** Planned cruise altitude on this leg. */
+    cruise_alt_ft: number;
   }>;
   obstacles: readonly Obstacle[];
-  cruiseAltFt: number;
+  flightRule: FlightRule;
   dem?: DEMSampler;
 }
 
@@ -60,15 +78,13 @@ export function analyzeTerrain(input: AnalyzeInput): TerrainAnalysis {
   const dem = input.dem ?? nullDEMSampler;
   const samples: TerrainSample[] = [];
   const warnings: TerrainWarning[] = [];
+  const perLeg: PerLegAnalysis[] = [];
 
   input.legs.forEach((leg, i) => {
     const dist = greatCircleNM(leg.from, leg.to);
     const segments = Math.max(1, Math.ceil(dist / SAMPLE_SPACING_NM));
     const path = interpolateGreatCircle(leg.from, leg.to, segments);
 
-    // Discrete terrain candidates for this leg: endpoint airport
-    // elevations, DEM samples along the path, and DOF obstacles within
-    // the corridor.
     const legSamples: TerrainSample[] = [];
     legSamples.push({
       point: leg.from,
@@ -94,9 +110,7 @@ export function analyzeTerrain(input: AnalyzeInput): TerrainAnalysis {
       }
     }
     for (const o of input.obstacles) {
-      const minToPath = Math.min(
-        ...path.map((p) => greatCircleNM(p, o)),
-      );
+      const minToPath = Math.min(...path.map((p) => greatCircleNM(p, o)));
       if (minToPath > CORRIDOR_NM) continue;
       legSamples.push({
         point: o,
@@ -107,33 +121,32 @@ export function analyzeTerrain(input: AnalyzeInput): TerrainAnalysis {
     }
     samples.push(...legSamples);
 
-    let worst: TerrainSample | null = null;
-    for (const s of legSamples) {
-      if (!worst || s.elevation_ft > worst.elevation_ft) worst = s;
-    }
-    if (worst) {
-      const clearance = input.cruiseAltFt - worst.elevation_ft;
-      if (clearance < TERRAIN_BUFFER_FT) {
-        warnings.push({
-          legIndex: i,
-          fromIdent: leg.fromIdent,
-          toIdent: leg.toIdent,
-          worst,
-          clearance_ft: clearance,
-        });
-      }
+    let worst: TerrainSample = legSamples[0];
+    for (const s of legSamples)
+      if (s.elevation_ft > worst.elevation_ft) worst = s;
+
+    const courseDeg = initialCourseDeg(leg.from, leg.to);
+    const minSafeAltFt = hemisphericAltitude(
+      worst.elevation_ft + TERRAIN_BUFFER_FT,
+      courseDeg,
+      input.flightRule,
+    );
+    perLeg.push({ legIndex: i, worst, minSafeAltFt });
+
+    const clearance = leg.cruise_alt_ft - worst.elevation_ft;
+    if (clearance < TERRAIN_BUFFER_FT) {
+      warnings.push({
+        legIndex: i,
+        fromIdent: leg.fromIdent,
+        toIdent: leg.toIdent,
+        worst,
+        clearance_ft: clearance,
+        cruise_alt_ft: leg.cruise_alt_ft,
+      });
     }
   });
 
-  const maxElevation = samples.reduce(
-    (m, s) => Math.max(m, s.elevation_ft),
-    0,
-  );
-  const minSafeAltFt = roundUpTo500(maxElevation + TERRAIN_BUFFER_FT);
+  const replanTargetFt = perLeg.reduce((m, l) => Math.max(m, l.minSafeAltFt), 0);
 
-  return { samples, warnings, minSafeAltFt };
-}
-
-function roundUpTo500(n: number): number {
-  return Math.ceil(n / 500) * 500;
+  return { samples, warnings, perLeg, replanTargetFt };
 }

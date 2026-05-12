@@ -1,0 +1,70 @@
+import type { LatLon } from "./geo";
+
+export type FlightRule = "VFR" | "IFR";
+
+const toRad = (d: number) => (d * Math.PI) / 180;
+const toDeg = (r: number) => (r * 180) / Math.PI;
+
+/**
+ * Initial great-circle course from `a` to `b`, in degrees true,
+ * normalized to [0, 360).
+ *
+ * v1 uses true course as a proxy for magnetic course in the
+ * hemispheric-altitude rule. The error vs. real magnetic course is at
+ * most ~20° in CONUS (worst-case isogonic line, far Maine or far
+ * Washington), and only affects the cruise-altitude direction
+ * boundary when the course is within that band of due N/S. A future
+ * pass can fold in WMM to do this exactly.
+ */
+export function initialCourseDeg(a: LatLon, b: LatLon): number {
+  const φ1 = toRad(a.lat);
+  const φ2 = toRad(b.lat);
+  const Δλ = toRad(b.lon - a.lon);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x =
+    Math.cos(φ1) * Math.sin(φ2) -
+    Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+/**
+ * Hemispheric cruise-altitude rule per FAR 91.159 (VFR) and 91.179
+ * (IFR), simplified to courses 0–179° vs 180–359°:
+ *
+ *   eastbound (0–179°)  · IFR: odd thousands  · VFR: odd + 500
+ *   westbound (180–359°)· IFR: even thousands · VFR: even + 500
+ *
+ * The rule applies more than 3,000 ft AGL (VFR) or always for IFR
+ * cruise; below the floor we return the floor altitude unchanged.
+ */
+export function hemisphericAltitude(
+  targetFt: number,
+  courseDeg: number,
+  rule: FlightRule,
+  floorFt = 3000,
+): number {
+  if (targetFt < floorFt) return targetFt;
+  const eastbound = courseDeg >= 0 && courseDeg < 180;
+  // Eastbound cruises odd thousands (3000, 5000, 7000, …);
+  // westbound cruises even thousands (4000, 6000, 8000, …).
+  const firstThousand = eastbound ? 3 : 4;
+  const offset = rule === "VFR" ? 500 : 0;
+  for (let k = 0; k < 30; k++) {
+    const candidate = (firstThousand + k * 2) * 1000 + offset;
+    if (candidate >= targetFt) return candidate;
+  }
+  return targetFt;
+}
+
+/**
+ * Smallest valid hemispheric altitude that is *also* at least
+ * `minSafeFt`. Used by the terrain engine to suggest a replan altitude
+ * that both clears terrain and complies with the cruise-altitude rule.
+ */
+export function nextValidAltitudeAtOrAbove(
+  minSafeFt: number,
+  courseDeg: number,
+  rule: FlightRule,
+): number {
+  return hemisphericAltitude(minSafeFt, courseDeg, rule);
+}

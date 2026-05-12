@@ -8,7 +8,6 @@ import { toPDF } from "@/exports/pdf";
 interface Props {
   route: PlannedRoute;
   aircraft: Aircraft;
-  altitude_ft: number;
   terrain: TerrainAnalysis | null;
 }
 
@@ -24,7 +23,7 @@ function download(name: string, type: string, content: BlobPart) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function ExportPanel({ route, aircraft, altitude_ft, terrain }: Props) {
+export function ExportPanel({ route, aircraft, terrain }: Props) {
   const seq = [
     route.legs[0].fromAirport,
     ...route.legs.map((l) => l.toAirport),
@@ -54,7 +53,7 @@ export function ExportPanel({ route, aircraft, altitude_ft, terrain }: Props) {
           download(
             `${baseName}.pdf`,
             "application/pdf",
-            toPDF({ route, aircraft, altitude_ft, terrain }),
+            toPDF({ route, aircraft, terrain }),
           )
         }
         className="flex-1 rounded bg-slate-900 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-800"

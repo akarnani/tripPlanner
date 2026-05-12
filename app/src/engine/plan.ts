@@ -1,15 +1,19 @@
 import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
-import type { RangeOutput } from "./performance";
 import { buildGraph, kShortestPaths, type Edge, type Path } from "./routing";
 import { costFnById } from "./costFns";
+import type { FlightRule } from "./hemispheric";
 
 export interface PlanInput {
   airports: readonly Airport[]; // already filtered
   origin: string; // airport id
   destination: string;
   aircraft: Aircraft;
-  range: RangeOutput;
+  /** Pilot's chosen target altitude. Each leg flies the lowest legal
+   *  hemispheric altitude at or above this for its own course. */
+  targetAltFt: number;
+  flightRule: FlightRule;
+  reserveHr: number;
   costFnId: string;
   costFnParams?: Record<string, number>;
   K?: number;
@@ -37,7 +41,10 @@ export function plan(input: PlanInput): PlannedRoute[] {
     airports,
     origin,
     destination,
-    range,
+    aircraft,
+    targetAltFt,
+    flightRule,
+    reserveHr,
     costFnId,
     costFnParams,
     K = 3,
@@ -46,9 +53,10 @@ export function plan(input: PlanInput): PlannedRoute[] {
     airports,
     origin,
     destination,
-    max_leg_nm: range.range_nm,
-    tas_kt: range.tas_kt,
-    fuel_gph: range.fuel_gph,
+    aircraft,
+    targetAltFt,
+    flightRule,
+    reserveHr,
   });
   const def = costFnById(costFnId);
   if (!def) throw new Error(`unknown cost function: ${costFnId}`);

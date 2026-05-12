@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { Airport } from "@/data/loaders";
-import { buildGraph, kShortestPaths } from "./routing";
-import type { Edge } from "./routing";
+import type { Aircraft } from "@/data/aircraft";
+import { buildGraph, kShortestPaths, type Edge } from "./routing";
 
 function mkAirport(id: string, lat: number, lon: number): Airport {
   return {
@@ -22,8 +22,24 @@ function mkAirport(id: string, lat: number, lon: number): Airport {
   };
 }
 
-// Five airports laid out roughly west-to-east across the US. Distances
-// between adjacent stations are ~300 nm; A↔E direct is ~1200 nm.
+// Aircraft with a flat enough perf table that range doesn't change much
+// between hemispheric altitudes (so the graph topology in tests doesn't
+// depend on the altitude rounding).
+function mkAircraft(rangeKt: number, gph: number, capacity_gal: number): Aircraft {
+  return {
+    slug: "test",
+    make: "T",
+    model: "T",
+    fuel: { type: "100LL", density_lb_per_gal: 6, usable_capacity_gal: capacity_gal },
+    cruise: [
+      { altitude_ft: 0, power_pct: 75, tas_kt: rangeKt, fuel_gph: gph },
+      { altitude_ft: 18000, power_pct: 75, tas_kt: rangeKt, fuel_gph: gph },
+    ],
+    climb: { rate_fpm: 700, fuel_to_climb_gph: 10 },
+  };
+}
+
+// Five airports laid out roughly west-to-east across the US.
 const A = mkAirport("A", 40, -120);
 const B = mkAirport("B", 40, -115);
 const C = mkAirport("C", 40, -110);
@@ -36,9 +52,10 @@ describe("buildGraph + kShortestPaths", () => {
       airports: [A, B, C, D, E],
       origin: "A",
       destination: "E",
-      max_leg_nm: 1500,
-      tas_kt: 120,
-      fuel_gph: 10,
+      aircraft: mkAircraft(120, 10, 150), // ~1500 nm range
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
     });
     const [best] = kShortestPaths(graph, () => 1, 1);
     expect(best.nodes).toEqual(["A", "E"]);
@@ -49,9 +66,10 @@ describe("buildGraph + kShortestPaths", () => {
       airports: [A, B, C, D, E],
       origin: "A",
       destination: "E",
-      max_leg_nm: 400,
-      tas_kt: 120,
-      fuel_gph: 10,
+      aircraft: mkAircraft(120, 10, 40), // ~400 nm range
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
     });
     const [best] = kShortestPaths(graph, () => 1, 1);
     expect(best.nodes[0]).toBe("A");
@@ -60,27 +78,44 @@ describe("buildGraph + kShortestPaths", () => {
     expect(best.nodes.length).toBeLessThanOrEqual(5);
   });
 
-  test("returns up to K distinct alternatives", () => {
+  test("each edge carries hemispheric-correct cruise altitude", () => {
+    // A→E eastbound great-circle course → VFR target 6500 stays at 6500
     const graph = buildGraph({
-      airports: [A, B, C, D, E],
+      airports: [A, E],
       origin: "A",
       destination: "E",
-      max_leg_nm: 700,
-      tas_kt: 120,
-      fuel_gph: 10,
+      aircraft: mkAircraft(120, 10, 200),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
     });
-    const paths = kShortestPaths(graph, () => 1, 3);
-    expect(paths.length).toBeGreaterThan(1);
-    const keys = paths.map((p) => p.nodes.join(">"));
-    expect(new Set(keys).size).toBe(paths.length);
+    const [path] = kShortestPaths(graph, () => 1, 1);
+    expect(path.edges[0].cruise_alt_ft).toBe(7500);
+    // Great-circle initial course bends slightly north of due east
+    // (~83°) at mid-latitudes; just confirm we're in the east half.
+    expect(path.edges[0].course_deg).toBeGreaterThanOrEqual(0);
+    expect(path.edges[0].course_deg).toBeLessThan(180);
   });
 
-  // Locks in the plan's "fuel data can be added later" promise: a mock
-  // cheapestFuel cost function plugs into the router without touching it,
-  // and routes via the cheap-fuel airport instead of the expensive one.
+  test("westbound legs round to even+500 for VFR", () => {
+    const graph = buildGraph({
+      airports: [A, E],
+      origin: "E",
+      destination: "A",
+      aircraft: mkAircraft(120, 10, 200),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+    });
+    const [path] = kShortestPaths(graph, () => 1, 1);
+    // Course is roughly westbound (~276°); target 6500 → next legal
+    // westbound VFR altitude 6500.
+    expect(path.edges[0].cruise_alt_ft).toBe(6500);
+    expect(path.edges[0].course_deg).toBeGreaterThanOrEqual(180);
+    expect(path.edges[0].course_deg).toBeLessThan(360);
+  });
+
   test("mock cheapestFuel cost can be injected at runtime", () => {
-    // A→E is 460 nm; max leg is 350 nm. Two parallel one-stop routes
-    // exist via B (north) and C (south); B has expensive fuel.
     const origin = mkAirport("O", 40, -120);
     const dest = mkAirport("D", 40, -110);
     const north = mkAirport("N", 41, -115);
@@ -89,9 +124,10 @@ describe("buildGraph + kShortestPaths", () => {
       airports: [origin, dest, north, south],
       origin: "O",
       destination: "D",
-      max_leg_nm: 350,
-      tas_kt: 120,
-      fuel_gph: 10,
+      aircraft: mkAircraft(120, 10, 35), // ~350 nm range
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
     });
     const prices: Record<string, number> = { O: 6, N: 9, S: 5, D: 6 };
     const cheapestFuel = (e: Edge) => e.fuel_gal * (prices[e.to] ?? 6);

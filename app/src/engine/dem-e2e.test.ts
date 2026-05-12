@@ -57,30 +57,49 @@ function ap(
 }
 
 describe("terrain analysis with the real DEM grid", () => {
-  test("KSEA→KBOI at 8000 ft hits Cascades terrain and recommends a higher altitude", async () => {
+  test("KSEA→KBOI at 7500 ft hits Cascades terrain and recommends a higher altitude", async () => {
     const dem = await sampler();
     const kSEA = ap("KSEA", 47.4502, -122.3088, 433);
     const kBOI = ap("KBOI", 43.5644, -116.2228, 2871);
     const r = analyzeTerrain({
-      legs: [{ from: kSEA, to: kBOI, fromIdent: "KSEA", toIdent: "KBOI" }],
+      legs: [
+        {
+          from: kSEA,
+          to: kBOI,
+          fromIdent: "KSEA",
+          toIdent: "KBOI",
+          cruise_alt_ft: 7500,
+        },
+      ],
       obstacles: [],
-      cruiseAltFt: 8000,
+      flightRule: "VFR",
       dem,
     });
     expect(r.warnings.length).toBeGreaterThan(0);
     // The Cascades top out around 8,000-10,000 ft along this great
-    // circle; min-safe-alt should be at least ~10,000 ft.
-    expect(r.minSafeAltFt).toBeGreaterThanOrEqual(10000);
+    // circle; the suggested altitude should clear them with the buffer
+    // and round to a valid eastbound VFR altitude.
+    expect(r.perLeg[0].minSafeAltFt).toBeGreaterThanOrEqual(9500);
+    // Must be odd-thousand + 500 since the course is eastbound (~120°).
+    expect(r.perLeg[0].minSafeAltFt % 2000).toBe(1500);
   });
 
-  test("KSEA→KPDX over the Puget lowlands clears at 6000 ft", async () => {
+  test("KSEA→KPDX over the Puget lowlands clears at 5500 ft", async () => {
     const dem = await sampler();
     const kSEA = ap("KSEA", 47.4502, -122.3088, 433);
     const kPDX = ap("KPDX", 45.5887, -122.5975, 31);
     const r = analyzeTerrain({
-      legs: [{ from: kSEA, to: kPDX, fromIdent: "KSEA", toIdent: "KPDX" }],
+      legs: [
+        {
+          from: kSEA,
+          to: kPDX,
+          fromIdent: "KSEA",
+          toIdent: "KPDX",
+          cruise_alt_ft: 5500,
+        },
+      ],
       obstacles: [],
-      cruiseAltFt: 6000,
+      flightRule: "VFR",
       dem,
     });
     expect(r.warnings).toHaveLength(0);

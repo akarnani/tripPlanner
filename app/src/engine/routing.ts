@@ -1,5 +1,12 @@
 import type { Airport } from "@/data/loaders";
+import type { Aircraft } from "@/data/aircraft";
 import { greatCircleNM } from "./geo";
+import { cruiseAt } from "./performance";
+import {
+  hemisphericAltitude,
+  initialCourseDeg,
+  type FlightRule,
+} from "./hemispheric";
 
 export interface Edge {
   from: string; // airport id
@@ -7,6 +14,13 @@ export interface Edge {
   distance_nm: number;
   time_hr: number;
   fuel_gal: number;
+  /** Course at the start of this leg, degrees true [0, 360). */
+  course_deg: number;
+  /** Hemispheric-valid cruise altitude actually flown on this leg. */
+  cruise_alt_ft: number;
+  /** TAS and burn used to compute time/fuel, at `cruise_alt_ft`. */
+  tas_kt: number;
+  fuel_gph: number;
   // Future numeric attributes (fuel_cost_$, weather penalty, etc.) attach
   // here without changing the routing engine.
   extra?: Record<string, number>;
@@ -22,9 +36,12 @@ export interface BuildGraphInput {
   airports: readonly Airport[];
   origin: string;
   destination: string;
-  max_leg_nm: number;
-  tas_kt: number;
-  fuel_gph: number;
+  aircraft: Aircraft;
+  /** Pilot's chosen target altitude. Each leg flies the lowest legal
+   *  hemispheric altitude at or above this for its own course. */
+  targetAltFt: number;
+  flightRule: FlightRule;
+  reserveHr: number;
 }
 
 export interface Graph {
@@ -36,19 +53,29 @@ export interface Graph {
 }
 
 /**
- * Builds a lazy graph over the filtered airports. Edges are computed on
- * demand (within usable range, by great-circle distance), so the engine
- * never materializes O(n^2) edges for large datasets.
+ * Builds a lazy graph over the filtered airports. Each potential edge
+ * picks its own hemispheric-correct cruise altitude based on its
+ * great-circle course and the pilot's flight rule + target altitude,
+ * then computes time/fuel/range from the aircraft's perf table at
+ * that altitude. So legs that head east may be at, say, 7,500 ft VFR
+ * and the return legs at 8,500 ft.
  */
 export function buildGraph(input: BuildGraphInput): Graph {
-  const { airports, origin, destination, max_leg_nm, tas_kt, fuel_gph } = input;
+  const {
+    airports,
+    origin,
+    destination,
+    aircraft,
+    targetAltFt,
+    flightRule,
+    reserveHr,
+  } = input;
   const byId = new Map<string, Airport>();
   for (const a of airports) byId.set(a.id, a);
   if (!byId.has(origin)) throw new Error(`origin ${origin} not in airport set`);
   if (!byId.has(destination))
     throw new Error(`destination ${destination} not in airport set`);
 
-  // Cache neighbor lookups; results are stable within one graph.
   const cache = new Map<string, Edge[]>();
 
   function neighbors(fromId: string): Edge[] {
@@ -59,15 +86,33 @@ export function buildGraph(input: BuildGraphInput): Graph {
     const edges: Edge[] = [];
     for (const to of airports) {
       if (to.id === from.id) continue;
-      const d = greatCircleNM(from, to);
-      if (d > max_leg_nm) continue;
-      const time_hr = d / tas_kt;
+      const distance_nm = greatCircleNM(from, to);
+      const course_deg = initialCourseDeg(from, to);
+      const cruise_alt_ft = hemisphericAltitude(
+        targetAltFt,
+        course_deg,
+        flightRule,
+      );
+      const c = cruiseAt(aircraft, cruise_alt_ft);
+      // Usable range at this leg's altitude after the requested reserve.
+      const reserve_gal = reserveHr * c.fuel_gph;
+      const burnable_gal = Math.max(
+        aircraft.fuel.usable_capacity_gal - reserve_gal,
+        0,
+      );
+      const range_nm = (burnable_gal / c.fuel_gph) * c.tas_kt;
+      if (distance_nm > range_nm) continue;
+      const time_hr = distance_nm / c.tas_kt;
       edges.push({
         from: from.id,
         to: to.id,
-        distance_nm: d,
+        distance_nm,
         time_hr,
-        fuel_gal: time_hr * fuel_gph,
+        fuel_gal: time_hr * c.fuel_gph,
+        course_deg,
+        cruise_alt_ft,
+        tas_kt: c.tas_kt,
+        fuel_gph: c.fuel_gph,
       });
     }
     cache.set(fromId, edges);
@@ -85,7 +130,7 @@ interface DijkstraOptions {
 }
 
 function edgeKey(e: Edge): string {
-  return `${e.from}${e.to}`;
+  return `${e.from}${e.to}`;
 }
 
 function dijkstra(
@@ -145,7 +190,7 @@ function dijkstra(
 }
 
 function pathKey(p: Path): string {
-  return p.nodes.join("");
+  return p.nodes.join("");
 }
 
 /**
