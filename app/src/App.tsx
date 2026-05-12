@@ -12,6 +12,7 @@ import { AircraftPanel } from "./ui/AircraftPanel";
 import { TripPanel } from "./ui/TripPanel";
 import { LegTable } from "./ui/LegTable";
 import { TerrainPanel } from "./ui/TerrainPanel";
+import { ExportPanel } from "./ui/ExportPanel";
 
 export function App() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
@@ -191,6 +192,14 @@ export function App() {
             cruiseAltFt={altitude_ft}
             onReplanAtMinSafe={handleReplanAtMinSafe}
           />
+          {currentRoute && (
+            <ExportPanel
+              route={currentRoute}
+              aircraft={selectedAircraft}
+              altitude_ft={altitude_ft}
+              terrain={terrain}
+            />
+          )}
         </aside>
       )}
     </div>
