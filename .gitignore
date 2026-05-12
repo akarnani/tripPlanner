@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.vite/
+*.log
+.DS_Store
+*.tsbuildinfo
+
+# Data pipeline raw sources (large, regenerable) — committed outputs only
+/pipelines/swift/.build/
+/pipelines/swift/sources/
+/pipelines/*.cache/
+
+# Aircraft POH PDFs are large; performance.yaml is committed, PDFs optional
+# (commented out — leaving in repo for now per plan)
+# /aircraft/**/*.pdf
