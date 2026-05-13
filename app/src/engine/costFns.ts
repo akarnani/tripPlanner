@@ -19,8 +19,13 @@ export const costFunctions: CostFnDefinition[] = [
   {
     id: "fewestStops",
     label: "Fewest stops",
-    description: "Unit edge cost; minimum-hop path.",
-    build: () => () => 1,
+    description:
+      "Minimum-hop path, tiebroken by shortest total time so the picked " +
+      "route is never gratuitously slower than another equal-stop route.",
+    // Hop-count strictly dominates; the time term only breaks ties.
+    // 1e6 hr is many orders of magnitude beyond any realistic route,
+    // so a single extra hop (+1.0) can never be undercut by faster legs.
+    build: () => (e: Edge) => 1 + e.time_hr / 1e6,
   },
   {
     id: "shortestTime",

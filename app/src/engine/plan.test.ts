@@ -116,6 +116,33 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
     }
   });
 
+  test("fewestStops tiebreaks on time when stops are equal", () => {
+    // Origin and destination with two parallel one-stop options.
+    // Direct O→D (920 nm) is out of range, so the fewest-stops floor
+    // is two legs. M is on the straight line; S detours ~120 nm north
+    // and produces a longer total path. The tiebreak should pick M.
+    const O = ap("O", 40, -120);
+    const D = ap("D", 40, -100);
+    const M = ap("M", 40, -110); // on the great-circle path
+    const S = ap("S", 42, -110); // detours ~120 nm north
+    const result = plan({
+      airports: [O, D, M, S],
+      origin: "O",
+      destination: "D",
+      aircraft: aircraft(), // 200 gal cap = 2280 nm range; both 2-hop legs fit
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      // Force the fewest-stops floor up to 2 by capping legs.
+      maxLegHr: 5,
+      objectives: ["fewestStops"],
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0].legs).toHaveLength(2);
+    // Tiebreak picks the on-line waypoint M over the northern detour S.
+    expect(result[0].legs[0].toAirport.id).toBe("M");
+  });
+
   test("each returned route is unique by node sequence", () => {
     const A = ap("A", 40, -120);
     const B = ap("B", 40, -115);
