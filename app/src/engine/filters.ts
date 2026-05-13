@@ -16,11 +16,24 @@ export const DEFAULT_FILTERS: HardFilters = {
   approach: "any",
 };
 
-// ARINC 424 approach-type characters considered "precision".
-// ILS, GLS/GBAS, RNP AR, IGS, and SBAS-served RNAV approaches qualify
-// for our v1 filter.
-const PRECISION_TYPES = new Set(["I", "J", "H", "G"]);
-const RNAV_TYPES = new Set(["R", "P", "F", "H"]);
+// Approach-type characters from ARINC 424. We expose two operational
+// buckets to the user:
+//
+// "precision" — approaches that come with vertical guidance and
+// typically reach minimums of ~200 ft AGL or lower. This deliberately
+// includes RNAV (R) because modern RNAV procedures at well-equipped
+// airports usually publish LPV minimums, which are operationally
+// equivalent to ILS for planning purposes. NOTE that LPV is *not*
+// legally a precision approach — ICAO classifies it as APV
+// (approach with vertical guidance), and the FAA follows suit. The
+// filter is named for the operational outcome the pilot is asking
+// about ("can I get to low minimums?"), not the regulatory category.
+// If/when CIFP's per-approach SBAS service level lands in
+// approaches.json, we can split RNAV-LPV from RNAV-LNAV here.
+//
+// "rnav" — any RNAV or GPS-based approach (R or P), or RNP AR (H).
+const PRECISION_TYPES = new Set(["I", "J", "H", "G", "R"]);
+const RNAV_TYPES = new Set(["R", "P", "H"]);
 
 function approachOK(
   airportId: string,
