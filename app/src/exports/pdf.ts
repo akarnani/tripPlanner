@@ -28,7 +28,10 @@ export function toPDF(input: Input): Blob {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(11);
   const seq = airportSequence(route);
-  const idents = seq.map((a) => a.icao ?? a.lid).join("  →  ");
+  // jsPDF's built-in Helvetica uses WinAnsi, which doesn't include the
+  // U+2192 arrow or U+2265 greater-or-equal. Stick to ASCII glyphs in
+  // the rendered text; the UI keeps the nicer Unicode characters.
+  const idents = seq.map((a) => a.icao ?? a.lid).join("  >  ");
   doc.text(idents, m, y);
   y += 18;
 
@@ -94,11 +97,11 @@ export function toPDF(input: Input): Blob {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
     if (terrain.warnings.length === 0) {
-      doc.text("All legs clear by ≥ 2,000 ft.", m, y);
+      doc.text("All legs clear by at least 2,000 ft.", m, y);
     } else {
       for (const w of terrain.warnings) {
         doc.text(
-          `${w.fromIdent} → ${w.toIdent} at ${w.cruise_alt_ft.toLocaleString()} ft: ${w.clearance_ft.toFixed(0)} ft over ${w.worst.source_label} (${w.worst.elevation_ft.toLocaleString()} ft MSL)`,
+          `${w.fromIdent} > ${w.toIdent} at ${w.cruise_alt_ft.toLocaleString()} ft: ${w.clearance_ft.toFixed(0)} ft over ${w.worst.source_label} (${w.worst.elevation_ft.toLocaleString()} ft MSL)`,
           m,
           y,
         );
