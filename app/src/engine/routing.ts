@@ -67,6 +67,12 @@ export interface BuildGraphInput {
    *  (i.e. full tanks). Intermediate fuel stops imply a top-off, so
    *  this only affects edges leaving `origin`. */
   startingFuelGal?: number;
+  /** Airports the user has explicitly excluded from being a stop.
+   *  Edges entering one of these are dropped from the graph; origin
+   *  and destination are exempt (the router never refuses to leave
+   *  origin or arrive at destination even if the caller mistakenly
+   *  includes them). */
+  excludedAirportIds?: ReadonlySet<string>;
 }
 
 export interface Graph {
@@ -97,6 +103,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
     variation,
     maxLegHr,
     startingFuelGal,
+    excludedAirportIds,
   } = input;
   const capacityGal = aircraft.fuel.usable_capacity_gal;
   const originFuelGal =
@@ -120,6 +127,14 @@ export function buildGraph(input: BuildGraphInput): Graph {
     const variation_deg = variation?.(from) ?? null;
     for (const to of airports) {
       if (to.id === from.id) continue;
+      // Skip user-excluded airports unless they're the destination
+      // (origin can never be a `to`, so it doesn't need a check).
+      if (
+        excludedAirportIds?.has(to.id) &&
+        to.id !== destination
+      ) {
+        continue;
+      }
       const distance_nm = greatCircleNM(from, to);
       const true_course_deg = initialTrueCourseDeg(from, to);
       const magnetic_course_deg =

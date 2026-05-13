@@ -27,6 +27,8 @@ export interface PlanInput {
    *  the aircraft's usable capacity (full tanks). Only affects the
    *  first leg; refuel stops imply a top-off. */
   startingFuelGal?: number;
+  /** Airports the user has excluded from being a stop. */
+  excludedAirportIds?: ReadonlySet<string>;
   /** Cost-function ids to compute one route each. Default:
    *  ["fewestStops", "shortestTime"]. Duplicate routes (same node
    *  sequence) are returned once, keyed to the first objective that
@@ -78,6 +80,7 @@ export function plan(input: PlanInput): PlannedRoute[] {
     variation: input.variation,
     maxLegHr: input.maxLegHr,
     startingFuelGal: input.startingFuelGal,
+    excludedAirportIds: input.excludedAirportIds,
   });
   // One Dijkstra per objective. We deliberately do *not* return Yen's
   // K-shortest within a single objective: on a sparse airport graph the

@@ -12,6 +12,7 @@ const LAYER_TOWERED = "airports-towered";
 const LAYER_NONTOWERED = "airports-nontowered";
 const LAYER_ROUTE = "route-line";
 const LAYER_STOPS = "route-stops-pts";
+const LAYER_STOPS_LABELS = "route-stops-labels";
 
 interface Props {
   airports: readonly Airport[];
@@ -149,6 +150,24 @@ export function MapView({ airports, route }: Props) {
           "circle-color": "#ea580c",
           "circle-stroke-color": "#ffffff",
           "circle-stroke-width": 2,
+        },
+      });
+      map.addLayer({
+        id: LAYER_STOPS_LABELS,
+        type: "symbol",
+        source: SRC_STOPS,
+        layout: {
+          "text-field": ["get", "ident"],
+          "text-size": 12,
+          "text-offset": [0, 1.1],
+          "text-anchor": "top",
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": "#1f2937",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
         },
       });
 
