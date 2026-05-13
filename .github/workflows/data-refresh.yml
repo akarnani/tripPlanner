@@ -25,11 +25,6 @@ concurrency:
   group: data-refresh
   cancel-in-progress: false
 
-env:
-  # Best-effort defaults. Override via workflow_dispatch inputs if the
-  # FAA changes URL conventions (which they have done before).
-  DEFAULT_DOF_URL: "https://aeronav.faa.gov/Obst_Data/DAILY_DOF.ZIP"
-
 jobs:
   nasr:
     runs-on: macos-26
@@ -96,15 +91,25 @@ jobs:
           if [[ -n "${CIFP_URL:-}" ]]; then
             urls=("$CIFP_URL")
           else
-            # FAA CIFP zips are published per AIRAC cycle. Try the
-            # current month, fall back to one month prior. macOS date
-            # supports BSD-style -v offsets.
-            ym_now=$(date -u +%y%m)
-            ym_prev=$(date -u -v-28d +%y%m)
-            urls=(
-              "https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_${ym_now}.zip"
-              "https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_${ym_prev}.zip"
-            )
+            # FAA CIFP zips are published per TPP effective date on a
+            # 56-day cycle, named CIFP_YYMMDD.zip. We generate cycle
+            # dates around today from a known anchor and try each from
+            # newest to oldest until one downloads.
+            urls=()
+            while IFS= read -r ymd; do
+              urls+=("https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_${ymd}.zip")
+            done < <(python3 - <<'PY'
+          from datetime import date, timedelta
+          # Known TPP effective date — propagate forward and backward.
+          anchor = date(2026, 5, 14)
+          today = date.today()
+          base = (today - anchor).days // 56
+          # Most-recent-first: current, previous, next, two-prev.
+          offsets = [base, base - 1, base + 1, base - 2]
+          for o in offsets:
+              print((anchor + timedelta(days=o * 56)).strftime('%y%m%d'))
+          PY
+                          )
           fi
           for u in "${urls[@]}"; do
             echo "trying $u"
@@ -157,11 +162,39 @@ jobs:
       - name: Download DOF
         working-directory: pipelines/swift
         env:
-          DOF_URL: ${{ inputs.dof_url || env.DEFAULT_DOF_URL }}
+          DOF_URL: ${{ inputs.dof_url }}
         run: |
           set -euo pipefail
-          echo "fetching $DOF_URL"
-          curl -sLfo DOF.zip "$DOF_URL"
+          if [[ -n "${DOF_URL:-}" ]]; then
+            urls=("$DOF_URL")
+          else
+            # FAA DOF zips are published per cycle as DOF_YYMMDD.zip
+            # on a 56-day schedule (DAILY_DOF.ZIP no longer exists).
+            # Anchor 2026-04-12; try recent cycles newest-first.
+            urls=()
+            while IFS= read -r ymd; do
+              urls+=("https://aeronav.faa.gov/Obst_Data/DOF_${ymd}.zip")
+            done < <(python3 - <<'PY'
+          from datetime import date, timedelta
+          anchor = date(2026, 4, 12)
+          today = date.today()
+          base = (today - anchor).days // 56
+          for o in (base, base - 1, base + 1, base - 2):
+              print((anchor + timedelta(days=o * 56)).strftime('%y%m%d'))
+          PY
+                          )
+          fi
+          for u in "${urls[@]}"; do
+            echo "trying $u"
+            if curl -sLfo DOF.zip "$u"; then
+              echo "downloaded $u"
+              break
+            fi
+          done
+          if [[ ! -s DOF.zip ]]; then
+            echo "::error::no DOF URL succeeded; pass dof_url via workflow_dispatch"
+            exit 1
+          fi
           unzip -o DOF.zip
           # Locate the DAT regardless of zip's internal naming.
           dof_file=$(find . -maxdepth 2 -iname "DOF.DAT" | head -1)
