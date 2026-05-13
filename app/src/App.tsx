@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   airportByIdent,
   EMPTY_DATASETS,
@@ -133,20 +134,24 @@ export function App() {
 
   function handlePlan() {
     if (isPlanning) return;
-    setIsPlanning(true);
+    // flushSync forces React to commit the spinner-on render before
+    // we yield. Without it, React 18 can defer the commit past our
+    // requestAnimationFrame callbacks and the runPlan() call below
+    // blocks the main thread for tens of seconds with the button
+    // still rendered in its idle state.
+    flushSync(() => setIsPlanning(true));
     const startedAt = performance.now();
-    // Double-RAF guarantees the browser actually paints the spinner
-    // before Dijkstra/Yen's runs. A single RAF or setTimeout(0) can
-    // be folded into the same frame by React, so the spinner state
-    // is never visible.
+    // After flushSync, the DOM has the spinner. Double-RAF ensures the
+    // browser actually paints it before runPlan blocks. Tailwind's
+    // animate-spin uses transform, which runs on the compositor and
+    // keeps spinning while the main thread is busy.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         try {
           runPlan(targetAltFt);
         } finally {
           // Keep the spinner up for at least MIN_SPINNER_MS so users
-          // get a visible "I clicked it" confirmation even on the
-          // sub-10ms seed-graph case.
+          // get a visible confirmation even on fast plans.
           const elapsed = performance.now() - startedAt;
           const remaining = Math.max(0, MIN_SPINNER_MS - elapsed);
           if (remaining === 0) {

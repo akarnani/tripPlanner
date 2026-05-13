@@ -128,11 +128,25 @@ function buildIndexes(
     if (a.icao) idByIdent.set(a.icao, a.id);
     if (a.lid) idByIdent.set(a.lid, a.id);
   }
+  const resolve = (cifpId: string): string | undefined => {
+    // Direct lookup handles both ICAO ("KSEA") and pure-LID ("3W2")
+    // shapes.
+    const direct = idByIdent.get(cifpId);
+    if (direct) return direct;
+    // CIFP pads short FAA LIDs to four characters with a leading "K"
+    // for the airport-identifier field, even though the airport
+    // doesn't have a real ICAO assigned. Try the stripped LID before
+    // giving up.
+    if (cifpId.length === 4 && cifpId.startsWith("K")) {
+      return idByIdent.get(cifpId.slice(1));
+    }
+    return undefined;
+  };
   const any = new Set<string>();
   const prec = new Set<string>();
   const rn = new Set<string>();
   for (const a of approaches) {
-    const id = idByIdent.get(a.airport_id);
+    const id = resolve(a.airport_id);
     if (!id) continue;
     any.add(id);
     if (hasVerticalGuidance(a)) prec.add(id);

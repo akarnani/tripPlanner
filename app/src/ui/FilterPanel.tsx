@@ -47,10 +47,14 @@ export function FilterPanel({
         />
       </div>
       <div>
-        <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+        <label
+          htmlFor="tower-req"
+          className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+        >
           Control tower
         </label>
         <select
+          id="tower-req"
           value={filters.tower}
           onChange={(e) =>
             onChange({ ...filters, tower: e.target.value as TowerMode })
@@ -63,10 +67,14 @@ export function FilterPanel({
         </select>
       </div>
       <div>
-        <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+        <label
+          htmlFor="approach-req"
+          className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+        >
           Approach
         </label>
         <select
+          id="approach-req"
           value={filters.approach}
           disabled={!hasApproachData}
           onChange={(e) =>
