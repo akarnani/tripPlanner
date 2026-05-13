@@ -59,7 +59,9 @@ struct PipelineCIFP {
             approach_type: String(ap.approachType.rawValue),
             approach_type_label: ap.approachType.description,
             is_precision: ap.isPrecision,
-            is_rnav: ap.isRNAV
+            is_rnav: ap.isRNAV,
+            sbas_service_level: ap.sbasServiceLevel?.rawValue,
+            required_nav_performance: ap.requiredNavPerformance?.rawValue
           ))
       }
     }
@@ -82,4 +84,10 @@ private struct ApproachOut: Encodable {
   let approach_type_label: String
   let is_precision: Bool
   let is_rnav: Bool
+  // SBAS service level: "ALPV", "ALPV200", or "ALP" (lateral only).
+  // Present on RNAV procedures that have published SBAS minimums.
+  let sbas_service_level: String?
+  // RNP / area-nav performance: "ALNAV", "ALNAV/VNAV", "RNP 0.3",
+  // "RNP APCH". "ALNAV/VNAV" indicates baro-VNAV vertical guidance.
+  let required_nav_performance: String?
 }
