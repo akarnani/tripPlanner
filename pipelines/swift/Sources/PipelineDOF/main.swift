@@ -23,10 +23,12 @@ struct PipelineDOF {
     try FileManager.default.createDirectory(
       at: outDir, withIntermediateDirectories: true)
 
-    let dof = try DOF(url: inURL) { error, line in
-      FileHandle.standardError.write(
-        Data("dof parse error at line \(line): \(error)\n".utf8))
-    }
+    let dof = try await DOF(
+      url: inURL,
+      errorCallback: { error, line in
+        FileHandle.standardError.write(
+          Data("dof parse error at line \(line): \(error)\n".utf8))
+      })
 
     var records: [ObstacleOut] = []
     for obstacle in dof {

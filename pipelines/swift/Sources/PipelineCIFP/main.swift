@@ -23,12 +23,14 @@ struct PipelineCIFP {
     try FileManager.default.createDirectory(
       at: outDir, withIntermediateDirectories: true)
 
-    let cifp = try await CIFP(url: inURL) { error, line in
-      if let line = line {
-        FileHandle.standardError.write(
-          Data("cifp parse error at line \(line): \(error)\n".utf8))
-      }
-    }
+    let cifp = try await CIFP(
+      url: inURL,
+      errorCallback: { error, line in
+        if let line = line {
+          FileHandle.standardError.write(
+            Data("cifp parse error at line \(line): \(error)\n".utf8))
+        }
+      })
 
     var records: [ApproachOut] = []
     for (_, airport) in cifp.airports {
