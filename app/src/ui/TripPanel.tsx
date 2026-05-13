@@ -1,4 +1,3 @@
-import { costFunctions } from "@/engine/costFns";
 import type { FlightRule } from "@/engine/hemispheric";
 
 interface Props {
@@ -8,10 +7,6 @@ interface Props {
   onDestinationChange: (v: string) => void;
   flightRule: FlightRule;
   onFlightRuleChange: (r: FlightRule) => void;
-  costFnId: string;
-  onCostFnChange: (id: string) => void;
-  maxLegHr: number;
-  onMaxLegHrChange: (h: number) => void;
   onPlan: () => void;
   error: string | null;
 }
@@ -23,10 +18,6 @@ export function TripPanel({
   onDestinationChange,
   flightRule,
   onFlightRuleChange,
-  costFnId,
-  onCostFnChange,
-  maxLegHr,
-  onMaxLegHrChange,
   onPlan,
   error,
 }: Props) {
@@ -85,39 +76,6 @@ export function TripPanel({
             : "Cruise altitudes round to odd/even thousands."}
         </p>
       </div>
-      <div>
-        <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-          Optimize for
-        </label>
-        <select
-          value={costFnId}
-          onChange={(e) => onCostFnChange(e.target.value)}
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-        >
-          {costFunctions.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      {costFnId === "maxLegTime" && (
-        <div>
-          <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-            Max leg time (hr)
-          </label>
-          <input
-            type="number"
-            min={0.5}
-            step={0.25}
-            value={maxLegHr}
-            onChange={(e) =>
-              onMaxLegHrChange(Number.parseFloat(e.target.value) || 2)
-            }
-            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-          />
-        </div>
-      )}
       <button
         type="button"
         onClick={onPlan}
@@ -125,6 +83,10 @@ export function TripPanel({
       >
         Plan trip
       </button>
+      <p className="text-[11px] text-slate-500">
+        Each plan returns one route per objective (fewest stops, shortest
+        time). Duplicates are dropped.
+      </p>
       {error && <p className="text-xs text-red-600">{error}</p>}
     </div>
   );

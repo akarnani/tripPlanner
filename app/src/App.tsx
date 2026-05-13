@@ -31,8 +31,6 @@ export function App() {
   const [origin, setOrigin] = useState("KSEA");
   const [destination, setDestination] = useState("KBOI");
   const [flightRule, setFlightRule] = useState<FlightRule>("VFR");
-  const [costFnId, setCostFnId] = useState("fewestStops");
-  const [maxLegHr, setMaxLegHr] = useState(2);
   const [routes, setRoutes] = useState<PlannedRoute[]>([]);
   const [selectedRoute, setSelectedRoute] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -78,9 +76,6 @@ export function App() {
         flightRule,
         reserveHr: reserveMin / 60,
         variation: variationFn,
-        costFnId,
-        costFnParams: { max_hr: maxLegHr },
-        K: 3,
       });
       if (result.length === 0) {
         setError("no route found — try relaxing filters or raising reserve");
@@ -143,10 +138,6 @@ export function App() {
             onDestinationChange={setDestination}
             flightRule={flightRule}
             onFlightRuleChange={setFlightRule}
-            costFnId={costFnId}
-            onCostFnChange={setCostFnId}
-            maxLegHr={maxLegHr}
-            onMaxLegHrChange={setMaxLegHr}
             onPlan={handlePlan}
             error={error}
           />

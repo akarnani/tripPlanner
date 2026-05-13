@@ -24,7 +24,8 @@ test.describe("trip planner smoke", () => {
     await page.getByRole("button", { name: "Plan trip" }).click();
 
     // The right-side aside only mounts when a route exists.
-    const legHeader = page.getByText(/Alt\s*1 ·/);
+    // Tabs are labeled by objective; "Fewest stops" is always present.
+    const legHeader = page.getByRole("button", { name: /Fewest stops · \d+ stop/ });
     await expect(legHeader.first()).toBeVisible();
 
     // Leg table column headers

@@ -1,4 +1,5 @@
 import type { PlannedRoute } from "@/engine/plan";
+import { costFnById } from "@/engine/costFns";
 
 interface Props {
   routes: PlannedRoute[];
@@ -11,21 +12,24 @@ export function LegTable({ routes, selected, onSelect }: Props) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex border-b border-slate-200 bg-white">
-        {routes.map((r, i) => (
-          <button
-            key={i}
-            type="button"
-            onClick={() => onSelect(i)}
-            className={
-              "flex-1 px-3 py-2 text-xs font-medium " +
-              (i === selected
-                ? "border-b-2 border-slate-900 text-slate-900"
-                : "text-slate-500 hover:text-slate-800")
-            }
-          >
-            Alt {i + 1} · {r.totals.stops} stop{r.totals.stops === 1 ? "" : "s"}
-          </button>
-        ))}
+        {routes.map((r, i) => {
+          const label = costFnById(r.costFnId)?.label ?? r.costFnId;
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onSelect(i)}
+              className={
+                "flex-1 px-3 py-2 text-xs font-medium " +
+                (i === selected
+                  ? "border-b-2 border-slate-900 text-slate-900"
+                  : "text-slate-500 hover:text-slate-800")
+              }
+            >
+              {label} · {r.totals.stops} stop{r.totals.stops === 1 ? "" : "s"}
+            </button>
+          );
+        })}
       </div>
       <RouteDetail route={routes[selected]} />
     </div>

@@ -21,9 +21,13 @@ export interface PlanInput {
   flightRule: FlightRule;
   reserveHr: number;
   variation?: VariationFn;
-  costFnId: string;
-  costFnParams?: Record<string, number>;
-  K?: number;
+  /** Cost-function ids to compute one route each. Default:
+   *  ["fewestStops", "shortestTime"]. Duplicate routes (same node
+   *  sequence) are returned once, keyed to the first objective that
+   *  produced them. */
+  objectives?: string[];
+  /** Optional per-objective parameters, keyed by objective id. */
+  params?: Record<string, Record<string, number>>;
 }
 
 export interface Leg extends Edge {
@@ -43,6 +47,8 @@ export interface PlannedRoute {
   };
 }
 
+const DEFAULT_OBJECTIVES = ["fewestStops", "shortestTime"];
+
 export function plan(input: PlanInput): PlannedRoute[] {
   const {
     airports,
@@ -52,9 +58,8 @@ export function plan(input: PlanInput): PlannedRoute[] {
     targetAltFt,
     flightRule,
     reserveHr,
-    costFnId,
-    costFnParams,
-    K = 3,
+    objectives = DEFAULT_OBJECTIVES,
+    params,
   } = input;
   const graph = buildGraph({
     airports,
@@ -66,11 +71,24 @@ export function plan(input: PlanInput): PlannedRoute[] {
     reserveHr,
     variation: input.variation,
   });
-  const def = costFnById(costFnId);
-  if (!def) throw new Error(`unknown cost function: ${costFnId}`);
-  const costFn = def.build(costFnParams ?? {});
-  const paths = kShortestPaths(graph, costFn, K);
-  return paths.map((p) => toRoute(p, graph.byId, costFnId));
+  // One Dijkstra per objective. We deliberately do *not* return Yen's
+  // K-shortest within a single objective: on a sparse airport graph the
+  // 2nd/3rd "different" paths almost always backtrack, which is useless
+  // as a flight-planning alternative.
+  const seen = new Set<string>();
+  const out: PlannedRoute[] = [];
+  for (const id of objectives) {
+    const def = costFnById(id);
+    if (!def) continue;
+    const costFn = def.build(params?.[id] ?? {});
+    const [best] = kShortestPaths(graph, costFn, 1);
+    if (!best) continue;
+    const key = best.nodes.join(">");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(toRoute(best, graph.byId, id));
+  }
+  return out;
 }
 
 function toRoute(
