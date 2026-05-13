@@ -143,6 +143,34 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
     expect(result[0].legs[0].toAirport.id).toBe("M");
   });
 
+  test("startingFuelGal caps the first leg only; later legs assume top-off", () => {
+    // Aircraft with 200-gal usable capacity, 120 KTAS, 10 GPH.
+    // Full-tank range ≈ (200 - 7.5) × 12 = 2,310 nm.
+    // With only 30 gal at the origin, the first leg can cover
+    // (30 - 7.5) × 12 ≈ 270 nm. After a top-off mid-route the next
+    // leg gets the full 2,310-nm budget again.
+    const O = ap("O", 40, -120);
+    const M = ap("M", 40, -116); // ~184 nm east of O — fits the 270-nm cap
+    const D = ap("D", 40, -100); // ~920 nm from O — doesn't fit on starting fuel
+    const result = plan({
+      airports: [O, M, D],
+      origin: "O",
+      destination: "D",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      startingFuelGal: 30,
+    });
+    expect(result.length).toBeGreaterThan(0);
+    for (const r of result) {
+      // Must stop somewhere; direct O→D would exceed startingFuel range.
+      expect(r.legs.length).toBeGreaterThan(1);
+      expect(r.legs[0].fromAirport.id).toBe("O");
+      expect(r.legs[0].toAirport.id).toBe("M");
+    }
+  });
+
   test("each returned route is unique by node sequence", () => {
     const A = ap("A", 40, -120);
     const B = ap("B", 40, -115);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { airports, airportByIdent, obstacles } from "@/data/loaders";
+import * as data from "@/data/loaders";
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
 import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
 import { plan, type PlannedRoute } from "@/engine/plan";
@@ -28,6 +28,12 @@ export function App() {
   const [aircraftSlug, setAircraftSlug] = useState(allAircraft[0]?.slug ?? "");
   const [targetAltFt, setTargetAltFt] = useState(6500);
   const [reserveMin, setReserveMin] = useState(45);
+  // Starting fuel defaults to full tanks of whichever aircraft is
+  // selected; an effect below resets the value when aircraft changes
+  // so the input stays sensible.
+  const [startingFuelGal, setStartingFuelGal] = useState<number>(
+    allAircraft[0]?.fuel.usable_capacity_gal ?? 0,
+  );
   const [origin, setOrigin] = useState("KSEA");
   const [destination, setDestination] = useState("KBOI");
   const [flightRule, setFlightRule] = useState<FlightRule>("VFR");
@@ -37,8 +43,22 @@ export function App() {
   const [selectedRoute, setSelectedRoute] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [demReady, setDemReady] = useState(false);
+  const [dataReady, setDataReady] = useState(false);
+  const [isPlanning, setIsPlanning] = useState(false);
 
+  // Datasets are fetched at runtime instead of bundled into the JS so
+  // the initial paint isn't blocked by parsing several MB of airport
+  // JSON. The terrain DEM and magnetic-variation grids load in
+  // parallel; planning + terrain analysis gracefully degrade until
+  // they're ready.
   useEffect(() => {
+    data
+      .loadDatasets()
+      .then(() => setDataReady(true))
+      .catch((e) => {
+        console.error("dataset load failed:", e);
+        setError("Failed to load airport database; reload to retry.");
+      });
     demSampler
       .load()
       .then(() => setDemReady(true))
@@ -49,12 +69,22 @@ export function App() {
   }, []);
 
   const selectedAircraft = aircraftBySlug(aircraftSlug) ?? allAircraft[0];
-  const matches = useMemo(() => applyFilters(airports, filters), [filters]);
+
+  // When the user picks a different aircraft, reset starting fuel to
+  // that aircraft's full capacity — its tanks aren't comparable.
+  useEffect(() => {
+    setStartingFuelGal(selectedAircraft.fuel.usable_capacity_gal);
+  }, [selectedAircraft.slug]);
+
+  const matches = useMemo(
+    () => (dataReady ? applyFilters(data.airports, filters) : []),
+    [filters, dataReady],
+  );
 
   function runPlan(targetFt: number) {
     setError(null);
-    const o = airportByIdent(origin);
-    const d = airportByIdent(destination);
+    const o = data.airportByIdent(origin);
+    const d = data.airportByIdent(destination);
     if (!o) {
       setError(`unknown origin: ${origin}`);
       return;
@@ -79,6 +109,7 @@ export function App() {
         reserveHr: reserveMin / 60,
         variation: variationFn,
         maxLegHr: capLegTime ? maxLegHr : undefined,
+        startingFuelGal,
       });
       if (result.length === 0) {
         setError("no route found — try relaxing filters or raising reserve");
@@ -92,12 +123,25 @@ export function App() {
     }
   }
 
-  const handlePlan = () => runPlan(targetAltFt);
+  function handlePlan() {
+    if (isPlanning) return;
+    setIsPlanning(true);
+    // Yield to the browser so the spinner paints before Dijkstra/Yen's
+    // chews through the candidate set. Without the timeout, React
+    // batches the setIsPlanning update with the post-runPlan render.
+    setTimeout(() => {
+      try {
+        runPlan(targetAltFt);
+      } finally {
+        setIsPlanning(false);
+      }
+    }, 0);
+  }
 
   const currentRoute = routes[selectedRoute] ?? null;
   const routeObstacles = useMemo(
-    () => obstaclesNearRoute(obstacles, currentRoute),
-    [currentRoute],
+    () => obstaclesNearRoute(data.obstacles, currentRoute),
+    [currentRoute, dataReady],
   );
   const terrain: TerrainAnalysis | null = useMemo(() => {
     if (!currentRoute) return null;
@@ -119,7 +163,7 @@ export function App() {
   function handleReplanAtMinSafe() {
     if (!terrain) return;
     setTargetAltFt(terrain.replanTargetFt);
-    runPlan(terrain.replanTargetFt);
+    handlePlan();
   }
 
   return (
@@ -146,6 +190,8 @@ export function App() {
             maxLegHr={maxLegHr}
             onMaxLegHrChange={setMaxLegHr}
             onPlan={handlePlan}
+            isPlanning={isPlanning}
+            dataReady={dataReady}
             error={error}
           />
         </section>
@@ -161,6 +207,9 @@ export function App() {
             onTargetAltChange={setTargetAltFt}
             reserveMin={reserveMin}
             onReserveChange={setReserveMin}
+            startingFuelGal={startingFuelGal}
+            onStartingFuelChange={setStartingFuelGal}
+            capacityGal={selectedAircraft.fuel.usable_capacity_gal}
           />
         </section>
         <section>
@@ -171,7 +220,8 @@ export function App() {
             filters={filters}
             onChange={setFilters}
             matchCount={matches.length}
-            totalCount={airports.length}
+            totalCount={data.airports.length}
+            hasApproachData={dataReady && data.hasApproachData}
           />
         </section>
       </aside>

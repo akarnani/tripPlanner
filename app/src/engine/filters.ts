@@ -1,12 +1,25 @@
 import type { Airport } from "@/data/loaders";
 import {
+  anyApproachAirports,
   hasApproachData,
   precisionApproachAirports,
   rnavApproachAirports,
 } from "@/data/loaders";
 
 export type TowerMode = "any" | "required" | "forbidden";
-export type ApproachRequirement = "any" | "precision" | "rnav";
+
+/**
+ * `off` — no filter, all airports are eligible regardless of approach.
+ * `any` — must have at least one published IAP (ILS, RNAV, LOC, VOR,
+ *         LDA, BC, NDB, etc.).
+ * `precision` — must have a vertical-guidance approach. That's a true
+ *         precision approach (ILS, GLS, MLS, RNP AR) OR an RNAV
+ *         procedure with LPV / LPV200 / LNAV-VNAV minimums. NOTE that
+ *         LPV is legally APV, not precision; the filter is named for
+ *         the operational outcome the pilot is asking about.
+ * `rnav` — must have a GNSS-based approach (RNAV, GPS, or RNP).
+ */
+export type ApproachRequirement = "off" | "any" | "precision" | "rnav";
 
 export interface HardFilters {
   minRunwayFt: number;
@@ -17,27 +30,24 @@ export interface HardFilters {
 export const DEFAULT_FILTERS: HardFilters = {
   minRunwayFt: 0,
   tower: "any",
-  approach: "any",
+  approach: "off",
 };
-
-// The actual eligibility sets are built in loaders.ts — they look at
-// the per-approach SBAS service level and RNP fields, not just the
-// approach-type character, so RNAV approaches that publish only LP or
-// LNAV (no vertical guidance) are correctly excluded from "precision."
-// See the comment over precisionApproachAirports for the operational-
-// vs-regulatory distinction.
 
 function approachOK(
   airportId: string,
   requirement: ApproachRequirement,
 ): boolean {
-  if (requirement === "any") return true;
+  if (requirement === "off") return true;
   // If CIFP data hasn't shipped yet, don't filter — treat as best-effort.
   if (!hasApproachData) return true;
-  if (requirement === "precision") {
-    return precisionApproachAirports.has(airportId);
+  switch (requirement) {
+    case "any":
+      return anyApproachAirports.has(airportId);
+    case "precision":
+      return precisionApproachAirports.has(airportId);
+    case "rnav":
+      return rnavApproachAirports.has(airportId);
   }
-  return rnavApproachAirports.has(airportId);
 }
 
 export function applyFilters(

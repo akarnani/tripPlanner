@@ -1,7 +1,7 @@
-import airportsRaw from "@data/airports.json";
-import runwaysRaw from "@data/runways.json";
-import approachesRaw from "@data/approaches.json";
-import obstaclesRaw from "@data/obstacles.json";
+import airportsUrl from "@data/airports.json?url";
+import runwaysUrl from "@data/runways.json?url";
+import approachesUrl from "@data/approaches.json?url";
+import obstaclesUrl from "@data/obstacles.json?url";
 
 export interface Airport {
   id: string;
@@ -55,30 +55,15 @@ export interface Obstacle {
   height_msl_ft: number;
 }
 
-export const airports = airportsRaw as Airport[];
-export const runways = runwaysRaw as Runway[];
-export const approaches = approachesRaw as Approach[];
-export const obstacles = obstaclesRaw as Obstacle[];
+// Live module bindings — populated by loadDatasets(). Consumers see
+// the latest values via ES-module live-binding semantics. The app
+// should not render data-dependent UI until `whenLoaded` resolves.
+export let airports: Airport[] = [];
+export let runways: Runway[] = [];
+export let approaches: Approach[] = [];
+export let obstacles: Obstacle[] = [];
+export let hasApproachData = false;
 
-export const hasApproachData = approaches.length > 0;
-export const hasObstacleData = obstacles.length > 0;
-
-export function airportByIdent(ident: string): Airport | undefined {
-  const u = ident.toUpperCase();
-  return airports.find((a) => a.icao === u || a.lid === u);
-}
-
-// "Precision" here means the operational outcome a pilot cares about
-// during planning: an approach that publishes vertical guidance and
-// reaches low minimums. That includes legally-precision approaches
-// (ILS/J/G/M/W/Y, plus RNP AR by FAA practice) AND RNAV approaches
-// whose published minimums include SBAS vertical (LPV / LPV200) or
-// baro-VNAV (LNAV/VNAV). It excludes RNAV approaches that publish
-// only LP or LNAV — those are non-precision in operation.
-//
-// Legal note: LPV is *not* a precision approach per ICAO / FAA — it's
-// classified APV. The filter is named for what the pilot is asking,
-// not for the regulatory category.
 const STRICT_PRECISION_TYPES = new Set(["I", "J", "H", "G", "M", "W", "Y"]);
 const RNAV_TYPES = new Set(["R", "P", "H"]);
 const VERTICAL_SBAS = new Set(["ALPV", "ALPV200"]);
@@ -104,18 +89,54 @@ function isRNAV(a: Approach): boolean {
   return RNAV_TYPES.has(a.approach_type);
 }
 
-/** Airport ids whose published approaches include at least one with
- *  vertical guidance — true precision or RNAV-LPV / RNAV-LNAV-VNAV. */
-export const precisionApproachAirports: Set<string> = (() => {
-  const s = new Set<string>();
-  for (const a of approaches) if (hasVerticalGuidance(a)) s.add(a.airport_id);
-  return s;
-})();
+/** Airports with at least one published approach procedure (any
+ *  type — ILS, RNAV, LOC, VOR, LDA, BC, NDB, etc.). */
+export let anyApproachAirports: Set<string> = new Set();
+/** Airports with at least one vertical-guidance approach (precision
+ *  or LPV / LPV200 / LNAV-VNAV RNAV). See note in `filters.ts` on the
+ *  legal-vs-operational distinction. */
+export let precisionApproachAirports: Set<string> = new Set();
+/** Airports with at least one RNAV/GPS-based approach. */
+export let rnavApproachAirports: Set<string> = new Set();
 
-/** Airport ids whose published approaches include at least one
- *  RNAV/GPS-based approach (regardless of vertical guidance). */
-export const rnavApproachAirports: Set<string> = (() => {
-  const s = new Set<string>();
-  for (const a of approaches) if (isRNAV(a)) s.add(a.airport_id);
-  return s;
-})();
+let _loaded: Promise<void> | null = null;
+
+/** Idempotent. Returns the same Promise on every call so the
+ *  network fetch happens at most once per app lifetime. */
+export function loadDatasets(): Promise<void> {
+  if (_loaded) return _loaded;
+  _loaded = (async () => {
+    const [a, r, ap, ob] = await Promise.all([
+      fetch(airportsUrl).then((r) => r.json() as Promise<Airport[]>),
+      fetch(runwaysUrl).then((r) => r.json() as Promise<Runway[]>),
+      fetch(approachesUrl).then((r) => r.json() as Promise<Approach[]>),
+      fetch(obstaclesUrl).then((r) => r.json() as Promise<Obstacle[]>),
+    ]);
+    airports = a;
+    runways = r;
+    approaches = ap;
+    obstacles = ob;
+    hasApproachData = approaches.length > 0;
+    rebuildApproachIndexes();
+  })();
+  return _loaded;
+}
+
+function rebuildApproachIndexes(): void {
+  const any = new Set<string>();
+  const prec = new Set<string>();
+  const rn = new Set<string>();
+  for (const a of approaches) {
+    any.add(a.airport_id);
+    if (hasVerticalGuidance(a)) prec.add(a.airport_id);
+    if (isRNAV(a)) rn.add(a.airport_id);
+  }
+  anyApproachAirports = any;
+  precisionApproachAirports = prec;
+  rnavApproachAirports = rn;
+}
+
+export function airportByIdent(ident: string): Airport | undefined {
+  const u = ident.toUpperCase();
+  return airports.find((a) => a.icao === u || a.lid === u);
+}

@@ -8,6 +8,10 @@ interface Props {
   onTargetAltChange: (alt: number) => void;
   reserveMin: number;
   onReserveChange: (min: number) => void;
+  startingFuelGal: number;
+  onStartingFuelChange: (gal: number) => void;
+  /** Max usable fuel for the selected aircraft (display + clamp). */
+  capacityGal: number;
 }
 
 export function AircraftPanel({
@@ -18,6 +22,9 @@ export function AircraftPanel({
   onTargetAltChange,
   reserveMin,
   onReserveChange,
+  startingFuelGal,
+  onStartingFuelChange,
+  capacityGal,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -81,6 +88,31 @@ export function AircraftPanel({
             className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
           />
         </div>
+      </div>
+      <div>
+        <label
+          htmlFor="starting-fuel"
+          className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+        >
+          Starting fuel (gal)
+        </label>
+        <input
+          id="starting-fuel"
+          type="number"
+          min={0}
+          max={capacityGal}
+          step={1}
+          value={startingFuelGal}
+          onChange={(e) =>
+            onStartingFuelChange(Number.parseFloat(e.target.value) || 0)
+          }
+          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+        />
+        <p className="mt-1 text-[11px] text-slate-500">
+          Fuel onboard at departure. Capped at {capacityGal} gal (full
+          tanks). Only the first leg uses this; refuel stops imply a
+          top-off.
+        </p>
       </div>
     </div>
   );

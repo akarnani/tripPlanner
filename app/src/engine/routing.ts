@@ -62,6 +62,11 @@ export interface BuildGraphInput {
    *  exceeding this are dropped from the graph before any objective
    *  sees them, so every returned route respects the cap. */
   maxLegHr?: number;
+  /** Fuel actually onboard at departure from `origin`, in gallons.
+   *  Capped to the aircraft's usable capacity. Defaults to capacity
+   *  (i.e. full tanks). Intermediate fuel stops imply a top-off, so
+   *  this only affects edges leaving `origin`. */
+  startingFuelGal?: number;
 }
 
 export interface Graph {
@@ -91,7 +96,13 @@ export function buildGraph(input: BuildGraphInput): Graph {
     reserveHr,
     variation,
     maxLegHr,
+    startingFuelGal,
   } = input;
+  const capacityGal = aircraft.fuel.usable_capacity_gal;
+  const originFuelGal =
+    startingFuelGal !== undefined
+      ? Math.min(Math.max(startingFuelGal, 0), capacityGal)
+      : capacityGal;
   const byId = new Map<string, Airport>();
   for (const a of airports) byId.set(a.id, a);
   if (!byId.has(origin)) throw new Error(`origin ${origin} not in airport set`);
@@ -121,12 +132,13 @@ export function buildGraph(input: BuildGraphInput): Graph {
         flightRule,
       );
       const c = cruiseAt(aircraft, cruise_alt_ft);
-      // Usable range at this leg's altitude after the requested reserve.
+      // Usable range at this leg's altitude after the requested
+      // reserve. The first leg from origin departs with whatever fuel
+      // the pilot loaded (origin-only); subsequent legs assume a
+      // top-off to capacity at each fuel stop.
       const reserve_gal = reserveHr * c.fuel_gph;
-      const burnable_gal = Math.max(
-        aircraft.fuel.usable_capacity_gal - reserve_gal,
-        0,
-      );
+      const tankGal = fromId === origin ? originFuelGal : capacityGal;
+      const burnable_gal = Math.max(tankGal - reserve_gal, 0);
       const range_nm = (burnable_gal / c.fuel_gph) * c.tas_kt;
       if (distance_nm > range_nm) continue;
       const time_hr = distance_nm / c.tas_kt;

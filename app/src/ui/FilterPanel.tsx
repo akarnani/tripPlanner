@@ -3,13 +3,16 @@ import type {
   HardFilters,
   TowerMode,
 } from "@/engine/filters";
-import { hasApproachData } from "@/data/loaders";
 
 interface Props {
   filters: HardFilters;
   onChange: (next: HardFilters) => void;
   matchCount: number;
   totalCount: number;
+  /** Threaded from App so FilterPanel rerenders when the async data
+   *  load completes (the module-level loaders.hasApproachData binding
+   *  changes but doesn't trigger React on its own). */
+  hasApproachData: boolean;
 }
 
 export function FilterPanel({
@@ -17,6 +20,7 @@ export function FilterPanel({
   onChange,
   matchCount,
   totalCount,
+  hasApproachData,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -73,13 +77,14 @@ export function FilterPanel({
           }
           className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm disabled:bg-slate-100"
         >
-          <option value="any">Any</option>
-          <option value="precision">Precision (ILS / LPV / RNP AR)</option>
-          <option value="rnav">Any RNAV/GPS</option>
+          <option value="off">No approach required</option>
+          <option value="any">Any IAP (LOC / VOR / LDA / BC / NDB / …)</option>
+          <option value="precision">Precision or LPV</option>
+          <option value="rnav">RNAV / GPS</option>
         </select>
         {!hasApproachData && (
           <p className="mt-1 text-[11px] text-slate-500">
-            CIFP data not yet built — filter disabled.
+            CIFP data not loaded yet — filter disabled.
           </p>
         )}
       </div>
