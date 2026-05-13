@@ -41,6 +41,16 @@ struct PipelineCIFP {
     var records: [ApproachOut] = []
     for (_, airport) in cifp.airports {
       for ap in airport.approaches {
+        // SwiftCIFP emits transition (.A) and missed-approach (.Z)
+        // route segments as separate Approach records. Neither is a
+        // standalone, flyable approach procedure — an airport with
+        // only these is not "approach-eligible" for routing.
+        switch ap.approachType {
+        case .transition, .missedApproach:
+          continue
+        default:
+          break
+        }
         records.append(
           ApproachOut(
             airport_id: airport.id,
