@@ -8,6 +8,19 @@ import SwiftCIFP
 // procedure; the routing engine uses these to filter airports by
 // approach type (precision / RNAV / non-precision) at plan time.
 
+// SwiftCIFP's errorCallback is `((Error, Int?) -> Void)?` — a
+// non-`@Sendable` function-type, and the init is `nonisolated async`.
+// Inline closures inferred from `@main`'s main-actor context can't be
+// sent across, even with `@Sendable` on the closure literal. A
+// top-level function is nonisolated by construction and threads
+// through fine.
+private func reportCIFPError(_ error: Error, line: Int?) {
+  if let line = line {
+    FileHandle.standardError.write(
+      Data("cifp parse error at line \(line): \(error)\n".utf8))
+  }
+}
+
 @main
 struct PipelineCIFP {
 
@@ -23,16 +36,21 @@ struct PipelineCIFP {
     try FileManager.default.createDirectory(
       at: outDir, withIntermediateDirectories: true)
 
-    let cifp = try await CIFP(url: inURL) { error, line in
-      if let line = line {
-        FileHandle.standardError.write(
-          Data("cifp parse error at line \(line): \(error)\n".utf8))
-      }
-    }
+    let cifp = try await CIFP(url: inURL, errorCallback: reportCIFPError)
 
     var records: [ApproachOut] = []
     for (_, airport) in cifp.airports {
       for ap in airport.approaches {
+        // SwiftCIFP emits transition (.A) and missed-approach (.Z)
+        // route segments as separate Approach records. Neither is a
+        // standalone, flyable approach procedure — an airport with
+        // only these is not "approach-eligible" for routing.
+        switch ap.approachType {
+        case .transition, .missedApproach:
+          continue
+        default:
+          break
+        }
         records.append(
           ApproachOut(
             airport_id: airport.id,
@@ -41,7 +59,9 @@ struct PipelineCIFP {
             approach_type: String(ap.approachType.rawValue),
             approach_type_label: ap.approachType.description,
             is_precision: ap.isPrecision,
-            is_rnav: ap.isRNAV
+            is_rnav: ap.isRNAV,
+            sbas_service_level: ap.sbasServiceLevel?.rawValue,
+            required_nav_performance: ap.requiredNavPerformance?.rawValue
           ))
       }
     }
@@ -64,4 +84,10 @@ private struct ApproachOut: Encodable {
   let approach_type_label: String
   let is_precision: Bool
   let is_rnav: Bool
+  // SBAS service level: "ALPV", "ALPV200", or "ALP" (lateral only).
+  // Present on RNAV procedures that have published SBAS minimums.
+  let sbas_service_level: String?
+  // RNP / area-nav performance: "ALNAV", "ALNAV/VNAV", "RNP 0.3",
+  // "RNP APCH". "ALNAV/VNAV" indicates baro-VNAV vertical guidance.
+  let required_nav_performance: String?
 }

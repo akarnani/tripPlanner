@@ -25,40 +25,61 @@ concurrency:
   group: data-refresh
   cancel-in-progress: false
 
-env:
-  # Best-effort defaults. Override via workflow_dispatch inputs if the
-  # FAA changes URL conventions (which they have done before).
-  DEFAULT_DOF_URL: "https://aeronav.faa.gov/Obst_Data/DAILY_DOF.ZIP"
-
 jobs:
-  nasr:
-    runs-on: macos-latest
+  pipelines:
+    # Single macOS job that compiles the SwiftPM graph once and runs
+    # NASR / CIFP / DOF in sequence. Compared to three parallel jobs,
+    # this avoids paying the SwiftSyntax-macro-plugin build cost three
+    # times on every dispatch.
+    #
+    # Per-pipeline isolation is preserved at the commit level: each
+    # download/run/commit step uses continue-on-error and the commit
+    # is gated on the prior run actually succeeding. So a failed CIFP
+    # download still lets NASR commit, DOF still runs, etc.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Select latest Xcode (needs Swift 6.2 for SwiftCIFP/DOF)
+      - name: Select latest Xcode (Swift 6.2 for SwiftCIFP/DOF)
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: latest-stable
-      - name: Cache SwiftPM build
+
+      # ---- Shared SwiftPM cache ----
+      # With deps pinned by revision SHA in Package.swift, this key is
+      # stable across upstream pushes. The global package cache picks
+      # up source checkouts so resolve is instant on hits too.
+      - name: Cache SwiftPM .build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: pipelines/swift/.build
-          key: swift-build-${{ runner.os }}-${{ hashFiles('pipelines/swift/Package.swift', 'pipelines/swift/Package.resolved') }}
+          key: swift-build-${{ runner.os }}-${{ hashFiles('pipelines/swift/Package.swift') }}
           restore-keys: |
             swift-build-${{ runner.os }}-
-      - name: Build NASR pipeline
+      - name: Cache SwiftPM package downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-cache-${{ runner.os }}-${{ hashFiles('pipelines/swift/Package.swift') }}
+          restore-keys: |
+            swiftpm-cache-${{ runner.os }}-
+
+      - name: Build all pipeline executables
         working-directory: pipelines/swift
-        run: swift build -c release --product pipeline-nasr
+        run: swift build -c release
+
+      # ---- NASR ----
       - name: Run NASR pipeline
+        id: run_nasr
+        continue-on-error: true
         working-directory: pipelines/swift
         run: swift run -c release pipeline-nasr ./nasr-distribution.zip ../../data
       - name: Commit refreshed NASR data
+        if: steps.run_nasr.outcome == 'success'
         run: |
           if [[ -z "$(git status --porcelain data/airports.json data/runways.json)" ]]; then
-            echo "No NASR changes."
-            exit 0
+            echo "No NASR changes."; exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -67,27 +88,10 @@ jobs:
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin HEAD:"$GITHUB_REF_NAME"
 
-  cifp:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Select latest Xcode (needs Swift 6.2 for SwiftCIFP)
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: latest-stable
-      - name: Cache SwiftPM build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: pipelines/swift/.build
-          key: swift-build-${{ runner.os }}-${{ hashFiles('pipelines/swift/Package.swift', 'pipelines/swift/Package.resolved') }}
-          restore-keys: |
-            swift-build-${{ runner.os }}-
-      - name: Build CIFP pipeline
-        working-directory: pipelines/swift
-        run: swift build -c release --product pipeline-cifp
+      # ---- CIFP ----
       - name: Download CIFP
+        id: download_cifp
+        continue-on-error: true
         working-directory: pipelines/swift
         env:
           CIFP_URL: ${{ inputs.cifp_url }}
@@ -96,21 +100,26 @@ jobs:
           if [[ -n "${CIFP_URL:-}" ]]; then
             urls=("$CIFP_URL")
           else
-            # FAA CIFP zips are published per AIRAC cycle. Try the
-            # current month, fall back to one month prior. macOS date
-            # supports BSD-style -v offsets.
-            ym_now=$(date -u +%y%m)
-            ym_prev=$(date -u -v-28d +%y%m)
-            urls=(
-              "https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_${ym_now}.zip"
-              "https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_${ym_prev}.zip"
-            )
+            # FAA CIFP zips are published per TPP effective date on a
+            # 56-day cycle, named CIFP_YYMMDD.zip. Generate cycle dates
+            # around today from a known anchor and try newest-first.
+            urls=()
+            while IFS= read -r ymd; do
+              urls+=("https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_${ymd}.zip")
+            done < <(python3 - <<'PY'
+          from datetime import date, timedelta
+          anchor = date(2026, 5, 14)
+          today = date.today()
+          base = (today - anchor).days // 56
+          for o in (base, base - 1, base + 1, base - 2):
+              print((anchor + timedelta(days=o * 56)).strftime('%y%m%d'))
+          PY
+                          )
           fi
           for u in "${urls[@]}"; do
             echo "trying $u"
             if curl -sLfo CIFP.zip "$u"; then
-              echo "downloaded $u"
-              break
+              echo "downloaded $u"; break
             fi
           done
           if [[ ! -s CIFP.zip ]]; then
@@ -119,13 +128,16 @@ jobs:
           fi
           unzip -o CIFP.zip FAACIFP18
       - name: Run CIFP pipeline
+        id: run_cifp
+        if: steps.download_cifp.outcome == 'success'
+        continue-on-error: true
         working-directory: pipelines/swift
         run: swift run -c release pipeline-cifp ./FAACIFP18 ../../data
       - name: Commit refreshed CIFP data
+        if: steps.run_cifp.outcome == 'success'
         run: |
           if [[ -z "$(git status --porcelain data/approaches.json)" ]]; then
-            echo "No CIFP changes."
-            exit 0
+            echo "No CIFP changes."; exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -134,51 +146,61 @@ jobs:
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin HEAD:"$GITHUB_REF_NAME"
 
-  dof:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Select latest Xcode (needs Swift 6.2 for SwiftDOF)
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: latest-stable
-      - name: Cache SwiftPM build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: pipelines/swift/.build
-          key: swift-build-${{ runner.os }}-${{ hashFiles('pipelines/swift/Package.swift', 'pipelines/swift/Package.resolved') }}
-          restore-keys: |
-            swift-build-${{ runner.os }}-
-      - name: Build DOF pipeline
-        working-directory: pipelines/swift
-        run: swift build -c release --product pipeline-dof
+      # ---- DOF ----
       - name: Download DOF
+        id: download_dof
+        continue-on-error: true
         working-directory: pipelines/swift
         env:
-          DOF_URL: ${{ inputs.dof_url || env.DEFAULT_DOF_URL }}
+          DOF_URL: ${{ inputs.dof_url }}
         run: |
           set -euo pipefail
-          echo "fetching $DOF_URL"
-          curl -sLfo DOF.zip "$DOF_URL"
+          if [[ -n "${DOF_URL:-}" ]]; then
+            urls=("$DOF_URL")
+          else
+            # FAA DOF zips are published per cycle as DOF_YYMMDD.zip
+            # on a 56-day schedule (DAILY_DOF.ZIP no longer exists).
+            urls=()
+            while IFS= read -r ymd; do
+              urls+=("https://aeronav.faa.gov/Obst_Data/DOF_${ymd}.zip")
+            done < <(python3 - <<'PY'
+          from datetime import date, timedelta
+          anchor = date(2026, 4, 12)
+          today = date.today()
+          base = (today - anchor).days // 56
+          for o in (base, base - 1, base + 1, base - 2):
+              print((anchor + timedelta(days=o * 56)).strftime('%y%m%d'))
+          PY
+                          )
+          fi
+          for u in "${urls[@]}"; do
+            echo "trying $u"
+            if curl -sLfo DOF.zip "$u"; then
+              echo "downloaded $u"; break
+            fi
+          done
+          if [[ ! -s DOF.zip ]]; then
+            echo "::error::no DOF URL succeeded; pass dof_url via workflow_dispatch"
+            exit 1
+          fi
           unzip -o DOF.zip
-          # Locate the DAT regardless of zip's internal naming.
           dof_file=$(find . -maxdepth 2 -iname "DOF.DAT" | head -1)
           if [[ -z "$dof_file" ]]; then
             echo "::error::no DOF.DAT found inside the zip"
-            ls -la
-            exit 1
+            ls -la; exit 1
           fi
           mv "$dof_file" DOF.DAT
       - name: Run DOF pipeline
+        id: run_dof
+        if: steps.download_dof.outcome == 'success'
+        continue-on-error: true
         working-directory: pipelines/swift
         run: swift run -c release pipeline-dof ./DOF.DAT ../../data
       - name: Commit refreshed DOF data
+        if: steps.run_dof.outcome == 'success'
         run: |
           if [[ -z "$(git status --porcelain data/obstacles.json)" ]]; then
-            echo "No DOF changes."
-            exit 0
+            echo "No DOF changes."; exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -186,6 +208,28 @@ jobs:
           git commit -m "Refresh DOF obstacles"
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin HEAD:"$GITHUB_REF_NAME"
+
+      # Surface per-pipeline outcomes in the job summary, and fail
+      # the job if any individual pipeline failed (so the run shows
+      # red, even though continue-on-error muted each step on its own).
+      - name: Report per-pipeline status
+        if: always()
+        run: |
+          echo "NASR run:      ${{ steps.run_nasr.outcome }}"
+          echo "CIFP download: ${{ steps.download_cifp.outcome }}"
+          echo "CIFP run:      ${{ steps.run_cifp.outcome }}"
+          echo "DOF download:  ${{ steps.download_dof.outcome }}"
+          echo "DOF run:       ${{ steps.run_dof.outcome }}"
+          fail=0
+          for o in \
+            "${{ steps.run_nasr.outcome }}" \
+            "${{ steps.download_cifp.outcome }}" \
+            "${{ steps.run_cifp.outcome }}" \
+            "${{ steps.download_dof.outcome }}" \
+            "${{ steps.run_dof.outcome }}"; do
+            [[ "$o" == "failure" ]] && fail=1
+          done
+          exit $fail
 
   dem:
     # Terrain doesn't change month-to-month; refresh manually to pick

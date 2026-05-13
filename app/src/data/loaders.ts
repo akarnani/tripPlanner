@@ -37,6 +37,12 @@ export interface Approach {
   approach_type_label: string;
   is_precision: boolean;
   is_rnav: boolean;
+  /** SBAS service level on RNAV procedures: "ALPV", "ALPV200", or
+   *  "ALP". ALPV/ALPV200 indicate LPV-style vertical guidance. */
+  sbas_service_level?: string | null;
+  /** RNP / area-nav performance: "ALNAV/VNAV" indicates baro-VNAV
+   *  vertical guidance. */
+  required_nav_performance?: string | null;
 }
 
 export interface Obstacle {
@@ -62,17 +68,54 @@ export function airportByIdent(ident: string): Airport | undefined {
   return airports.find((a) => a.icao === u || a.lid === u);
 }
 
-/** Map from airport id → set of approach-type characters. Empty when no
- *  CIFP data is loaded; consumers should check `hasApproachData` first. */
-export const approachIndex: Map<string, Set<string>> = (() => {
-  const m = new Map<string, Set<string>>();
-  for (const a of approaches) {
-    let s = m.get(a.airport_id);
-    if (!s) {
-      s = new Set();
-      m.set(a.airport_id, s);
+// "Precision" here means the operational outcome a pilot cares about
+// during planning: an approach that publishes vertical guidance and
+// reaches low minimums. That includes legally-precision approaches
+// (ILS/J/G/M/W/Y, plus RNP AR by FAA practice) AND RNAV approaches
+// whose published minimums include SBAS vertical (LPV / LPV200) or
+// baro-VNAV (LNAV/VNAV). It excludes RNAV approaches that publish
+// only LP or LNAV — those are non-precision in operation.
+//
+// Legal note: LPV is *not* a precision approach per ICAO / FAA — it's
+// classified APV. The filter is named for what the pilot is asking,
+// not for the regulatory category.
+const STRICT_PRECISION_TYPES = new Set(["I", "J", "H", "G", "M", "W", "Y"]);
+const RNAV_TYPES = new Set(["R", "P", "H"]);
+const VERTICAL_SBAS = new Set(["ALPV", "ALPV200"]);
+const VERTICAL_RNP = new Set(["ALNAV/VNAV"]);
+
+function hasVerticalGuidance(a: Approach): boolean {
+  if (STRICT_PRECISION_TYPES.has(a.approach_type)) return true;
+  if (a.approach_type === "R") {
+    if (a.sbas_service_level && VERTICAL_SBAS.has(a.sbas_service_level)) {
+      return true;
     }
-    s.add(a.approach_type);
+    if (
+      a.required_nav_performance &&
+      VERTICAL_RNP.has(a.required_nav_performance)
+    ) {
+      return true;
+    }
   }
-  return m;
+  return false;
+}
+
+function isRNAV(a: Approach): boolean {
+  return RNAV_TYPES.has(a.approach_type);
+}
+
+/** Airport ids whose published approaches include at least one with
+ *  vertical guidance — true precision or RNAV-LPV / RNAV-LNAV-VNAV. */
+export const precisionApproachAirports: Set<string> = (() => {
+  const s = new Set<string>();
+  for (const a of approaches) if (hasVerticalGuidance(a)) s.add(a.airport_id);
+  return s;
+})();
+
+/** Airport ids whose published approaches include at least one
+ *  RNAV/GPS-based approach (regardless of vertical guidance). */
+export const rnavApproachAirports: Set<string> = (() => {
+  const s = new Set<string>();
+  for (const a of approaches) if (isRNAV(a)) s.add(a.airport_id);
+  return s;
 })();

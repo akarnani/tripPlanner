@@ -8,6 +8,14 @@ import SwiftDOF
 // 200+ ft AGL — that's the cutoff below which the FAA doesn't require
 // individual marking, and it keeps the bundle small.
 
+// Top-level (nonisolated) callback — see PipelineCIFP for the
+// reasoning. The inline `@Sendable` closure variant still inherits
+// @main's main-actor isolation and trips Swift 6.2's send-risk check.
+private func reportDOFError(_ error: Error, line: Int) {
+  FileHandle.standardError.write(
+    Data("dof parse error at line \(line): \(error)\n".utf8))
+}
+
 @main
 struct PipelineDOF {
 
@@ -23,10 +31,7 @@ struct PipelineDOF {
     try FileManager.default.createDirectory(
       at: outDir, withIntermediateDirectories: true)
 
-    let dof = try DOF(url: inURL) { error, line in
-      FileHandle.standardError.write(
-        Data("dof parse error at line \(line): \(error)\n".utf8))
-    }
+    let dof = try await DOF(url: inURL, errorCallback: reportDOFError)
 
     var records: [ObstacleOut] = []
     for obstacle in dof {

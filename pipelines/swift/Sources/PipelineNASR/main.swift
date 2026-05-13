@@ -27,18 +27,25 @@ struct PipelineNASR {
     try FileManager.default.createDirectory(
       at: outDir, withIntermediateDirectories: true)
 
+    // fromLocalArchive returns non-optional NASR; fromInternetToFile
+    // still returns NASR? (it can fail to construct a loader).
     let distribution: NASR =
       FileManager.default.fileExists(atPath: zipURL.path)
-      ? NASR.fromLocalArchive(zipURL)!
+      ? NASR.fromLocalArchive(zipURL)
       : NASR.fromInternetToFile(zipURL)!
 
     try await distribution.load()
-    try await distribution.parse(.airports) { error in
+    // parse(_:errorHandler:) returns Bool to indicate "keep going".
+    try await distribution.parse(.airports) { @Sendable error in
       FileHandle.standardError.write(
         Data("parse warning: \(error)\n".utf8))
+      return true
     }
 
-    let airports = (distribution.data.airports ?? []).filter { $0.publicUse }
+    // `data` is finalized asynchronously after parse.
+    let airports = await (distribution.data.airports ?? []).filter {
+      $0.publicUse
+    }
 
     var airportRecs: [AirportOut] = []
     var runwayRecs: [RunwayOut] = []
@@ -50,7 +57,8 @@ struct PipelineNASR {
       let elev = ap.referencePoint.elevationFtMSL.map { Int($0.rounded()) }
       let maxRunwayFt = ap.runways
         .compactMap { $0.lengthFt }
-        .map(Int.init).max()
+        .map { Int($0) }
+        .max()
       airportRecs.append(
         AirportOut(
           id: ap.id,
@@ -74,8 +82,8 @@ struct PipelineNASR {
           RunwayOut(
             airport_id: ap.id,
             identification: rw.identification,
-            length_ft: rw.lengthFt.map(Int.init),
-            width_ft: rw.widthFt.map(Int.init),
+            length_ft: rw.lengthFt.map { Int($0) },
+            width_ft: rw.widthFt.map { Int($0) },
             is_paved: rw.isPaved
           )
         )
