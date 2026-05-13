@@ -252,11 +252,7 @@ export function App() {
         </section>
       </aside>
       <main className="relative flex-1">
-        <MapView
-          airports={matches}
-          route={currentRoute}
-          obstacles={routeObstacles}
-        />
+        <MapView airports={matches} route={currentRoute} />
       </main>
       {routes.length > 0 && (
         <aside className="flex w-80 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
