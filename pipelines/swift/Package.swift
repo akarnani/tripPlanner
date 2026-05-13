@@ -1,9 +1,13 @@
-// swift-tools-version:6.0
+// swift-tools-version:6.2
 import PackageDescription
 
 let package = Package(
   name: "trip-planner-pipelines",
-  platforms: [.macOS(.v15)],
+  // SwiftCIFP and SwiftDOF both declare a macOS 26 minimum (their
+  // README/Package.swift say "macOS 26+, iOS 26+, …"). Match them so
+  // SwiftPM stops rejecting the executable targets with "requires
+  // macOS 15.0 but depends on a product that requires macOS 26.0".
+  platforms: [.macOS(.v26)],
   products: [
     .executable(name: "pipeline-nasr", targets: ["PipelineNASR"]),
     .executable(name: "pipeline-cifp", targets: ["PipelineCIFP"]),
