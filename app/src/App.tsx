@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import * as data from "@/data/loaders";
+import {
+  airportByIdent,
+  EMPTY_DATASETS,
+  loadDatasets,
+  type Datasets,
+} from "@/data/loaders";
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
 import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
 import { plan, type PlannedRoute } from "@/engine/plan";
@@ -23,14 +28,18 @@ const magGrid = new MagneticVariationGrid(magneticGridUrl);
 const variationFn = (p: { lat: number; lon: number }) =>
   magGrid.variationDeg(p);
 
+const MIN_SPINNER_MS = 200;
+
 export function App() {
+  const [datasets, setDatasets] = useState<Datasets>(EMPTY_DATASETS);
+  const [dataReady, setDataReady] = useState(false);
+  const [demReady, setDemReady] = useState(false);
+  const [isPlanning, setIsPlanning] = useState(false);
+
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [aircraftSlug, setAircraftSlug] = useState(allAircraft[0]?.slug ?? "");
   const [targetAltFt, setTargetAltFt] = useState(6500);
   const [reserveMin, setReserveMin] = useState(45);
-  // Starting fuel defaults to full tanks of whichever aircraft is
-  // selected; an effect below resets the value when aircraft changes
-  // so the input stays sensible.
   const [startingFuelGal, setStartingFuelGal] = useState<number>(
     allAircraft[0]?.fuel.usable_capacity_gal ?? 0,
   );
@@ -42,19 +51,18 @@ export function App() {
   const [routes, setRoutes] = useState<PlannedRoute[]>([]);
   const [selectedRoute, setSelectedRoute] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [demReady, setDemReady] = useState(false);
-  const [dataReady, setDataReady] = useState(false);
-  const [isPlanning, setIsPlanning] = useState(false);
 
-  // Datasets are fetched at runtime instead of bundled into the JS so
-  // the initial paint isn't blocked by parsing several MB of airport
+  // Datasets are fetched at runtime instead of being bundled into the
+  // JS so the initial paint isn't blocked by parsing several MB of
   // JSON. The terrain DEM and magnetic-variation grids load in
   // parallel; planning + terrain analysis gracefully degrade until
   // they're ready.
   useEffect(() => {
-    data
-      .loadDatasets()
-      .then(() => setDataReady(true))
+    loadDatasets()
+      .then((d) => {
+        setDatasets(d);
+        setDataReady(true);
+      })
       .catch((e) => {
         console.error("dataset load failed:", e);
         setError("Failed to load airport database; reload to retry.");
@@ -77,14 +85,14 @@ export function App() {
   }, [selectedAircraft.slug]);
 
   const matches = useMemo(
-    () => (dataReady ? applyFilters(data.airports, filters) : []),
-    [filters, dataReady],
+    () => applyFilters(datasets, filters),
+    [datasets, filters],
   );
 
   function runPlan(targetFt: number) {
     setError(null);
-    const o = data.airportByIdent(origin);
-    const d = data.airportByIdent(destination);
+    const o = airportByIdent(datasets.airports, origin);
+    const d = airportByIdent(datasets.airports, destination);
     if (!o) {
       setError(`unknown origin: ${origin}`);
       return;
@@ -126,22 +134,35 @@ export function App() {
   function handlePlan() {
     if (isPlanning) return;
     setIsPlanning(true);
-    // Yield to the browser so the spinner paints before Dijkstra/Yen's
-    // chews through the candidate set. Without the timeout, React
-    // batches the setIsPlanning update with the post-runPlan render.
-    setTimeout(() => {
-      try {
-        runPlan(targetAltFt);
-      } finally {
-        setIsPlanning(false);
-      }
-    }, 0);
+    const startedAt = performance.now();
+    // Double-RAF guarantees the browser actually paints the spinner
+    // before Dijkstra/Yen's runs. A single RAF or setTimeout(0) can
+    // be folded into the same frame by React, so the spinner state
+    // is never visible.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          runPlan(targetAltFt);
+        } finally {
+          // Keep the spinner up for at least MIN_SPINNER_MS so users
+          // get a visible "I clicked it" confirmation even on the
+          // sub-10ms seed-graph case.
+          const elapsed = performance.now() - startedAt;
+          const remaining = Math.max(0, MIN_SPINNER_MS - elapsed);
+          if (remaining === 0) {
+            setIsPlanning(false);
+          } else {
+            setTimeout(() => setIsPlanning(false), remaining);
+          }
+        }
+      });
+    });
   }
 
   const currentRoute = routes[selectedRoute] ?? null;
   const routeObstacles = useMemo(
-    () => obstaclesNearRoute(data.obstacles, currentRoute),
-    [currentRoute, dataReady],
+    () => obstaclesNearRoute(datasets.obstacles, currentRoute),
+    [currentRoute, datasets.obstacles],
   );
   const terrain: TerrainAnalysis | null = useMemo(() => {
     if (!currentRoute) return null;
@@ -220,8 +241,8 @@ export function App() {
             filters={filters}
             onChange={setFilters}
             matchCount={matches.length}
-            totalCount={data.airports.length}
-            hasApproachData={dataReady && data.hasApproachData}
+            totalCount={datasets.airports.length}
+            hasApproachData={datasets.hasApproachData}
           />
         </section>
       </aside>

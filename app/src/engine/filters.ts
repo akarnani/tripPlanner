@@ -1,10 +1,4 @@
-import type { Airport } from "@/data/loaders";
-import {
-  anyApproachAirports,
-  hasApproachData,
-  precisionApproachAirports,
-  rnavApproachAirports,
-} from "@/data/loaders";
+import type { Airport, Datasets } from "@/data/loaders";
 
 export type TowerMode = "any" | "required" | "forbidden";
 
@@ -36,30 +30,31 @@ export const DEFAULT_FILTERS: HardFilters = {
 function approachOK(
   airportId: string,
   requirement: ApproachRequirement,
+  d: Datasets,
 ): boolean {
   if (requirement === "off") return true;
   // If CIFP data hasn't shipped yet, don't filter — treat as best-effort.
-  if (!hasApproachData) return true;
+  if (!d.hasApproachData) return true;
   switch (requirement) {
     case "any":
-      return anyApproachAirports.has(airportId);
+      return d.anyApproachAirports.has(airportId);
     case "precision":
-      return precisionApproachAirports.has(airportId);
+      return d.precisionApproachAirports.has(airportId);
     case "rnav":
-      return rnavApproachAirports.has(airportId);
+      return d.rnavApproachAirports.has(airportId);
   }
 }
 
 export function applyFilters(
-  airports: readonly Airport[],
+  datasets: Datasets,
   f: HardFilters,
 ): Airport[] {
-  return airports.filter((a) => {
+  return datasets.airports.filter((a) => {
     if (!a.public_use) return false;
     if ((a.max_runway_ft ?? 0) < f.minRunwayFt) return false;
     if (f.tower === "required" && !a.has_control_tower) return false;
     if (f.tower === "forbidden" && a.has_control_tower) return false;
-    if (!approachOK(a.id, f.approach)) return false;
+    if (!approachOK(a.id, f.approach, datasets)) return false;
     return true;
   });
 }
