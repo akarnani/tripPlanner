@@ -88,6 +88,34 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
     }
   });
 
+  test("maxLegHr drops edges that exceed the cap for every objective", () => {
+    // A→E at 120 KTAS is ~7.7 hours direct. With maxLegHr = 4, the
+    // direct edge must disappear and every objective must produce a
+    // multi-stop route (or none at all).
+    const A = ap("A", 40, -120);
+    const B = ap("B", 40, -115);
+    const C = ap("C", 40, -110);
+    const D = ap("D", 40, -105);
+    const E = ap("E", 40, -100);
+    const result = plan({
+      airports: [A, B, C, D, E],
+      origin: "A",
+      destination: "E",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      maxLegHr: 4,
+    });
+    expect(result.length).toBeGreaterThan(0);
+    for (const r of result) {
+      expect(r.legs.length).toBeGreaterThan(1);
+      for (const leg of r.legs) {
+        expect(leg.time_hr).toBeLessThanOrEqual(4);
+      }
+    }
+  });
+
   test("each returned route is unique by node sequence", () => {
     const A = ap("A", 40, -120);
     const B = ap("B", 40, -115);

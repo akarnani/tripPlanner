@@ -21,6 +21,8 @@ export interface PlanInput {
   flightRule: FlightRule;
   reserveHr: number;
   variation?: VariationFn;
+  /** Optional hard cap on a single leg's flight time in hours. */
+  maxLegHr?: number;
   /** Cost-function ids to compute one route each. Default:
    *  ["fewestStops", "shortestTime"]. Duplicate routes (same node
    *  sequence) are returned once, keyed to the first objective that
@@ -70,6 +72,7 @@ export function plan(input: PlanInput): PlannedRoute[] {
     flightRule,
     reserveHr,
     variation: input.variation,
+    maxLegHr: input.maxLegHr,
   });
   // One Dijkstra per objective. We deliberately do *not* return Yen's
   // K-shortest within a single objective: on a sparse airport graph the

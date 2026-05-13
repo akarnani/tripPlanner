@@ -7,6 +7,10 @@ interface Props {
   onDestinationChange: (v: string) => void;
   flightRule: FlightRule;
   onFlightRuleChange: (r: FlightRule) => void;
+  capLegTime: boolean;
+  onCapLegTimeChange: (b: boolean) => void;
+  maxLegHr: number;
+  onMaxLegHrChange: (h: number) => void;
   onPlan: () => void;
   error: string | null;
 }
@@ -18,6 +22,10 @@ export function TripPanel({
   onDestinationChange,
   flightRule,
   onFlightRuleChange,
+  capLegTime,
+  onCapLegTimeChange,
+  maxLegHr,
+  onMaxLegHrChange,
   onPlan,
   error,
 }: Props) {
@@ -75,6 +83,31 @@ export function TripPanel({
             ? "Cruise altitudes round to odd-/even-thousands + 500."
             : "Cruise altitudes round to odd/even thousands."}
         </p>
+      </div>
+      <div>
+        <label className="flex items-center gap-2 text-xs text-slate-700">
+          <input
+            type="checkbox"
+            checked={capLegTime}
+            onChange={(e) => onCapLegTimeChange(e.target.checked)}
+            className="h-3.5 w-3.5"
+          />
+          Cap each leg at
+          <input
+            id="max-leg-hr"
+            type="number"
+            min={0.5}
+            max={12}
+            step={0.25}
+            value={maxLegHr}
+            disabled={!capLegTime}
+            onChange={(e) =>
+              onMaxLegHrChange(Number.parseFloat(e.target.value) || 2)
+            }
+            className="w-14 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-sm disabled:bg-slate-100 disabled:text-slate-400"
+          />
+          hours
+        </label>
       </div>
       <button
         type="button"

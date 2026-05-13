@@ -58,6 +58,10 @@ export interface BuildGraphInput {
    *  null at the leg origin, true course is used in place of magnetic
    *  course for the hemispheric rule. */
   variation?: VariationFn;
+  /** Optional hard cap on a single leg's flight time in hours. Edges
+   *  exceeding this are dropped from the graph before any objective
+   *  sees them, so every returned route respects the cap. */
+  maxLegHr?: number;
 }
 
 export interface Graph {
@@ -86,6 +90,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
     flightRule,
     reserveHr,
     variation,
+    maxLegHr,
   } = input;
   const byId = new Map<string, Airport>();
   for (const a of airports) byId.set(a.id, a);
@@ -125,6 +130,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
       const range_nm = (burnable_gal / c.fuel_gph) * c.tas_kt;
       if (distance_nm > range_nm) continue;
       const time_hr = distance_nm / c.tas_kt;
+      if (maxLegHr !== undefined && time_hr > maxLegHr) continue;
       edges.push({
         from: from.id,
         to: to.id,
