@@ -32,7 +32,7 @@ env:
 
 jobs:
   nasr:
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -68,7 +68,7 @@ jobs:
           git push origin HEAD:"$GITHUB_REF_NAME"
 
   cifp:
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -135,7 +135,7 @@ jobs:
           git push origin HEAD:"$GITHUB_REF_NAME"
 
   dof:
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
