@@ -8,6 +8,19 @@ import SwiftCIFP
 // procedure; the routing engine uses these to filter airports by
 // approach type (precision / RNAV / non-precision) at plan time.
 
+// SwiftCIFP's errorCallback is `((Error, Int?) -> Void)?` — a
+// non-`@Sendable` function-type, and the init is `nonisolated async`.
+// Inline closures inferred from `@main`'s main-actor context can't be
+// sent across, even with `@Sendable` on the closure literal. A
+// top-level function is nonisolated by construction and threads
+// through fine.
+private func reportCIFPError(_ error: Error, line: Int?) {
+  if let line = line {
+    FileHandle.standardError.write(
+      Data("cifp parse error at line \(line): \(error)\n".utf8))
+  }
+}
+
 @main
 struct PipelineCIFP {
 
@@ -23,14 +36,7 @@ struct PipelineCIFP {
     try FileManager.default.createDirectory(
       at: outDir, withIntermediateDirectories: true)
 
-    let cifp = try await CIFP(
-      url: inURL,
-      errorCallback: { @Sendable error, line in
-        if let line = line {
-          FileHandle.standardError.write(
-            Data("cifp parse error at line \(line): \(error)\n".utf8))
-        }
-      })
+    let cifp = try await CIFP(url: inURL, errorCallback: reportCIFPError)
 
     var records: [ApproachOut] = []
     for (_, airport) in cifp.airports {
