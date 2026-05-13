@@ -2,10 +2,21 @@ name: Refresh static datasets
 
 on:
   schedule:
-    # Every Wednesday at 12:00 UTC. FAA NASR/CIFP follow a 28-day cycle,
-    # so a weekly cadence catches each cycle within a week of release.
+    # Every Wednesday at 12:00 UTC. FAA NASR / CIFP follow a 28-day
+    # cycle, so a weekly cadence catches each cycle within a week of
+    # release. Only NASR / CIFP / DOF run on the schedule; the DEM and
+    # magnetic-variation jobs are manual.
     - cron: "0 12 * * 3"
   workflow_dispatch:
+    inputs:
+      cifp_url:
+        description: "Override CIFP download URL (leave blank for default)"
+        required: false
+        type: string
+      dof_url:
+        description: "Override DOF download URL (leave blank for default)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -14,14 +25,18 @@ concurrency:
   group: data-refresh
   cancel-in-progress: false
 
+env:
+  # Best-effort defaults. Override via workflow_dispatch inputs if the
+  # FAA changes URL conventions (which they have done before).
+  DEFAULT_DOF_URL: "https://aeronav.faa.gov/Obst_Data/DAILY_DOF.ZIP"
+
 jobs:
-  refresh:
+  nasr:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Cache SwiftPM build
         uses: actions/cache@v4
         with:
@@ -29,55 +44,140 @@ jobs:
           key: swift-build-${{ runner.os }}-${{ hashFiles('pipelines/swift/Package.swift', 'pipelines/swift/Package.resolved') }}
           restore-keys: |
             swift-build-${{ runner.os }}-
-
-      - name: Build pipelines
+      - name: Build NASR pipeline
         working-directory: pipelines/swift
-        run: swift build -c release
-
+        run: swift build -c release --product pipeline-nasr
       - name: Run NASR pipeline
         working-directory: pipelines/swift
         run: swift run -c release pipeline-nasr ./nasr-distribution.zip ../../data
-
-      - name: Download CIFP
-        working-directory: pipelines/swift
+      - name: Commit refreshed NASR data
         run: |
-          if [[ ! -f FAACIFP18 ]]; then
-            curl -sLfO https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_$(date -u +%y%m).zip || \
-              curl -sLfO https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_$(date -u -v-28d +%y%m).zip
-            unzip -o CIFP_*.zip FAACIFP18
-          fi
-
-      - name: Run CIFP pipeline
-        working-directory: pipelines/swift
-        run: swift run -c release pipeline-cifp ./FAACIFP18 ../../data
-
-      - name: Download DOF
-        working-directory: pipelines/swift
-        run: |
-          if [[ ! -f DOF.DAT ]]; then
-            curl -sLfO https://aeronav.faa.gov/Obst_Data/DAILY_DOF.ZIP
-            unzip -o DAILY_DOF.ZIP DOF.DAT
-          fi
-
-      - name: Run DOF pipeline
-        working-directory: pipelines/swift
-        run: swift run -c release pipeline-dof ./DOF.DAT ../../data
-
-      - name: Commit refreshed data
-        run: |
-          if [[ -z "$(git status --porcelain data)" ]]; then
-            echo "No data changes."
+          if [[ -z "$(git status --porcelain data/airports.json data/runways.json)" ]]; then
+            echo "No NASR changes."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/airports.json data/runways.json data/approaches.json data/obstacles.json
-          git commit -m "Refresh NASR / CIFP / DOF datasets"
-          git push
+          git add data/airports.json data/runways.json
+          git commit -m "Refresh NASR airports + runways"
+          git pull --rebase origin "$GITHUB_REF_NAME" || true
+          git push origin HEAD:"$GITHUB_REF_NAME"
+
+  cifp:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: pipelines/swift/.build
+          key: swift-build-${{ runner.os }}-${{ hashFiles('pipelines/swift/Package.swift', 'pipelines/swift/Package.resolved') }}
+          restore-keys: |
+            swift-build-${{ runner.os }}-
+      - name: Build CIFP pipeline
+        working-directory: pipelines/swift
+        run: swift build -c release --product pipeline-cifp
+      - name: Download CIFP
+        working-directory: pipelines/swift
+        env:
+          CIFP_URL: ${{ inputs.cifp_url }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${CIFP_URL:-}" ]]; then
+            urls=("$CIFP_URL")
+          else
+            # FAA CIFP zips are published per AIRAC cycle. Try the
+            # current month, fall back to one month prior. macOS date
+            # supports BSD-style -v offsets.
+            ym_now=$(date -u +%y%m)
+            ym_prev=$(date -u -v-28d +%y%m)
+            urls=(
+              "https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_${ym_now}.zip"
+              "https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_${ym_prev}.zip"
+            )
+          fi
+          for u in "${urls[@]}"; do
+            echo "trying $u"
+            if curl -sLfo CIFP.zip "$u"; then
+              echo "downloaded $u"
+              break
+            fi
+          done
+          if [[ ! -s CIFP.zip ]]; then
+            echo "::error::no CIFP URL succeeded; pass cifp_url via workflow_dispatch"
+            exit 1
+          fi
+          unzip -o CIFP.zip FAACIFP18
+      - name: Run CIFP pipeline
+        working-directory: pipelines/swift
+        run: swift run -c release pipeline-cifp ./FAACIFP18 ../../data
+      - name: Commit refreshed CIFP data
+        run: |
+          if [[ -z "$(git status --porcelain data/approaches.json)" ]]; then
+            echo "No CIFP changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/approaches.json
+          git commit -m "Refresh CIFP approaches"
+          git pull --rebase origin "$GITHUB_REF_NAME" || true
+          git push origin HEAD:"$GITHUB_REF_NAME"
+
+  dof:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: pipelines/swift/.build
+          key: swift-build-${{ runner.os }}-${{ hashFiles('pipelines/swift/Package.swift', 'pipelines/swift/Package.resolved') }}
+          restore-keys: |
+            swift-build-${{ runner.os }}-
+      - name: Build DOF pipeline
+        working-directory: pipelines/swift
+        run: swift build -c release --product pipeline-dof
+      - name: Download DOF
+        working-directory: pipelines/swift
+        env:
+          DOF_URL: ${{ inputs.dof_url || env.DEFAULT_DOF_URL }}
+        run: |
+          set -euo pipefail
+          echo "fetching $DOF_URL"
+          curl -sLfo DOF.zip "$DOF_URL"
+          unzip -o DOF.zip
+          # Locate the DAT regardless of zip's internal naming.
+          dof_file=$(find . -maxdepth 2 -iname "DOF.DAT" | head -1)
+          if [[ -z "$dof_file" ]]; then
+            echo "::error::no DOF.DAT found inside the zip"
+            ls -la
+            exit 1
+          fi
+          mv "$dof_file" DOF.DAT
+      - name: Run DOF pipeline
+        working-directory: pipelines/swift
+        run: swift run -c release pipeline-dof ./DOF.DAT ../../data
+      - name: Commit refreshed DOF data
+        run: |
+          if [[ -z "$(git status --porcelain data/obstacles.json)" ]]; then
+            echo "No DOF changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/obstacles.json
+          git commit -m "Refresh DOF obstacles"
+          git pull --rebase origin "$GITHUB_REF_NAME" || true
+          git push origin HEAD:"$GITHUB_REF_NAME"
 
   dem:
-    # Terrain doesn't change month-to-month; refresh annually to pick up
-    # source data revisions. Triggered manually or via the same workflow_dispatch.
+    # Terrain doesn't change month-to-month; refresh manually to pick
+    # up source-data revisions.
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     steps:
@@ -99,12 +199,12 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/terrain_grid.bin.gz
           git commit -m "Refresh CONUS terrain DEM grid"
-          git push
+          git pull --rebase origin "$GITHUB_REF_NAME" || true
+          git push origin HEAD:"$GITHUB_REF_NAME"
 
   magnetic:
-    # Magnetic variation drifts slowly; WMM coefficients refresh every
-    # five years. Rebuild monthly so the committed grid never lags by
-    # more than ~0.1°.
+    # WMM drifts slowly; rebuild monthly so the committed grid never
+    # lags by more than ~0.1°.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -125,4 +225,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/magnetic_grid.bin.gz
           git commit -m "Refresh CONUS magnetic variation grid"
-          git push
+          git pull --rebase origin "$GITHUB_REF_NAME" || true
+          git push origin HEAD:"$GITHUB_REF_NAME"
