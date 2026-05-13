@@ -14,9 +14,21 @@ let package = Package(
     .executable(name: "pipeline-dof", targets: ["PipelineDOF"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/RISCfuture/SwiftNASR.git", branch: "master"),
-    .package(url: "https://github.com/RISCfuture/SwiftCIFP.git", branch: "main"),
-    .package(url: "https://github.com/RISCfuture/SwiftDOF.git", branch: "main"),
+    // Pinned by revision SHA so Package.resolved (and therefore the
+    // CI build cache key) stays stable across upstream pushes.
+    // Bump these intentionally when the upstream changes you want.
+    .package(
+      url: "https://github.com/RISCfuture/SwiftNASR.git",
+      revision: "f43a25a918c1957f3d43a3d955affd13806529c4"  // master @ 2026-05
+    ),
+    .package(
+      url: "https://github.com/RISCfuture/SwiftCIFP.git",
+      revision: "0fdfe20ed157bfd41fe67a5a4666a6278a061c13"  // main @ 2026-05
+    ),
+    .package(
+      url: "https://github.com/RISCfuture/SwiftDOF.git",
+      revision: "2a8824bfa9a407b212163e126d68e8e2fa4243fa"  // main @ 2026-05
+    ),
   ],
   targets: [
     .executableTarget(
