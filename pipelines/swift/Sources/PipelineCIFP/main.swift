@@ -25,7 +25,7 @@ struct PipelineCIFP {
 
     let cifp = try await CIFP(
       url: inURL,
-      errorCallback: { error, line in
+      errorCallback: { @Sendable error, line in
         if let line = line {
           FileHandle.standardError.write(
             Data("cifp parse error at line \(line): \(error)\n".utf8))

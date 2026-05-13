@@ -25,7 +25,7 @@ struct PipelineDOF {
 
     let dof = try await DOF(
       url: inURL,
-      errorCallback: { error, line in
+      errorCallback: { @Sendable error, line in
         FileHandle.standardError.write(
           Data("dof parse error at line \(line): \(error)\n".utf8))
       })
