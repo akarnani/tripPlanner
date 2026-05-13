@@ -1,0 +1,36 @@
+# Cessna 172S — cruise performance data
+#
+# Approximate values from the 172S POH cruise tables (standard atmosphere,
+# zero wind, mid-range power settings per altitude). Replace with values
+# read from your own aircraft's POH using the /poh-extract Claude skill.
+
+make: Cessna
+model: 172S
+fuel:
+  type: 100LL
+  density_lb_per_gal: 6.0
+  usable_capacity_gal: 53
+cruise:
+  - altitude_ft: 2000
+    power_pct: 75
+    tas_kt: 124
+    fuel_gph: 9.6
+  - altitude_ft: 4000
+    power_pct: 75
+    tas_kt: 122
+    fuel_gph: 9.0
+  - altitude_ft: 6000
+    power_pct: 75
+    tas_kt: 120
+    fuel_gph: 8.8
+  - altitude_ft: 8000
+    power_pct: 65
+    tas_kt: 117
+    fuel_gph: 7.6
+  - altitude_ft: 10000
+    power_pct: 55
+    tas_kt: 110
+    fuel_gph: 6.5
+climb:
+  rate_fpm: 700
+  fuel_to_climb_gph: 10
