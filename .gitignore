@@ -4,6 +4,9 @@ dist/
 *.log
 .DS_Store
 *.tsbuildinfo
+playwright-report/
+test-results/
+.playwright/
 
 # Data pipeline raw sources (large, regenerable) — committed outputs only
 /pipelines/swift/.build/

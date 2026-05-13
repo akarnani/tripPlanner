@@ -21,10 +21,14 @@ export function FilterPanel({
   return (
     <div className="space-y-4">
       <div>
-        <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+        <label
+          htmlFor="min-runway-ft"
+          className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+        >
           Minimum runway length (ft)
         </label>
         <input
+          id="min-runway-ft"
           type="number"
           min={0}
           step={500}

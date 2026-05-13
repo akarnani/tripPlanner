@@ -39,10 +39,14 @@ export function AircraftPanel({
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+          <label
+            htmlFor="target-altitude"
+            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+          >
             Target altitude (ft)
           </label>
           <input
+            id="target-altitude"
             type="number"
             min={0}
             max={18000}
@@ -59,10 +63,14 @@ export function AircraftPanel({
           </p>
         </div>
         <div>
-          <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+          <label
+            htmlFor="reserve-min"
+            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+          >
             Reserve (min)
           </label>
           <input
+            id="reserve-min"
             type="number"
             min={0}
             step={5}
