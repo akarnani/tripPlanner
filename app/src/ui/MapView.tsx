@@ -26,6 +26,16 @@ const LAYER_STATES = "us-states-borders";
 interface Props {
   airports: readonly Airport[];
   route: PlannedRoute | null;
+  /** Called when the user finishes dragging an intermediate stop
+   *  marker. Implementations should resolve the nearest eligible
+   *  airport to `dropLngLat` and (if found) re-plan via the same
+   *  replace-stop pathway the LegTable ✎ action uses. Return `true`
+   *  if the drop was accepted; `false` snaps the marker back to its
+   *  original position. */
+  onMoveStop?: (
+    oldAirportId: string,
+    dropLngLat: { lat: number; lon: number },
+  ) => boolean;
 }
 
 function airportsToGeoJSON(
@@ -67,24 +77,59 @@ function routeToGeoJSON(
 function stopsToGeoJSON(
   route: PlannedRoute | null,
 ): GeoJSON.FeatureCollection {
-  if (!route) return { type: "FeatureCollection", features: [] };
-  const seen = new Set<string>();
+  // Only the endpoints (origin + destination) render via the GeoJSON
+  // source; intermediate stops are realised as draggable HTML markers
+  // (see ensureStopMarkers) so they can be moved by the user without
+  // re-implementing drag interaction on a maplibre circle layer.
+  if (!route || route.legs.length === 0) {
+    return { type: "FeatureCollection", features: [] };
+  }
+  const origin = route.legs[0].fromAirport;
+  const destination = route.legs[route.legs.length - 1].toAirport;
   const features: GeoJSON.Feature[] = [];
-  for (const leg of route.legs) {
-    for (const a of [leg.fromAirport, leg.toAirport]) {
-      if (seen.has(a.id)) continue;
-      seen.add(a.id);
-      features.push({
-        type: "Feature",
-        geometry: { type: "Point", coordinates: [a.lon, a.lat] },
-        properties: { ident: a.icao ?? a.lid, name: a.name },
-      });
-    }
+  const seen = new Set<string>();
+  for (const a of [origin, destination]) {
+    if (seen.has(a.id)) continue;
+    seen.add(a.id);
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [a.lon, a.lat] },
+      properties: { ident: a.icao ?? a.lid, name: a.name },
+    });
   }
   return { type: "FeatureCollection", features };
 }
 
-export function MapView({ airports, route }: Props) {
+function buildStopMarkerElement(ident: string): HTMLElement {
+  // DOM marker styled to mirror the GeoJSON endpoint circle + label.
+  // Inline styles instead of Tailwind classes because Tailwind's JIT
+  // only scans source files; dynamically-built class names risk being
+  // tree-shaken out of the bundle.
+  //
+  // The dot IS the marker element (no extra wrapper). Maplibre
+  // applies its own `.maplibregl-marker` class which sets
+  // `position:absolute`; wrapping the dot in a `position:relative`
+  // <div> overrides that and breaks marker positioning, which is why
+  // an earlier draft of this rendered nothing on screen.
+  const dot = document.createElement("div");
+  dot.style.cssText =
+    "width:12px; height:12px; border-radius:9999px;" +
+    "background:#ea580c; border:2px solid #ffffff;" +
+    "box-shadow:0 1px 2px rgba(0,0,0,0.2);" +
+    "cursor:grab; touch-action:none; user-select:none;" +
+    "box-sizing:content-box;";
+  const label = document.createElement("div");
+  label.textContent = ident;
+  label.style.cssText =
+    "position:absolute; left:50%; top:14px; transform:translateX(-50%);" +
+    "font-size:12px; font-weight:500; color:#1f2937; white-space:nowrap;" +
+    "text-shadow:-1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;" +
+    "pointer-events:none;";
+  dot.appendChild(label);
+  return dot;
+}
+
+export function MapView({ airports, route, onMoveStop }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   // styleReady is state, not a ref, so the source-update effects below
@@ -95,6 +140,54 @@ export function MapView({ airports, route }: Props) {
   // airports onto them until the next prop change (e.g. the user
   // touched a filter).
   const [styleReady, setStyleReady] = useState(false);
+  const stopMarkersRef = useRef<maplibregl.Marker[]>([]);
+  // The onMoveStop callback can change identity across renders (App
+  // creates a new function each render). Keep a ref so the marker
+  // dragend handlers always see the latest closure without having to
+  // tear down and rebuild markers on every parent re-render.
+  const onMoveStopRef = useRef(onMoveStop);
+  onMoveStopRef.current = onMoveStop;
+
+  function ensureStopMarkers(
+    map: maplibregl.Map,
+    nextRoute: PlannedRoute | null,
+  ) {
+    for (const m of stopMarkersRef.current) m.remove();
+    stopMarkersRef.current = [];
+    if (!nextRoute || nextRoute.legs.length < 2) return;
+    // Intermediate stops: all toAirports except the last leg's (the
+    // destination) and not the first leg's fromAirport (the origin).
+    for (let i = 0; i < nextRoute.legs.length - 1; i++) {
+      const stop = nextRoute.legs[i].toAirport;
+      const ident = stop.icao ?? stop.lid;
+      const el = buildStopMarkerElement(ident);
+      const original: [number, number] = [stop.lon, stop.lat];
+      const marker = new maplibregl.Marker({ element: el, draggable: true })
+        .setLngLat(original)
+        .addTo(map);
+      marker.on("dragstart", () => {
+        el.style.cursor = "grabbing";
+      });
+      marker.on("dragend", () => {
+        el.style.cursor = "grab";
+        const at = marker.getLngLat();
+        const accepted = onMoveStopRef.current?.(stop.id, {
+          lat: at.lat,
+          lon: at.lng,
+        });
+        if (!accepted) {
+          // No snap target or drop rejected — return the marker to its
+          // original airport so the displayed route stays consistent
+          // with the planner state.
+          marker.setLngLat(original);
+        }
+        // On acceptance the parent will set a new route prop, which
+        // re-runs the route useEffect and rebuilds all markers from
+        // scratch at the new airport positions.
+      });
+      stopMarkersRef.current.push(marker);
+    }
+  }
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -238,9 +331,12 @@ export function MapView({ airports, route }: Props) {
       }
 
       mapRef.current = map;
+      ensureStopMarkers(map, route);
     });
 
     return () => {
+      for (const m of stopMarkersRef.current) m.remove();
+      stopMarkersRef.current = [];
       map.remove();
       mapRef.current = null;
     };
@@ -258,6 +354,7 @@ export function MapView({ airports, route }: Props) {
       ?.setData(routeToGeoJSON(route));
     (mapRef.current.getSource(SRC_STOPS) as maplibregl.GeoJSONSource)
       ?.setData(stopsToGeoJSON(route));
+    ensureStopMarkers(mapRef.current, route);
     if (route && route.legs.length > 0) {
       const bounds = new maplibregl.LngLatBounds();
       for (const leg of route.legs) {
