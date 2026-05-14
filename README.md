@@ -48,6 +48,22 @@ The Vite project root is the repo root (not `app/`). Source lives under
 (`app/src/engine/`), React UI (`app/src/ui/`), exporters
 (`app/src/exports/`), and runtime data loaders (`app/src/data/`).
 
+### Basemap (optional)
+
+The map uses MapTiler's Outdoor v2 style when a key is configured, and
+falls back to MapLibre's public demo tiles otherwise — local dev and
+the Playwright suite work without credentials. To use MapTiler locally,
+create `.env.local` with:
+
+```
+VITE_MAPTILER_KEY=your-maptiler-key
+```
+
+For the GitHub Pages deploy, set a repository secret named
+`MAPTILER_KEY`; the deploy workflow passes it through to `vite build`.
+Lock the key to the Pages origin in the MapTiler dashboard, since the
+value is baked into the published JS bundle.
+
 ## Data pipelines
 
 Static datasets in `data/` are produced by jobs that do not run on

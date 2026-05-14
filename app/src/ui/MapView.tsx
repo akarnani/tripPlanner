@@ -5,7 +5,13 @@ import type { PlannedRoute } from "@/engine/plan";
 import { interpolateGreatCircle } from "@/engine/geo";
 import statesUrl from "@data/us-states.geojson?url";
 
-const PLACEHOLDER_STYLE = "https://demotiles.maplibre.org/style.json";
+const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
+const BASEMAP_STYLE = MAPTILER_KEY
+  ? `https://api.maptiler.com/maps/outdoor-v2/style.json?key=${MAPTILER_KEY}`
+  : // Fall back to MapLibre's demo basemap when no MapTiler key is
+    // configured (e.g. fresh clone, CI runs without the secret). Keeps
+    // local dev and the Playwright suite working without credentials.
+    "https://demotiles.maplibre.org/style.json";
 const SRC_AIRPORTS = "airports";
 const SRC_ROUTE = "route";
 const SRC_STOPS = "route-stops";
@@ -87,7 +93,7 @@ export function MapView({ airports, route }: Props) {
     if (!containerRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: PLACEHOLDER_STYLE,
+      style: BASEMAP_STYLE,
       center: [-98, 39],
       zoom: 3.5,
     });
