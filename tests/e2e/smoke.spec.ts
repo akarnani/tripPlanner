@@ -28,8 +28,8 @@ test.describe("trip planner smoke", () => {
   });
 
   test("renders the planning UI with default values", async ({ page }) => {
-    await expect(page.getByLabel("From")).toHaveValue("KSEA");
-    await expect(page.getByLabel("To")).toHaveValue("KBOI");
+    await expect(page.getByLabel("From", { exact: true })).toHaveValue("KSEA");
+    await expect(page.getByLabel("To", { exact: true })).toHaveValue("KBOI");
     await expect(page.getByRole("button", { name: "VFR" })).toHaveClass(
       /bg-slate-900/,
     );

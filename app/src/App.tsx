@@ -163,15 +163,17 @@ export function App() {
         try {
           runPlan(targetAltFt);
         } finally {
-          // Keep the spinner up for at least MIN_SPINNER_MS so users
-          // get a visible confirmation even on fast plans.
+          // Always schedule the back-to-idle transition through
+          // setTimeout. If runPlan blocks past MIN_SPINNER_MS,
+          // calling setIsPlanning(false) synchronously here would
+          // commit "planning" and "idle" in the same uninterrupted
+          // JS task — the renderer never yields, so neither users
+          // nor Playwright observe the spinner. The 50 ms floor
+          // guarantees at least one event-loop tick of visible
+          // spinner state.
           const elapsed = performance.now() - startedAt;
-          const remaining = Math.max(0, MIN_SPINNER_MS - elapsed);
-          if (remaining === 0) {
-            setIsPlanning(false);
-          } else {
-            setTimeout(() => setIsPlanning(false), remaining);
-          }
+          const remaining = Math.max(50, MIN_SPINNER_MS - elapsed);
+          setTimeout(() => setIsPlanning(false), remaining);
         }
       });
     });
@@ -322,12 +324,8 @@ export function App() {
           setSelectedRoute(0);
         } finally {
           const elapsed = performance.now() - startedAt;
-          const remaining = Math.max(0, MIN_SPINNER_MS - elapsed);
-          if (remaining === 0) {
-            setIsPlanning(false);
-          } else {
-            setTimeout(() => setIsPlanning(false), remaining);
-          }
+          const remaining = Math.max(50, MIN_SPINNER_MS - elapsed);
+          setTimeout(() => setIsPlanning(false), remaining);
         }
       });
     });
