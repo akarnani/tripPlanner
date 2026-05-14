@@ -3,16 +3,19 @@ import maplibregl from "maplibre-gl";
 import type { Airport } from "@/data/loaders";
 import type { PlannedRoute } from "@/engine/plan";
 import { interpolateGreatCircle } from "@/engine/geo";
+import statesUrl from "@data/us-states.geojson?url";
 
 const PLACEHOLDER_STYLE = "https://demotiles.maplibre.org/style.json";
 const SRC_AIRPORTS = "airports";
 const SRC_ROUTE = "route";
 const SRC_STOPS = "route-stops";
+const SRC_STATES = "us-states";
 const LAYER_TOWERED = "airports-towered";
 const LAYER_NONTOWERED = "airports-nontowered";
 const LAYER_ROUTE = "route-line";
 const LAYER_STOPS = "route-stops-pts";
 const LAYER_STOPS_LABELS = "route-stops-labels";
+const LAYER_STATES = "us-states-borders";
 
 interface Props {
   airports: readonly Airport[];
@@ -92,6 +95,31 @@ export function MapView({ airports, route }: Props) {
 
     map.on("load", () => {
       styleReadyRef.current = true;
+
+      // State borders under everything else — visual SA without
+      // depending on a richer basemap. The fetch happens in the
+      // background; the layer just stays empty until it lands.
+      map.addSource(SRC_STATES, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: LAYER_STATES,
+        type: "line",
+        source: SRC_STATES,
+        paint: {
+          "line-color": "#94a3b8",
+          "line-width": 1,
+          "line-opacity": 0.7,
+        },
+      });
+      fetch(statesUrl)
+        .then((r) => r.json())
+        .then((geojson) => {
+          (map.getSource(SRC_STATES) as maplibregl.GeoJSONSource | undefined)
+            ?.setData(geojson);
+        })
+        .catch((e) => console.warn("state borders failed to load:", e));
 
       map.addSource(SRC_AIRPORTS, {
         type: "geojson",
