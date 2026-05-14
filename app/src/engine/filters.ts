@@ -60,6 +60,16 @@ function fuelOK(airport: Airport, type: FuelType): boolean {
   return false;
 }
 
+/** Public alias for the fuel-compatibility check. Used by the routing
+ *  layer to decide whether a pinned stop is a refuel stop or a
+ *  pass-through. */
+export function airportSellsCompatibleFuel(
+  airport: Airport,
+  type: FuelType,
+): boolean {
+  return fuelOK(airport, type);
+}
+
 function approachOK(
   airportId: string,
   requirement: ApproachRequirement,

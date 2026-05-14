@@ -23,6 +23,10 @@ export interface SavedTrip {
   maxLegHr: number;
   filters: HardFilters;
   excludedIds: string[];
+  /** Ordered list of airport ids the user has pinned as required
+   *  intermediate stops. Loaded as `[]` for trips saved before this
+   *  field existed. */
+  pinnedStopIds?: string[];
   /** ISO timestamp of last save. Used for sort + display. */
   savedAt: string;
 }

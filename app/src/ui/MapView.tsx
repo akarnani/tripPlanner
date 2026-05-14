@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import type { Airport } from "@/data/loaders";
 import type { PlannedRoute } from "@/engine/plan";
@@ -87,7 +87,14 @@ function stopsToGeoJSON(
 export function MapView({ airports, route }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const styleReadyRef = useRef(false);
+  // styleReady is state, not a ref, so the source-update effects below
+  // re-run when the map's `load` event finally fires. With a ref the
+  // initial dataset load would race the load event and silently get
+  // dropped — sources/layers would be created with the empty
+  // EMPTY_DATASETS values from mount, and nothing would push the real
+  // airports onto them until the next prop change (e.g. the user
+  // touched a filter).
+  const [styleReady, setStyleReady] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -100,7 +107,7 @@ export function MapView({ airports, route }: Props) {
     map.addControl(new maplibregl.NavigationControl(), "top-right");
 
     map.on("load", () => {
-      styleReadyRef.current = true;
+      setStyleReady(true);
 
       // State borders under everything else — visual SA without
       // depending on a richer basemap. The fetch happens in the
@@ -236,18 +243,17 @@ export function MapView({ airports, route }: Props) {
     return () => {
       map.remove();
       mapRef.current = null;
-      styleReadyRef.current = false;
     };
   }, []); // mount-only
 
   useEffect(() => {
-    if (!mapRef.current || !styleReadyRef.current) return;
+    if (!mapRef.current || !styleReady) return;
     (mapRef.current.getSource(SRC_AIRPORTS) as maplibregl.GeoJSONSource)
       ?.setData(airportsToGeoJSON(airports));
-  }, [airports]);
+  }, [airports, styleReady]);
 
   useEffect(() => {
-    if (!mapRef.current || !styleReadyRef.current) return;
+    if (!mapRef.current || !styleReady) return;
     (mapRef.current.getSource(SRC_ROUTE) as maplibregl.GeoJSONSource)
       ?.setData(routeToGeoJSON(route));
     (mapRef.current.getSource(SRC_STOPS) as maplibregl.GeoJSONSource)
@@ -260,7 +266,7 @@ export function MapView({ airports, route }: Props) {
       }
       mapRef.current.fitBounds(bounds, { padding: 80, duration: 600 });
     }
-  }, [route]);
+  }, [route, styleReady]);
 
   return <div ref={containerRef} className="absolute inset-0" />;
 }

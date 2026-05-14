@@ -8,7 +8,7 @@ import {
 } from "@/data/loaders";
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
 import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
-import { plan, type PlannedRoute } from "@/engine/plan";
+import { planWithWaypoints, type PlannedRoute } from "@/engine/plan";
 import { obstaclesNearRoute } from "@/engine/obstacles";
 import { analyzeTerrain, type TerrainAnalysis } from "@/engine/terrain";
 import type { FlightRule } from "@/engine/hemispheric";
@@ -24,6 +24,7 @@ import { LegTable } from "./ui/LegTable";
 import { TerrainPanel } from "./ui/TerrainPanel";
 import { ExportPanel } from "./ui/ExportPanel";
 import { ExcludedAirports } from "./ui/ExcludedAirports";
+import { PinnedStops } from "./ui/PinnedStops";
 import { TripsPanel } from "./ui/TripsPanel";
 import {
   deleteTrip,
@@ -63,6 +64,7 @@ export function App() {
   const [excludedIds, setExcludedIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  const [pinnedStopIds, setPinnedStopIds] = useState<readonly string[]>([]);
   const [trips, setTrips] = useState<SavedTrip[]>(() => listTrips());
 
   // Datasets are fetched at runtime instead of being bundled into the
@@ -102,25 +104,44 @@ export function App() {
     [datasets, filters, selectedAircraft.fuel.type],
   );
 
-  function runPlan(targetFt: number) {
+  interface PlanOverrides {
+    /** Explicit exclusion set, used when the caller just mutated state
+     *  and React hasn't committed yet. Falls back to the current
+     *  excludedIds when omitted. */
+    excluded?: ReadonlySet<string>;
+    /** Same idea for the pinned waypoint list. */
+    pinned?: readonly string[];
+  }
+
+  function runPlan(targetFt: number, overrides: PlanOverrides = {}) {
     setError(null);
     const o = airportByIdent(datasets.airports, origin);
     const d = airportByIdent(datasets.airports, destination);
     if (!o) {
       setError(`unknown origin: ${origin}`);
+      setRoutes([]);
       return;
     }
     if (!d) {
       setError(`unknown destination: ${destination}`);
+      setRoutes([]);
       return;
     }
-    // Ensure origin and destination are in the candidate set even if
-    // the hard filters would exclude them.
+    const excluded = overrides.excluded ?? excludedIds;
+    const pinned = overrides.pinned ?? pinnedStopIds;
+    // Pinned airports must be in the candidate set even when the hard
+    // filters would have dropped them — the user explicitly chose
+    // them. Origin/destination get the same exemption.
+    const pinnedAirports = pinned
+      .map((id) => datasets.airports.find((a) => a.id === id))
+      .filter((a): a is NonNullable<typeof a> => !!a);
     const candidates = Array.from(
-      new Map([...matches, o, d].map((a) => [a.id, a])).values(),
+      new Map(
+        [...matches, o, d, ...pinnedAirports].map((a) => [a.id, a]),
+      ).values(),
     );
     try {
-      const result = plan({
+      const result = planWithWaypoints({
         airports: candidates,
         origin: o.id,
         destination: d.id,
@@ -131,10 +152,11 @@ export function App() {
         variation: variationFn,
         maxLegHr: capLegTime ? maxLegHr : undefined,
         startingFuelGal,
-        excludedAirportIds: excludedIds,
+        excludedAirportIds: excluded,
+        waypoints: pinned,
       });
       if (result.length === 0) {
-        setError("no route found — try relaxing filters or raising reserve");
+        setError("no route found — try relaxing constraints");
         setRoutes([]);
         return;
       }
@@ -145,13 +167,16 @@ export function App() {
     }
   }
 
-  function handlePlan() {
+  function runWithSpinner(
+    targetFt: number,
+    overrides: PlanOverrides = {},
+  ) {
     if (isPlanning) return;
     // flushSync forces React to commit the spinner-on render before
     // we yield. Without it, React 18 can defer the commit past our
-    // requestAnimationFrame callbacks and the runPlan() call below
-    // blocks the main thread for tens of seconds with the button
-    // still rendered in its idle state.
+    // requestAnimationFrame callbacks and runPlan() below blocks the
+    // main thread for tens of seconds with the button still rendered
+    // in its idle state.
     flushSync(() => setIsPlanning(true));
     const startedAt = performance.now();
     // After flushSync, the DOM has the spinner. Double-RAF ensures the
@@ -161,7 +186,7 @@ export function App() {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         try {
-          runPlan(targetAltFt);
+          runPlan(targetFt, overrides);
         } finally {
           // Always schedule the back-to-idle transition through
           // setTimeout. If runPlan blocks past MIN_SPINNER_MS,
@@ -177,6 +202,10 @@ export function App() {
         }
       });
     });
+  }
+
+  function handlePlan() {
+    runWithSpinner(targetAltFt);
   }
 
   const currentRoute = routes[selectedRoute] ?? null;
@@ -207,35 +236,135 @@ export function App() {
     handlePlan();
   }
 
-  function handleExcludeStop(airportId: string) {
-    setExcludedIds((prev) => {
-      const next = new Set(prev);
-      next.add(airportId);
-      return next;
+  function handleExcludeStops(airportIds: string[]) {
+    const nextExcluded = new Set(excludedIds);
+    for (const id of airportIds) nextExcluded.add(id);
+    // Excluding a pinned airport contradicts the pin — the exclusion
+    // is the more recent intent, so drop the pin in the same commit.
+    const droppedPins = new Set(airportIds);
+    const nextPinned = pinnedStopIds.filter((id) => !droppedPins.has(id));
+    const pinnedChanged = nextPinned.length !== pinnedStopIds.length;
+    setExcludedIds(nextExcluded);
+    if (pinnedChanged) setPinnedStopIds(nextPinned);
+    runWithSpinner(targetAltFt, {
+      excluded: nextExcluded,
+      pinned: pinnedChanged ? nextPinned : undefined,
     });
-    // Replan immediately so the user sees the new route. The closure
-    // here still has the old excludedIds — runPlan reads from React
-    // state, but our state update above hasn't committed yet.
-    // Workaround: derive a fresh set inline and pass through a
-    // dedicated runPlanWithExclusions variant.
-    runPlanWithExclusions(targetAltFt, (() => {
-      const next = new Set(excludedIds);
-      next.add(airportId);
-      return next;
-    })());
   }
 
   function handleIncludeStop(airportId: string) {
-    setExcludedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(airportId);
-      return next;
+    const next = new Set(excludedIds);
+    next.delete(airportId);
+    setExcludedIds(next);
+    runWithSpinner(targetAltFt, { excluded: next });
+  }
+
+  function handleAddPins(airportIds: string[]) {
+    const fresh = airportIds.filter((id) => !pinnedStopIds.includes(id));
+    if (fresh.length === 0) return;
+    const next = [...pinnedStopIds, ...fresh];
+    // Pinning an excluded airport contradicts the exclusion — the
+    // pin is the more recent intent, so drop the exclusion in the
+    // same commit.
+    let nextExcluded = excludedIds;
+    let excludedChanged = false;
+    for (const id of fresh) {
+      if (nextExcluded.has(id)) {
+        if (!excludedChanged) {
+          nextExcluded = new Set(excludedIds);
+          excludedChanged = true;
+        }
+        (nextExcluded as Set<string>).delete(id);
+      }
+    }
+    setPinnedStopIds(next);
+    if (excludedChanged) setExcludedIds(nextExcluded);
+    runWithSpinner(targetAltFt, {
+      pinned: next,
+      excluded: excludedChanged ? nextExcluded : undefined,
     });
-    runPlanWithExclusions(targetAltFt, (() => {
+  }
+
+  function handleRemovePin(airportId: string) {
+    const next = pinnedStopIds.filter((id) => id !== airportId);
+    setPinnedStopIds(next);
+    runWithSpinner(targetAltFt, { pinned: next });
+  }
+
+  function handleReorderPins(nextPinned: string[]) {
+    setPinnedStopIds(nextPinned);
+    runWithSpinner(targetAltFt, { pinned: nextPinned });
+  }
+
+  function handleReplaceStop(oldAirportId: string, newIdent: string) {
+    const replacement = airportByIdent(datasets.airports, newIdent);
+    if (!replacement) {
+      setError(`unknown airport: ${newIdent.toUpperCase()}`);
+      return;
+    }
+    if (replacement.id === oldAirportId) return;
+
+    const oldPinIndex = pinnedStopIds.indexOf(oldAirportId);
+    let nextPinned: string[];
+    let nextExcluded = excludedIds;
+
+    if (oldPinIndex >= 0) {
+      // The replaced stop was already pinned. Swap the pin in place
+      // instead of leaving the old pin stale and adding another — and
+      // don't exclude the old airport (the user just edited a pin
+      // they explicitly set; excluding it would be surprising). If the
+      // replacement is itself already pinned somewhere else, drop the
+      // old pin and leave the existing position alone.
+      nextPinned = pinnedStopIds.includes(replacement.id)
+        ? pinnedStopIds.filter((id) => id !== oldAirportId)
+        : pinnedStopIds.map((id, i) =>
+            i === oldPinIndex ? replacement.id : id,
+          );
+    } else {
+      // The old stop was a planner-chosen fuel stop, not a pin.
+      // Exclude it so the planner can't pick it again, then pin the
+      // new airport at the matching position in the route.
       const next = new Set(excludedIds);
-      next.delete(airportId);
-      return next;
-    })());
+      next.add(oldAirportId);
+      nextExcluded = next;
+
+      const route = routes[selectedRoute];
+      const stopIds = route
+        ? route.legs.slice(0, -1).map((l) => l.toAirport.id)
+        : [];
+      const oldPos = stopIds.indexOf(oldAirportId);
+      let insertAt = pinnedStopIds.length;
+      if (oldPos >= 0) {
+        insertAt = 0;
+        for (let i = 0; i < pinnedStopIds.length; i++) {
+          const pinPos = stopIds.indexOf(pinnedStopIds[i]);
+          if (pinPos >= 0 && pinPos < oldPos) insertAt = i + 1;
+        }
+      }
+      nextPinned = pinnedStopIds.includes(replacement.id)
+        ? [...pinnedStopIds]
+        : [
+            ...pinnedStopIds.slice(0, insertAt),
+            replacement.id,
+            ...pinnedStopIds.slice(insertAt),
+          ];
+    }
+
+    // The replacement is being pinned — drop it from the exclusion
+    // list if it happens to be there, since pin + exclude on the same
+    // airport contradict each other.
+    if (nextExcluded.has(replacement.id)) {
+      const e = new Set(nextExcluded);
+      e.delete(replacement.id);
+      nextExcluded = e;
+    }
+
+    setExcludedIds(nextExcluded);
+    setPinnedStopIds(nextPinned);
+    runWithSpinner(targetAltFt, {
+      excluded: nextExcluded,
+      pinned: nextPinned,
+    });
   }
 
   function handleSaveTrip(name: string) {
@@ -252,6 +381,7 @@ export function App() {
       maxLegHr,
       filters,
       excludedIds: [...excludedIds],
+      pinnedStopIds: [...pinnedStopIds],
       savedAt: new Date().toISOString(),
     };
     setTrips(saveTrip(trip));
@@ -271,66 +401,13 @@ export function App() {
     // was added still load with sensible values for it.
     setFilters({ ...DEFAULT_FILTERS, ...t.filters });
     setExcludedIds(new Set(t.excludedIds));
+    setPinnedStopIds(t.pinnedStopIds ?? []);
     setRoutes([]);
     setError(null);
   }
 
   function handleDeleteTrip(name: string) {
     setTrips(deleteTrip(name));
-  }
-
-  function runPlanWithExclusions(
-    targetFt: number,
-    exclusions: ReadonlySet<string>,
-  ) {
-    if (isPlanning) return;
-    flushSync(() => setIsPlanning(true));
-    const startedAt = performance.now();
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        try {
-          // Same shape as runPlan but with the explicitly-passed
-          // exclusions, so the user's brand-new exclusion takes
-          // effect immediately rather than after the next render.
-          setError(null);
-          const o = airportByIdent(datasets.airports, origin);
-          const d = airportByIdent(datasets.airports, destination);
-          if (!o || !d) {
-            setError(`unknown airport`);
-            return;
-          }
-          const candidates = Array.from(
-            new Map([...matches, o, d].map((a) => [a.id, a])).values(),
-          );
-          const result = plan({
-            airports: candidates,
-            origin: o.id,
-            destination: d.id,
-            aircraft: selectedAircraft,
-            targetAltFt: targetFt,
-            flightRule,
-            reserveHr: reserveMin / 60,
-            variation: variationFn,
-            maxLegHr: capLegTime ? maxLegHr : undefined,
-            startingFuelGal,
-            excludedAirportIds: exclusions,
-          });
-          if (result.length === 0) {
-            setError(
-              "no route found — try relaxing filters or removing exclusions",
-            );
-            setRoutes([]);
-            return;
-          }
-          setRoutes(result);
-          setSelectedRoute(0);
-        } finally {
-          const elapsed = performance.now() - startedAt;
-          const remaining = Math.max(50, MIN_SPINNER_MS - elapsed);
-          setTimeout(() => setIsPlanning(false), remaining);
-        }
-      });
-    });
   }
 
   return (
@@ -374,9 +451,24 @@ export function App() {
             error={error}
           />
           <div className="mt-3">
+            <PinnedStops
+              pinnedIds={pinnedStopIds}
+              airports={datasets.airports}
+              aircraftFuelType={selectedAircraft.fuel.type}
+              originIdent={origin}
+              destinationIdent={destination}
+              onAdd={handleAddPins}
+              onRemove={handleRemovePin}
+              onReorder={handleReorderPins}
+            />
+          </div>
+          <div className="mt-3">
             <ExcludedAirports
               excludedIds={excludedIds}
               airports={datasets.airports}
+              originIdent={origin}
+              destinationIdent={destination}
+              onExclude={handleExcludeStops}
               onInclude={handleIncludeStop}
             />
           </div>
@@ -422,7 +514,8 @@ export function App() {
               routes={routes}
               selected={selectedRoute}
               onSelect={setSelectedRoute}
-              onExcludeStop={handleExcludeStop}
+              onExcludeStop={(id) => handleExcludeStops([id])}
+              onReplaceStop={handleReplaceStop}
             />
           </div>
           <TerrainPanel
