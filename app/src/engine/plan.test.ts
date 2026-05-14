@@ -143,6 +143,95 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
     expect(result[0].legs[0].toAirport.id).toBe("M");
   });
 
+  test("startingFuelGal caps the first leg only; later legs assume top-off", () => {
+    // Aircraft with 200-gal usable capacity, 120 KTAS, 10 GPH.
+    // Full-tank range ≈ (200 - 7.5) × 12 = 2,310 nm.
+    // With only 30 gal at the origin, the first leg can cover
+    // (30 - 7.5) × 12 ≈ 270 nm. After a top-off mid-route the next
+    // leg gets the full 2,310-nm budget again.
+    const O = ap("O", 40, -120);
+    const M = ap("M", 40, -116); // ~184 nm east of O — fits the 270-nm cap
+    const D = ap("D", 40, -100); // ~920 nm from O — doesn't fit on starting fuel
+    const result = plan({
+      airports: [O, M, D],
+      origin: "O",
+      destination: "D",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      startingFuelGal: 30,
+    });
+    expect(result.length).toBeGreaterThan(0);
+    for (const r of result) {
+      // Must stop somewhere; direct O→D would exceed startingFuel range.
+      expect(r.legs.length).toBeGreaterThan(1);
+      expect(r.legs[0].fromAirport.id).toBe("O");
+      expect(r.legs[0].toAirport.id).toBe("M");
+    }
+  });
+
+  test("excludedAirportIds drops the named airport from every objective", () => {
+    // O→E needs a stop. Without exclusions, the planner picks the
+    // on-line waypoints (M is the closest to the great circle).
+    // Excluding M should force the planner through D instead.
+    const O = ap("O", 40, -120);
+    const M = ap("M", 40, -110);
+    const D = ap("D", 41, -110); // detour ~60 nm north of the GC line
+    const E = ap("E", 40, -100);
+    const cap = plan({
+      airports: [O, M, D, E],
+      origin: "O",
+      destination: "E",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      maxLegHr: 5,
+    });
+    expect(cap.length).toBeGreaterThan(0);
+    expect(cap[0].legs.some((l) => l.toAirport.id === "M")).toBe(true);
+
+    const excluded = plan({
+      airports: [O, M, D, E],
+      origin: "O",
+      destination: "E",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      maxLegHr: 5,
+      excludedAirportIds: new Set(["M"]),
+    });
+    expect(excluded.length).toBeGreaterThan(0);
+    for (const r of excluded) {
+      for (const leg of r.legs) {
+        expect(leg.toAirport.id).not.toBe("M");
+      }
+    }
+  });
+
+  test("excluding the destination is ignored (route still terminates there)", () => {
+    const O = ap("O", 40, -120);
+    const M = ap("M", 40, -110);
+    const E = ap("E", 40, -100);
+    const result = plan({
+      airports: [O, M, E],
+      origin: "O",
+      destination: "E",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      maxLegHr: 5,
+      excludedAirportIds: new Set(["E"]),
+    });
+    expect(result.length).toBeGreaterThan(0);
+    for (const r of result) {
+      expect(r.legs[r.legs.length - 1].toAirport.id).toBe("E");
+    }
+  });
+
   test("each returned route is unique by node sequence", () => {
     const A = ap("A", 40, -120);
     const B = ap("B", 40, -115);

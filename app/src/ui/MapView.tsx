@@ -1,24 +1,25 @@
 import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
-import type { Airport, Obstacle } from "@/data/loaders";
+import type { Airport } from "@/data/loaders";
 import type { PlannedRoute } from "@/engine/plan";
 import { interpolateGreatCircle } from "@/engine/geo";
+import statesUrl from "@data/us-states.geojson?url";
 
 const PLACEHOLDER_STYLE = "https://demotiles.maplibre.org/style.json";
 const SRC_AIRPORTS = "airports";
 const SRC_ROUTE = "route";
 const SRC_STOPS = "route-stops";
-const SRC_OBSTACLES = "obstacles";
+const SRC_STATES = "us-states";
 const LAYER_TOWERED = "airports-towered";
 const LAYER_NONTOWERED = "airports-nontowered";
 const LAYER_ROUTE = "route-line";
 const LAYER_STOPS = "route-stops-pts";
-const LAYER_OBSTACLES = "obstacles-pts";
+const LAYER_STOPS_LABELS = "route-stops-labels";
+const LAYER_STATES = "us-states-borders";
 
 interface Props {
   airports: readonly Airport[];
   route: PlannedRoute | null;
-  obstacles: readonly Obstacle[];
 }
 
 function airportsToGeoJSON(
@@ -57,24 +58,6 @@ function routeToGeoJSON(
   return { type: "FeatureCollection", features: lines };
 }
 
-function obstaclesToGeoJSON(
-  obstacles: readonly Obstacle[],
-): GeoJSON.FeatureCollection {
-  return {
-    type: "FeatureCollection",
-    features: obstacles.map((o) => ({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [o.lon, o.lat] },
-      properties: {
-        id: o.id,
-        type: o.type,
-        height_agl_ft: o.height_agl_ft,
-        height_msl_ft: o.height_msl_ft,
-      },
-    })),
-  };
-}
-
 function stopsToGeoJSON(
   route: PlannedRoute | null,
 ): GeoJSON.FeatureCollection {
@@ -95,7 +78,7 @@ function stopsToGeoJSON(
   return { type: "FeatureCollection", features };
 }
 
-export function MapView({ airports, route, obstacles }: Props) {
+export function MapView({ airports, route }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const styleReadyRef = useRef(false);
@@ -112,6 +95,31 @@ export function MapView({ airports, route, obstacles }: Props) {
 
     map.on("load", () => {
       styleReadyRef.current = true;
+
+      // State borders under everything else — visual SA without
+      // depending on a richer basemap. The fetch happens in the
+      // background; the layer just stays empty until it lands.
+      map.addSource(SRC_STATES, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: LAYER_STATES,
+        type: "line",
+        source: SRC_STATES,
+        paint: {
+          "line-color": "#94a3b8",
+          "line-width": 1,
+          "line-opacity": 0.7,
+        },
+      });
+      fetch(statesUrl)
+        .then((r) => r.json())
+        .then((geojson) => {
+          (map.getSource(SRC_STATES) as maplibregl.GeoJSONSource | undefined)
+            ?.setData(geojson);
+        })
+        .catch((e) => console.warn("state borders failed to load:", e));
 
       map.addSource(SRC_AIRPORTS, {
         type: "geojson",
@@ -172,27 +180,25 @@ export function MapView({ airports, route, obstacles }: Props) {
           "circle-stroke-width": 2,
         },
       });
-
-      map.addSource(SRC_OBSTACLES, {
-        type: "geojson",
-        data: obstaclesToGeoJSON(obstacles),
-      });
       map.addLayer({
-        id: LAYER_OBSTACLES,
+        id: LAYER_STOPS_LABELS,
         type: "symbol",
-        source: SRC_OBSTACLES,
+        source: SRC_STOPS,
         layout: {
-          "text-field": ["concat", ["get", "height_agl_ft"], "'"],
-          "text-size": 10,
-          "text-offset": [0, 0.8],
+          "text-field": ["get", "ident"],
+          "text-size": 12,
+          "text-offset": [0, 1.1],
           "text-anchor": "top",
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
         },
         paint: {
-          "text-color": "#dc2626",
+          "text-color": "#1f2937",
           "text-halo-color": "#ffffff",
-          "text-halo-width": 1.2,
+          "text-halo-width": 1.5,
         },
       });
+
 
       const popup = new maplibregl.Popup({
         closeButton: false,
@@ -240,8 +246,6 @@ export function MapView({ airports, route, obstacles }: Props) {
       ?.setData(routeToGeoJSON(route));
     (mapRef.current.getSource(SRC_STOPS) as maplibregl.GeoJSONSource)
       ?.setData(stopsToGeoJSON(route));
-    (mapRef.current.getSource(SRC_OBSTACLES) as maplibregl.GeoJSONSource)
-      ?.setData(obstaclesToGeoJSON(obstacles));
     if (route && route.legs.length > 0) {
       const bounds = new maplibregl.LngLatBounds();
       for (const leg of route.legs) {
@@ -250,7 +254,7 @@ export function MapView({ airports, route, obstacles }: Props) {
       }
       mapRef.current.fitBounds(bounds, { padding: 80, duration: 600 });
     }
-  }, [route, obstacles]);
+  }, [route]);
 
   return <div ref={containerRef} className="absolute inset-0" />;
 }

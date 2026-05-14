@@ -79,12 +79,24 @@ export class MagneticVariationGrid {
         `magnetic grid fetch failed: ${resp.status} ${resp.statusText}`,
       );
     }
-    const compressed = await resp.arrayBuffer();
-    const ds = new DecompressionStream("gzip");
-    const stream = new Blob([compressed]).stream().pipeThrough(ds);
-    const buf = await new Response(stream).arrayBuffer();
-    this.grid = decode(buf);
+    const body = await resp.arrayBuffer();
+    this.grid = decode(await maybeGunzip(body));
   }
+}
+
+/**
+ * Vite's dev server and GitHub Pages both set Content-Encoding: gzip
+ * on `.gz` URLs, so the browser transparently decompresses before
+ * we see the body. Detect the gzip magic (1f 8b) and only run
+ * DecompressionStream when the wrapper is actually still there.
+ */
+async function maybeGunzip(input: ArrayBuffer): Promise<ArrayBuffer> {
+  if (input.byteLength < 2) return input;
+  const head = new Uint8Array(input, 0, 2);
+  if (head[0] !== 0x1f || head[1] !== 0x8b) return input;
+  const ds = new DecompressionStream("gzip");
+  const stream = new Blob([input]).stream().pipeThrough(ds);
+  return await new Response(stream).arrayBuffer();
 }
 
 function decode(buf: ArrayBuffer): Grid {

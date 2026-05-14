@@ -12,6 +12,10 @@ interface Props {
   maxLegHr: number;
   onMaxLegHrChange: (h: number) => void;
   onPlan: () => void;
+  /** When true, the Plan button shows a spinner and is disabled. */
+  isPlanning: boolean;
+  /** When true, the Plan button is disabled with a "loading…" label. */
+  dataReady: boolean;
   error: string | null;
 }
 
@@ -27,16 +31,28 @@ export function TripPanel({
   maxLegHr,
   onMaxLegHrChange,
   onPlan,
+  isPlanning,
+  dataReady,
   error,
 }: Props) {
+  const buttonLabel = !dataReady
+    ? "Loading airport database…"
+    : isPlanning
+      ? "Planning…"
+      : "Plan trip";
+  const buttonDisabled = !dataReady || isPlanning;
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+          <label
+            htmlFor="origin"
+            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+          >
             From
           </label>
           <input
+            id="origin"
             type="text"
             value={origin}
             onChange={(e) => onOriginChange(e.target.value.toUpperCase())}
@@ -45,10 +61,14 @@ export function TripPanel({
           />
         </div>
         <div>
-          <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+          <label
+            htmlFor="destination"
+            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+          >
             To
           </label>
           <input
+            id="destination"
             type="text"
             value={destination}
             onChange={(e) => onDestinationChange(e.target.value.toUpperCase())}
@@ -111,10 +131,22 @@ export function TripPanel({
       </div>
       <button
         type="button"
+        data-testid="plan-trip"
+        data-state={
+          !dataReady ? "loading" : isPlanning ? "planning" : "idle"
+        }
         onClick={onPlan}
-        className="w-full rounded bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+        disabled={buttonDisabled}
+        className="flex w-full items-center justify-center gap-2 rounded bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-400"
       >
-        Plan trip
+        {(isPlanning || !dataReady) && (
+          <span
+            aria-hidden="true"
+            data-testid="plan-trip-spinner"
+            className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent"
+          />
+        )}
+        {buttonLabel}
       </button>
       <p className="text-[11px] text-slate-500">
         Each plan returns one route per objective (fewest stops, shortest

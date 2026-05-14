@@ -1,7 +1,7 @@
-import airportsRaw from "@data/airports.json";
-import runwaysRaw from "@data/runways.json";
-import approachesRaw from "@data/approaches.json";
-import obstaclesRaw from "@data/obstacles.json";
+import airportsUrl from "@data/airports.json?url";
+import runwaysUrl from "@data/runways.json?url";
+import approachesUrl from "@data/approaches.json?url";
+import obstaclesUrl from "@data/obstacles.json?url";
 
 export interface Airport {
   id: string;
@@ -55,30 +55,37 @@ export interface Obstacle {
   height_msl_ft: number;
 }
 
-export const airports = airportsRaw as Airport[];
-export const runways = runwaysRaw as Runway[];
-export const approaches = approachesRaw as Approach[];
-export const obstacles = obstaclesRaw as Obstacle[];
-
-export const hasApproachData = approaches.length > 0;
-export const hasObstacleData = obstacles.length > 0;
-
-export function airportByIdent(ident: string): Airport | undefined {
-  const u = ident.toUpperCase();
-  return airports.find((a) => a.icao === u || a.lid === u);
+/**
+ * Bundle of everything `loadDatasets()` produces. The app keeps the
+ * latest snapshot in React state, so consumers read from props/state
+ * — no module-level live bindings to debug.
+ */
+export interface Datasets {
+  airports: Airport[];
+  runways: Runway[];
+  approaches: Approach[];
+  obstacles: Obstacle[];
+  hasApproachData: boolean;
+  /** Airports with at least one published IAP (any type). */
+  anyApproachAirports: Set<string>;
+  /** Airports with at least one vertical-guidance approach
+   *  (true precision OR LPV / LPV200 / LNAV-VNAV RNAV). */
+  precisionApproachAirports: Set<string>;
+  /** Airports with at least one RNAV/GPS-based approach. */
+  rnavApproachAirports: Set<string>;
 }
 
-// "Precision" here means the operational outcome a pilot cares about
-// during planning: an approach that publishes vertical guidance and
-// reaches low minimums. That includes legally-precision approaches
-// (ILS/J/G/M/W/Y, plus RNP AR by FAA practice) AND RNAV approaches
-// whose published minimums include SBAS vertical (LPV / LPV200) or
-// baro-VNAV (LNAV/VNAV). It excludes RNAV approaches that publish
-// only LP or LNAV — those are non-precision in operation.
-//
-// Legal note: LPV is *not* a precision approach per ICAO / FAA — it's
-// classified APV. The filter is named for what the pilot is asking,
-// not for the regulatory category.
+export const EMPTY_DATASETS: Datasets = {
+  airports: [],
+  runways: [],
+  approaches: [],
+  obstacles: [],
+  hasApproachData: false,
+  anyApproachAirports: new Set(),
+  precisionApproachAirports: new Set(),
+  rnavApproachAirports: new Set(),
+};
+
 const STRICT_PRECISION_TYPES = new Set(["I", "J", "H", "G", "M", "W", "Y"]);
 const RNAV_TYPES = new Set(["R", "P", "H"]);
 const VERTICAL_SBAS = new Set(["ALPV", "ALPV200"]);
@@ -104,18 +111,83 @@ function isRNAV(a: Approach): boolean {
   return RNAV_TYPES.has(a.approach_type);
 }
 
-/** Airport ids whose published approaches include at least one with
- *  vertical guidance — true precision or RNAV-LPV / RNAV-LNAV-VNAV. */
-export const precisionApproachAirports: Set<string> = (() => {
-  const s = new Set<string>();
-  for (const a of approaches) if (hasVerticalGuidance(a)) s.add(a.airport_id);
-  return s;
-})();
+function buildIndexes(
+  airports: Airport[],
+  approaches: Approach[],
+): Pick<
+  Datasets,
+  "anyApproachAirports" | "precisionApproachAirports" | "rnavApproachAirports"
+> {
+  // CIFP and NASR identify airports differently. NASR's `id` is an
+  // internal site code (e.g. "50001.*A"); SwiftCIFP emits the ICAO
+  // (e.g. "KSEA"), occasionally the FAA LID for US airports without
+  // an ICAO. Build a translation table so the indexes are keyed by
+  // NASR id — the same key everything else in the app uses.
+  const idByIdent = new Map<string, string>();
+  for (const a of airports) {
+    if (a.icao) idByIdent.set(a.icao, a.id);
+    if (a.lid) idByIdent.set(a.lid, a.id);
+  }
+  const resolve = (cifpId: string): string | undefined => {
+    // Direct lookup handles both ICAO ("KSEA") and pure-LID ("3W2")
+    // shapes.
+    const direct = idByIdent.get(cifpId);
+    if (direct) return direct;
+    // CIFP pads short FAA LIDs to four characters with a leading "K"
+    // for the airport-identifier field, even though the airport
+    // doesn't have a real ICAO assigned. Try the stripped LID before
+    // giving up.
+    if (cifpId.length === 4 && cifpId.startsWith("K")) {
+      return idByIdent.get(cifpId.slice(1));
+    }
+    return undefined;
+  };
+  const any = new Set<string>();
+  const prec = new Set<string>();
+  const rn = new Set<string>();
+  for (const a of approaches) {
+    const id = resolve(a.airport_id);
+    if (!id) continue;
+    any.add(id);
+    if (hasVerticalGuidance(a)) prec.add(id);
+    if (isRNAV(a)) rn.add(id);
+  }
+  return {
+    anyApproachAirports: any,
+    precisionApproachAirports: prec,
+    rnavApproachAirports: rn,
+  };
+}
 
-/** Airport ids whose published approaches include at least one
- *  RNAV/GPS-based approach (regardless of vertical guidance). */
-export const rnavApproachAirports: Set<string> = (() => {
-  const s = new Set<string>();
-  for (const a of approaches) if (isRNAV(a)) s.add(a.airport_id);
-  return s;
-})();
+let _loaded: Promise<Datasets> | null = null;
+
+/** Idempotent. Returns the same Promise on every call so the network
+ *  fetch happens at most once per app lifetime. */
+export function loadDatasets(): Promise<Datasets> {
+  if (_loaded) return _loaded;
+  _loaded = (async () => {
+    const [airports, runways, approaches, obstacles] = await Promise.all([
+      fetch(airportsUrl).then((r) => r.json() as Promise<Airport[]>),
+      fetch(runwaysUrl).then((r) => r.json() as Promise<Runway[]>),
+      fetch(approachesUrl).then((r) => r.json() as Promise<Approach[]>),
+      fetch(obstaclesUrl).then((r) => r.json() as Promise<Obstacle[]>),
+    ]);
+    return {
+      airports,
+      runways,
+      approaches,
+      obstacles,
+      hasApproachData: approaches.length > 0,
+      ...buildIndexes(airports, approaches),
+    };
+  })();
+  return _loaded;
+}
+
+export function airportByIdent(
+  airports: readonly Airport[],
+  ident: string,
+): Airport | undefined {
+  const u = ident.toUpperCase();
+  return airports.find((a) => a.icao === u || a.lid === u);
+}

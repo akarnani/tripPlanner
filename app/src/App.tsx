@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { airports, airportByIdent, obstacles } from "@/data/loaders";
+import { flushSync } from "react-dom";
+import {
+  airportByIdent,
+  EMPTY_DATASETS,
+  loadDatasets,
+  type Datasets,
+} from "@/data/loaders";
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
 import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
 import { plan, type PlannedRoute } from "@/engine/plan";
@@ -17,17 +23,35 @@ import { TripPanel } from "./ui/TripPanel";
 import { LegTable } from "./ui/LegTable";
 import { TerrainPanel } from "./ui/TerrainPanel";
 import { ExportPanel } from "./ui/ExportPanel";
+import { ExcludedAirports } from "./ui/ExcludedAirports";
+import { TripsPanel } from "./ui/TripsPanel";
+import {
+  deleteTrip,
+  listTrips,
+  saveTrip,
+  type SavedTrip,
+} from "@/data/trips";
 
 const demSampler = new TerrainGridDEMSampler(terrainGridUrl);
 const magGrid = new MagneticVariationGrid(magneticGridUrl);
 const variationFn = (p: { lat: number; lon: number }) =>
   magGrid.variationDeg(p);
 
+const MIN_SPINNER_MS = 600;
+
 export function App() {
+  const [datasets, setDatasets] = useState<Datasets>(EMPTY_DATASETS);
+  const [dataReady, setDataReady] = useState(false);
+  const [demReady, setDemReady] = useState(false);
+  const [isPlanning, setIsPlanning] = useState(false);
+
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [aircraftSlug, setAircraftSlug] = useState(allAircraft[0]?.slug ?? "");
   const [targetAltFt, setTargetAltFt] = useState(6500);
   const [reserveMin, setReserveMin] = useState(45);
+  const [startingFuelGal, setStartingFuelGal] = useState<number>(
+    allAircraft[0]?.fuel.usable_capacity_gal ?? 0,
+  );
   const [origin, setOrigin] = useState("KSEA");
   const [destination, setDestination] = useState("KBOI");
   const [flightRule, setFlightRule] = useState<FlightRule>("VFR");
@@ -36,9 +60,26 @@ export function App() {
   const [routes, setRoutes] = useState<PlannedRoute[]>([]);
   const [selectedRoute, setSelectedRoute] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [demReady, setDemReady] = useState(false);
+  const [excludedIds, setExcludedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [trips, setTrips] = useState<SavedTrip[]>(() => listTrips());
 
+  // Datasets are fetched at runtime instead of being bundled into the
+  // JS so the initial paint isn't blocked by parsing several MB of
+  // JSON. The terrain DEM and magnetic-variation grids load in
+  // parallel; planning + terrain analysis gracefully degrade until
+  // they're ready.
   useEffect(() => {
+    loadDatasets()
+      .then((d) => {
+        setDatasets(d);
+        setDataReady(true);
+      })
+      .catch((e) => {
+        console.error("dataset load failed:", e);
+        setError("Failed to load airport database; reload to retry.");
+      });
     demSampler
       .load()
       .then(() => setDemReady(true))
@@ -49,12 +90,22 @@ export function App() {
   }, []);
 
   const selectedAircraft = aircraftBySlug(aircraftSlug) ?? allAircraft[0];
-  const matches = useMemo(() => applyFilters(airports, filters), [filters]);
+
+  // When the user picks a different aircraft, reset starting fuel to
+  // that aircraft's full capacity — its tanks aren't comparable.
+  useEffect(() => {
+    setStartingFuelGal(selectedAircraft.fuel.usable_capacity_gal);
+  }, [selectedAircraft.slug]);
+
+  const matches = useMemo(
+    () => applyFilters(datasets, filters),
+    [datasets, filters],
+  );
 
   function runPlan(targetFt: number) {
     setError(null);
-    const o = airportByIdent(origin);
-    const d = airportByIdent(destination);
+    const o = airportByIdent(datasets.airports, origin);
+    const d = airportByIdent(datasets.airports, destination);
     if (!o) {
       setError(`unknown origin: ${origin}`);
       return;
@@ -79,6 +130,8 @@ export function App() {
         reserveHr: reserveMin / 60,
         variation: variationFn,
         maxLegHr: capLegTime ? maxLegHr : undefined,
+        startingFuelGal,
+        excludedAirportIds: excludedIds,
       });
       if (result.length === 0) {
         setError("no route found — try relaxing filters or raising reserve");
@@ -92,12 +145,44 @@ export function App() {
     }
   }
 
-  const handlePlan = () => runPlan(targetAltFt);
+  function handlePlan() {
+    if (isPlanning) return;
+    // flushSync forces React to commit the spinner-on render before
+    // we yield. Without it, React 18 can defer the commit past our
+    // requestAnimationFrame callbacks and the runPlan() call below
+    // blocks the main thread for tens of seconds with the button
+    // still rendered in its idle state.
+    flushSync(() => setIsPlanning(true));
+    const startedAt = performance.now();
+    // After flushSync, the DOM has the spinner. Double-RAF ensures the
+    // browser actually paints it before runPlan blocks. Tailwind's
+    // animate-spin uses transform, which runs on the compositor and
+    // keeps spinning while the main thread is busy.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          runPlan(targetAltFt);
+        } finally {
+          // Always schedule the back-to-idle transition through
+          // setTimeout. If runPlan blocks past MIN_SPINNER_MS,
+          // calling setIsPlanning(false) synchronously here would
+          // commit "planning" and "idle" in the same uninterrupted
+          // JS task — the renderer never yields, so neither users
+          // nor Playwright observe the spinner. The 50 ms floor
+          // guarantees at least one event-loop tick of visible
+          // spinner state.
+          const elapsed = performance.now() - startedAt;
+          const remaining = Math.max(50, MIN_SPINNER_MS - elapsed);
+          setTimeout(() => setIsPlanning(false), remaining);
+        }
+      });
+    });
+  }
 
   const currentRoute = routes[selectedRoute] ?? null;
   const routeObstacles = useMemo(
-    () => obstaclesNearRoute(obstacles, currentRoute),
-    [currentRoute],
+    () => obstaclesNearRoute(datasets.obstacles, currentRoute),
+    [currentRoute, datasets.obstacles],
   );
   const terrain: TerrainAnalysis | null = useMemo(() => {
     if (!currentRoute) return null;
@@ -119,7 +204,131 @@ export function App() {
   function handleReplanAtMinSafe() {
     if (!terrain) return;
     setTargetAltFt(terrain.replanTargetFt);
-    runPlan(terrain.replanTargetFt);
+    handlePlan();
+  }
+
+  function handleExcludeStop(airportId: string) {
+    setExcludedIds((prev) => {
+      const next = new Set(prev);
+      next.add(airportId);
+      return next;
+    });
+    // Replan immediately so the user sees the new route. The closure
+    // here still has the old excludedIds — runPlan reads from React
+    // state, but our state update above hasn't committed yet.
+    // Workaround: derive a fresh set inline and pass through a
+    // dedicated runPlanWithExclusions variant.
+    runPlanWithExclusions(targetAltFt, (() => {
+      const next = new Set(excludedIds);
+      next.add(airportId);
+      return next;
+    })());
+  }
+
+  function handleIncludeStop(airportId: string) {
+    setExcludedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(airportId);
+      return next;
+    });
+    runPlanWithExclusions(targetAltFt, (() => {
+      const next = new Set(excludedIds);
+      next.delete(airportId);
+      return next;
+    })());
+  }
+
+  function handleSaveTrip(name: string) {
+    const trip: SavedTrip = {
+      name,
+      origin,
+      destination,
+      aircraftSlug: selectedAircraft.slug,
+      targetAltFt,
+      reserveMin,
+      startingFuelGal,
+      flightRule,
+      capLegTime,
+      maxLegHr,
+      filters,
+      excludedIds: [...excludedIds],
+      savedAt: new Date().toISOString(),
+    };
+    setTrips(saveTrip(trip));
+  }
+
+  function handleLoadTrip(t: SavedTrip) {
+    setOrigin(t.origin);
+    setDestination(t.destination);
+    setAircraftSlug(t.aircraftSlug);
+    setTargetAltFt(t.targetAltFt);
+    setReserveMin(t.reserveMin);
+    setStartingFuelGal(t.startingFuelGal);
+    setFlightRule(t.flightRule);
+    setCapLegTime(t.capLegTime);
+    setMaxLegHr(t.maxLegHr);
+    setFilters(t.filters);
+    setExcludedIds(new Set(t.excludedIds));
+    setRoutes([]);
+    setError(null);
+  }
+
+  function handleDeleteTrip(name: string) {
+    setTrips(deleteTrip(name));
+  }
+
+  function runPlanWithExclusions(
+    targetFt: number,
+    exclusions: ReadonlySet<string>,
+  ) {
+    if (isPlanning) return;
+    flushSync(() => setIsPlanning(true));
+    const startedAt = performance.now();
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          // Same shape as runPlan but with the explicitly-passed
+          // exclusions, so the user's brand-new exclusion takes
+          // effect immediately rather than after the next render.
+          setError(null);
+          const o = airportByIdent(datasets.airports, origin);
+          const d = airportByIdent(datasets.airports, destination);
+          if (!o || !d) {
+            setError(`unknown airport`);
+            return;
+          }
+          const candidates = Array.from(
+            new Map([...matches, o, d].map((a) => [a.id, a])).values(),
+          );
+          const result = plan({
+            airports: candidates,
+            origin: o.id,
+            destination: d.id,
+            aircraft: selectedAircraft,
+            targetAltFt: targetFt,
+            flightRule,
+            reserveHr: reserveMin / 60,
+            variation: variationFn,
+            maxLegHr: capLegTime ? maxLegHr : undefined,
+            startingFuelGal,
+            excludedAirportIds: exclusions,
+          });
+          if (result.length === 0) {
+            setError(
+              "no route found — try relaxing filters or removing exclusions",
+            );
+            setRoutes([]);
+            return;
+          }
+          setRoutes(result);
+          setSelectedRoute(0);
+        } finally {
+          const elapsed = performance.now() - startedAt;
+          const remaining = Math.max(50, MIN_SPINNER_MS - elapsed);
+          setTimeout(() => setIsPlanning(false), remaining);
+        }
+      });
+    });
   }
 
   return (
@@ -132,6 +341,18 @@ export function App() {
             filters.
           </p>
         </header>
+        <section>
+          <h2 className="mb-2 text-sm font-semibold text-slate-800">
+            Saved trips
+          </h2>
+          <TripsPanel
+            trips={trips}
+            defaultName={`${origin} → ${destination}`}
+            onSave={handleSaveTrip}
+            onLoad={handleLoadTrip}
+            onDelete={handleDeleteTrip}
+          />
+        </section>
         <section>
           <h2 className="mb-2 text-sm font-semibold text-slate-800">Trip</h2>
           <TripPanel
@@ -146,8 +367,17 @@ export function App() {
             maxLegHr={maxLegHr}
             onMaxLegHrChange={setMaxLegHr}
             onPlan={handlePlan}
+            isPlanning={isPlanning}
+            dataReady={dataReady}
             error={error}
           />
+          <div className="mt-3">
+            <ExcludedAirports
+              excludedIds={excludedIds}
+              airports={datasets.airports}
+              onInclude={handleIncludeStop}
+            />
+          </div>
         </section>
         <section>
           <h2 className="mb-2 text-sm font-semibold text-slate-800">
@@ -161,6 +391,9 @@ export function App() {
             onTargetAltChange={setTargetAltFt}
             reserveMin={reserveMin}
             onReserveChange={setReserveMin}
+            startingFuelGal={startingFuelGal}
+            onStartingFuelChange={setStartingFuelGal}
+            capacityGal={selectedAircraft.fuel.usable_capacity_gal}
           />
         </section>
         <section>
@@ -171,16 +404,13 @@ export function App() {
             filters={filters}
             onChange={setFilters}
             matchCount={matches.length}
-            totalCount={airports.length}
+            totalCount={datasets.airports.length}
+            hasApproachData={datasets.hasApproachData}
           />
         </section>
       </aside>
       <main className="relative flex-1">
-        <MapView
-          airports={matches}
-          route={currentRoute}
-          obstacles={routeObstacles}
-        />
+        <MapView airports={matches} route={currentRoute} />
       </main>
       {routes.length > 0 && (
         <aside className="flex w-80 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
@@ -189,6 +419,7 @@ export function App() {
               routes={routes}
               selected={selectedRoute}
               onSelect={setSelectedRoute}
+              onExcludeStop={handleExcludeStop}
             />
           </div>
           <TerrainPanel

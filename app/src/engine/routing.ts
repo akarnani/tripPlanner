@@ -62,6 +62,17 @@ export interface BuildGraphInput {
    *  exceeding this are dropped from the graph before any objective
    *  sees them, so every returned route respects the cap. */
   maxLegHr?: number;
+  /** Fuel actually onboard at departure from `origin`, in gallons.
+   *  Capped to the aircraft's usable capacity. Defaults to capacity
+   *  (i.e. full tanks). Intermediate fuel stops imply a top-off, so
+   *  this only affects edges leaving `origin`. */
+  startingFuelGal?: number;
+  /** Airports the user has explicitly excluded from being a stop.
+   *  Edges entering one of these are dropped from the graph; origin
+   *  and destination are exempt (the router never refuses to leave
+   *  origin or arrive at destination even if the caller mistakenly
+   *  includes them). */
+  excludedAirportIds?: ReadonlySet<string>;
 }
 
 export interface Graph {
@@ -91,7 +102,14 @@ export function buildGraph(input: BuildGraphInput): Graph {
     reserveHr,
     variation,
     maxLegHr,
+    startingFuelGal,
+    excludedAirportIds,
   } = input;
+  const capacityGal = aircraft.fuel.usable_capacity_gal;
+  const originFuelGal =
+    startingFuelGal !== undefined
+      ? Math.min(Math.max(startingFuelGal, 0), capacityGal)
+      : capacityGal;
   const byId = new Map<string, Airport>();
   for (const a of airports) byId.set(a.id, a);
   if (!byId.has(origin)) throw new Error(`origin ${origin} not in airport set`);
@@ -109,6 +127,14 @@ export function buildGraph(input: BuildGraphInput): Graph {
     const variation_deg = variation?.(from) ?? null;
     for (const to of airports) {
       if (to.id === from.id) continue;
+      // Skip user-excluded airports unless they're the destination
+      // (origin can never be a `to`, so it doesn't need a check).
+      if (
+        excludedAirportIds?.has(to.id) &&
+        to.id !== destination
+      ) {
+        continue;
+      }
       const distance_nm = greatCircleNM(from, to);
       const true_course_deg = initialTrueCourseDeg(from, to);
       const magnetic_course_deg =
@@ -121,12 +147,13 @@ export function buildGraph(input: BuildGraphInput): Graph {
         flightRule,
       );
       const c = cruiseAt(aircraft, cruise_alt_ft);
-      // Usable range at this leg's altitude after the requested reserve.
+      // Usable range at this leg's altitude after the requested
+      // reserve. The first leg from origin departs with whatever fuel
+      // the pilot loaded (origin-only); subsequent legs assume a
+      // top-off to capacity at each fuel stop.
       const reserve_gal = reserveHr * c.fuel_gph;
-      const burnable_gal = Math.max(
-        aircraft.fuel.usable_capacity_gal - reserve_gal,
-        0,
-      );
+      const tankGal = fromId === origin ? originFuelGal : capacityGal;
+      const burnable_gal = Math.max(tankGal - reserve_gal, 0);
       const range_nm = (burnable_gal / c.fuel_gph) * c.tas_kt;
       if (distance_nm > range_nm) continue;
       const time_hr = distance_nm / c.tas_kt;
