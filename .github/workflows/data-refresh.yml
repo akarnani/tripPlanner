@@ -196,15 +196,25 @@ jobs:
         continue-on-error: true
         working-directory: pipelines/swift
         run: swift run -c release pipeline-dof ./DOF.DAT ../../data
+      - name: Gzip obstacles.json
+        # The runtime loader fetches data/obstacles.json.gz and
+        # decompresses in-browser; the committed file is the .gz so
+        # Cloudflare Pages' 25 MiB asset cap isn't an issue. gzip -9 -f
+        # replaces obstacles.json with obstacles.json.gz in place.
+        if: steps.run_dof.outcome == 'success'
+        run: |
+          if [[ -f data/obstacles.json ]]; then
+            gzip -9 -f data/obstacles.json
+          fi
       - name: Commit refreshed DOF data
         if: steps.run_dof.outcome == 'success'
         run: |
-          if [[ -z "$(git status --porcelain data/obstacles.json)" ]]; then
+          if [[ -z "$(git status --porcelain data/obstacles.json.gz)" ]]; then
             echo "No DOF changes."; exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/obstacles.json
+          git add data/obstacles.json.gz
           git commit -m "Refresh DOF obstacles"
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin HEAD:"$GITHUB_REF_NAME"
