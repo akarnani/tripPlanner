@@ -52,7 +52,7 @@ Aircraft performance YAML lives under `aircraft/<slug>/performance.yaml` and is 
 
 ## Deploy
 
-Pushes to `main` trigger `.github/workflows/pages-deploy.yml`, which builds and publishes to GitHub Pages. `vite.config.ts` sets `base: "./"` so the built site works at any path.
+The deployed site runs on Cloudflare Pages, which builds directly from the repo on every push to `main` and posts a per-PR preview URL on pull requests. There's no GitHub Actions deploy workflow — Cloudflare's git integration owns both production and previews. Build command is `npm run build`, output directory is `dist`, and `VITE_MAPTILER_KEY` is set in both the Production and Preview environments via the Cloudflare dashboard. `vite.config.ts` sets `base: "./"` so the bundle works at any path/subdomain.
 
 ## Conventions
 

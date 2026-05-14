@@ -59,10 +59,12 @@ create `.env.local` with:
 VITE_MAPTILER_KEY=your-maptiler-key
 ```
 
-For the GitHub Pages deploy, set a repository secret named
-`MAPTILER_KEY`; the deploy workflow passes it through to `vite build`.
-Lock the key to the Pages origin in the MapTiler dashboard, since the
-value is baked into the published JS bundle.
+For the deployed site, add `VITE_MAPTILER_KEY` as an environment
+variable on the Cloudflare Pages project (set it in both the
+Production and Preview environments so PR previews use real tiles
+too). Lock the key to the Pages origin in the MapTiler dashboard
+— `*.tripplanner.pages.dev` covers production and every preview
+subdomain — since the value is baked into the published JS bundle.
 
 ## Data pipelines
 
@@ -72,7 +74,7 @@ ordinary commits:
 - `pipelines/swift/` (SwiftNASR / SwiftCIFP / SwiftDOF) runs weekly on
   `macos-latest` via `.github/workflows/data-refresh.yml` and commits
   `airports.json`, `runways.json`, `approaches.json`, and
-  `obstacles.json` back to `main`.
+  `obstacles.json.gz` back to `main`.
 - `pipelines/dem_build.py` and `pipelines/magnetic_build.py` produce the
   gzipped binary `terrain_grid.bin.gz` and `magnetic_grid.bin.gz`
   (manual dispatch only).
@@ -85,9 +87,22 @@ the validator.
 
 ## Deploy
 
-Pushing to `main` triggers `.github/workflows/pages-deploy.yml`, which
-builds the site and publishes it to GitHub Pages. `vite.config.ts` sets
-`base: "./"` so the built bundle works at any path.
+The site deploys via Cloudflare Pages, which watches the repo
+directly — every push to `main` rebuilds and publishes to the
+production URL, and every pull request gets an isolated preview URL
+posted as a status check.
+
+Cloudflare Pages project settings:
+
+- Build command: `npm run build`
+- Output directory: `dist`
+- Node version: 22
+- Environment variables (set in both Production and Preview):
+  `VITE_MAPTILER_KEY` — see "Basemap" above
+
+`vite.config.ts` sets `base: "./"` so the built bundle works at any
+path, which keeps preview subdomains and any custom domain happy
+without per-environment build tweaks.
 
 ## License
 
