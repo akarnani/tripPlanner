@@ -1,7 +1,8 @@
 import airportsUrl from "@data/airports.json?url";
 import runwaysUrl from "@data/runways.json?url";
 import approachesUrl from "@data/approaches.json?url";
-import obstaclesUrl from "@data/obstacles.json?url";
+import obstaclesUrl from "@data/obstacles.json.gz?url";
+import { maybeGunzip } from "./gz";
 
 export interface Airport {
   id: string;
@@ -170,7 +171,14 @@ export function loadDatasets(): Promise<Datasets> {
       fetch(airportsUrl).then((r) => r.json() as Promise<Airport[]>),
       fetch(runwaysUrl).then((r) => r.json() as Promise<Runway[]>),
       fetch(approachesUrl).then((r) => r.json() as Promise<Approach[]>),
-      fetch(obstaclesUrl).then((r) => r.json() as Promise<Obstacle[]>),
+      // obstacles.json gzips to ~5 MB from ~25 MB raw, well under
+      // Cloudflare Pages' 25 MiB file cap and a meaningful wire
+      // savings for everyone. Servers may or may not transparently
+      // decompress before delivery; maybeGunzip handles both.
+      fetch(obstaclesUrl)
+        .then((r) => r.arrayBuffer())
+        .then(maybeGunzip)
+        .then((buf) => JSON.parse(new TextDecoder().decode(buf)) as Obstacle[]),
     ]);
     return {
       airports,
