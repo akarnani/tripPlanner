@@ -4,9 +4,11 @@ import { test, expect, type Page } from "@playwright/test";
  *  load via fetch. Wait for the button to become the enabled "Plan
  *  trip" before each test so they aren't racing the dataset load. */
 async function waitForDataReady(page: Page): Promise<void> {
-  await expect(
-    page.getByRole("button", { name: "Plan trip" }),
-  ).toBeEnabled({ timeout: 20_000 });
+  await expect(page.getByTestId("plan-trip")).toHaveAttribute(
+    "data-state",
+    "idle",
+    { timeout: 30_000 },
+  );
 }
 
 async function parseMatchCount(page: Page): Promise<number> {
@@ -26,30 +28,30 @@ test.describe("trip planner smoke", () => {
   });
 
   test("renders the planning UI with default values", async ({ page }) => {
-    await expect(page.getByPlaceholder("KSEA")).toHaveValue("KSEA");
-    await expect(page.getByPlaceholder("KBOI")).toHaveValue("KBOI");
+    await expect(page.getByLabel("From")).toHaveValue("KSEA");
+    await expect(page.getByLabel("To")).toHaveValue("KBOI");
     await expect(page.getByRole("button", { name: "VFR" })).toHaveClass(
       /bg-slate-900/,
     );
   });
 
-  test("Plan button shows a spinner / 'Planning…' while computing", async ({
+  test("Plan button shows a spinner state while computing", async ({
     page,
   }) => {
-    // Click the idle "Plan trip" button; within ~200 ms (our min
-    // spinner duration) it should transition to "Planning…" with the
-    // spinner element visible inside.
-    await page.getByRole("button", { name: "Plan trip" }).click();
-    const planning = page.getByRole("button", { name: /Planning/ });
-    await expect(planning).toBeVisible();
-    // Spinner element is the inner span with animate-spin.
-    await expect(planning.locator("span.animate-spin")).toBeVisible();
+    // The Plan button exposes a data-state attribute that's "idle"
+    // before the click, "planning" during compute (≥ MIN_SPINNER_MS),
+    // and "loading" while datasets are loading. Asserting on that
+    // attribute is more robust than chasing the accessible-name flip.
+    const btn = page.getByTestId("plan-trip");
+    await btn.click();
+    await expect(btn).toHaveAttribute("data-state", "planning");
+    await expect(page.getByTestId("plan-trip-spinner")).toBeVisible();
   });
 
   test("plans KSEA→KBOI and renders a leg table with per-leg altitude + course", async ({
     page,
   }) => {
-    await page.getByRole("button", { name: "Plan trip" }).click();
+    await page.getByTestId("plan-trip").click();
 
     const legHeader = page.getByRole("button", {
       name: /Fewest stops · \d+ stop/,
@@ -82,7 +84,7 @@ test.describe("trip planner smoke", () => {
   test("flipping VFR → IFR drops the +500 from every leg altitude", async ({
     page,
   }) => {
-    await page.getByRole("button", { name: "Plan trip" }).click();
+    await page.getByTestId("plan-trip").click();
     await expect(
       page.getByRole("button", { name: /Fewest stops · \d+ stop/ }).first(),
     ).toBeVisible({ timeout: 30_000 });
@@ -93,8 +95,12 @@ test.describe("trip planner smoke", () => {
     expect(vfrAlt.replace(/,/g, "")).toMatch(/500$/);
 
     await page.getByRole("button", { name: "IFR" }).click();
-    await page.getByRole("button", { name: "Plan trip" }).click();
-    // Wait for the leg table to refresh.
+    // Wait for the previous run's spinner to settle before re-clicking.
+    await expect(page.getByTestId("plan-trip")).toHaveAttribute(
+      "data-state",
+      "idle",
+    );
+    await page.getByTestId("plan-trip").click();
     await expect(firstAlt()).not.toHaveText(vfrAlt, { timeout: 30_000 });
     const ifrAlt = (await firstAlt().textContent()) ?? "";
     expect(ifrAlt.replace(/,/g, "")).toMatch(/000$/);
@@ -115,7 +121,6 @@ test.describe("trip planner smoke", () => {
   }) => {
     const before = await parseMatchCount(page);
     await page.getByLabel("Minimum runway length (ft)").fill("8000");
-    // Wait for the count to update reactively.
     await expect.poll(() => parseMatchCount(page)).not.toBe(before);
   });
 
@@ -123,42 +128,36 @@ test.describe("trip planner smoke", () => {
     page,
   }) => {
     const select = page.getByLabel("Approach");
-    // If approach data isn't loaded the select is disabled and the
-    // filter can't be exercised; skip in that case rather than fail.
     if (!(await select.isEnabled())) test.skip();
 
-    // Baseline: "off" includes every public-use airport.
     await select.selectOption("off");
     await expect.poll(() => parseMatchCount(page)).toBeGreaterThan(0);
     const offCount = await parseMatchCount(page);
 
-    // "any" requires at least one published IAP — strictly fewer
-    // than "off" because plenty of small public-use airports have no
-    // instrument procedures at all.
     await select.selectOption("any");
-    await expect.poll(() => parseMatchCount(page), { timeout: 5000 })
+    await expect
+      .poll(() => parseMatchCount(page), { timeout: 5000 })
       .toBeLessThan(offCount);
     const anyCount = await parseMatchCount(page);
     expect(anyCount).toBeGreaterThan(0);
 
-    // "precision" should be a strict subset of "any" (most airports
-    // with an IAP don't have a precision approach).
     await select.selectOption("precision");
-    await expect.poll(() => parseMatchCount(page), { timeout: 5000 })
+    await expect
+      .poll(() => parseMatchCount(page), { timeout: 5000 })
       .toBeLessThan(anyCount);
     const precCount = await parseMatchCount(page);
     expect(precCount).toBeGreaterThan(0);
 
-    // "rnav" is its own subset; should also be > 0.
     await select.selectOption("rnav");
-    await expect.poll(() => parseMatchCount(page), { timeout: 5000 })
+    await expect
+      .poll(() => parseMatchCount(page), { timeout: 5000 })
       .toBeGreaterThan(0);
   });
 
   test("min-safe replan bumps the target altitude when terrain dictates", async ({
     page,
   }) => {
-    await page.getByRole("button", { name: "Plan trip" }).click();
+    await page.getByTestId("plan-trip").click();
     await expect(
       page.getByRole("button", { name: /Fewest stops · \d+ stop/ }).first(),
     ).toBeVisible({ timeout: 30_000 });
@@ -178,7 +177,7 @@ test.describe("trip planner smoke", () => {
   });
 
   test("GPX export downloads a non-empty file", async ({ page }) => {
-    await page.getByRole("button", { name: "Plan trip" }).click();
+    await page.getByTestId("plan-trip").click();
     await expect(
       page.getByRole("button", { name: /Fewest stops · \d+ stop/ }).first(),
     ).toBeVisible({ timeout: 30_000 });

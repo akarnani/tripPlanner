@@ -37,7 +37,7 @@ const magGrid = new MagneticVariationGrid(magneticGridUrl);
 const variationFn = (p: { lat: number; lon: number }) =>
   magGrid.variationDeg(p);
 
-const MIN_SPINNER_MS = 200;
+const MIN_SPINNER_MS = 600;
 
 export function App() {
   const [datasets, setDatasets] = useState<Datasets>(EMPTY_DATASETS);

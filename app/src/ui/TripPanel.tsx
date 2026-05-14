@@ -45,10 +45,14 @@ export function TripPanel({
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+          <label
+            htmlFor="origin"
+            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+          >
             From
           </label>
           <input
+            id="origin"
             type="text"
             value={origin}
             onChange={(e) => onOriginChange(e.target.value.toUpperCase())}
@@ -57,10 +61,14 @@ export function TripPanel({
           />
         </div>
         <div>
-          <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+          <label
+            htmlFor="destination"
+            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+          >
             To
           </label>
           <input
+            id="destination"
             type="text"
             value={destination}
             onChange={(e) => onDestinationChange(e.target.value.toUpperCase())}
@@ -123,6 +131,10 @@ export function TripPanel({
       </div>
       <button
         type="button"
+        data-testid="plan-trip"
+        data-state={
+          !dataReady ? "loading" : isPlanning ? "planning" : "idle"
+        }
         onClick={onPlan}
         disabled={buttonDisabled}
         className="flex w-full items-center justify-center gap-2 rounded bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-400"
@@ -130,6 +142,7 @@ export function TripPanel({
         {(isPlanning || !dataReady) && (
           <span
             aria-hidden="true"
+            data-testid="plan-trip-spinner"
             className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent"
           />
         )}
