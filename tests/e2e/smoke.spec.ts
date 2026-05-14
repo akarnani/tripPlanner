@@ -40,12 +40,66 @@ test.describe("trip planner smoke", () => {
   }) => {
     // The Plan button exposes a data-state attribute that's "idle"
     // before the click, "planning" during compute (≥ MIN_SPINNER_MS),
-    // and "loading" while datasets are loading. Asserting on that
-    // attribute is more robust than chasing the accessible-name flip.
+    // and "loading" while datasets are loading.
+    //
+    // Polling for the transient "planning" state from the test runner
+    // with toHaveAttribute is racy on slower CI runners — by the time
+    // Playwright's first CDP poll lands, the state may have already
+    // flipped back to "idle". Instead, install a MutationObserver
+    // in-page before clicking and record every data-state value and
+    // every spinner-presence snapshot the button passes through.
+    // After planning has clearly finished (route renders, button
+    // settles back to idle) we read the history. The observer can't
+    // miss a transition.
     const btn = page.getByTestId("plan-trip");
+    await page.evaluate(() => {
+      const el = document.querySelector(
+        '[data-testid="plan-trip"]',
+      ) as HTMLElement | null;
+      if (!el) throw new Error("plan-trip button missing before click");
+      const snapshot = () => ({
+        state: el.dataset.state ?? "",
+        hasSpinner: !!el.querySelector('[data-testid="plan-trip-spinner"]'),
+      });
+      const w = window as unknown as {
+        __planHistory: Array<{ state: string; hasSpinner: boolean }>;
+        __planObserver: MutationObserver;
+      };
+      w.__planHistory = [snapshot()];
+      w.__planObserver = new MutationObserver(() => {
+        w.__planHistory.push(snapshot());
+      });
+      // Watch both the data-state attribute and child mutations so we
+      // catch the spinner element appearing/disappearing too.
+      w.__planObserver.observe(el, {
+        attributes: true,
+        attributeFilter: ["data-state"],
+        childList: true,
+        subtree: true,
+      });
+    });
+
     await btn.click();
-    await expect(btn).toHaveAttribute("data-state", "planning");
-    await expect(page.getByTestId("plan-trip-spinner")).toBeVisible();
+
+    await expect(
+      page.getByRole("button", { name: /Fewest stops · \d+ stop/ }).first(),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(btn).toHaveAttribute("data-state", "idle");
+
+    const history = await page.evaluate(() => {
+      const w = window as unknown as {
+        __planHistory: Array<{ state: string; hasSpinner: boolean }>;
+        __planObserver: MutationObserver;
+      };
+      w.__planObserver.disconnect();
+      return w.__planHistory;
+    });
+
+    expect(history.map((h) => h.state)).toContain("planning");
+    const planningWithSpinner = history.some(
+      (h) => h.state === "planning" && h.hasSpinner,
+    );
+    expect(planningWithSpinner).toBe(true);
   });
 
   test("plans KSEA→KBOI and renders a leg table with per-leg altitude + course", async ({
