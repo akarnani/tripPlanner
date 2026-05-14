@@ -1,9 +1,14 @@
 import { describe, expect, test } from "vitest";
 import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
-import { plan } from "./plan";
+import { plan, planWithWaypoints } from "./plan";
 
-function ap(id: string, lat: number, lon: number): Airport {
+function ap(
+  id: string,
+  lat: number,
+  lon: number,
+  fuels: string[] = [],
+): Airport {
   return {
     id,
     lid: id,
@@ -18,7 +23,7 @@ function ap(id: string, lat: number, lon: number): Airport {
     public_use: true,
     runway_count: 1,
     max_runway_ft: 5000,
-    fuels: [],
+    fuels,
   };
 }
 
@@ -248,5 +253,138 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
     });
     const keys = new Set(result.map((r) => r.legs.map((l) => l.to).join(">")));
     expect(keys.size).toBe(result.length);
+  });
+});
+
+describe("planWithWaypoints forces the route through pinned stops", () => {
+  test("empty waypoints behaves identically to plan()", () => {
+    const A = ap("A", 40, -120);
+    const B = ap("B", 40, -110);
+    const C = ap("C", 40, -100);
+    const args = {
+      airports: [A, B, C],
+      origin: "A",
+      destination: "C",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR" as const,
+      reserveHr: 0.75,
+    };
+    const base = plan(args);
+    const wrapped = planWithWaypoints({ ...args, waypoints: [] });
+    expect(wrapped.map((r) => r.legs.map((l) => l.to).join(">"))).toEqual(
+      base.map((r) => r.legs.map((l) => l.to).join(">")),
+    );
+  });
+
+  test("a single fuel-bearing waypoint becomes a refuel stop", () => {
+    // O→D direct is in range, but pinning M forces a stop. M has fuel,
+    // so the second sub-leg starts from full tanks.
+    const O = ap("O", 40, -120);
+    const M = ap("M", 40, -110, ["100LL"]);
+    const D = ap("D", 40, -100);
+    const result = planWithWaypoints({
+      airports: [O, M, D],
+      origin: "O",
+      destination: "D",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      waypoints: ["M"],
+    });
+    expect(result.length).toBeGreaterThan(0);
+    for (const r of result) {
+      const ids = [r.legs[0].fromAirport.id, ...r.legs.map((l) => l.toAirport.id)];
+      expect(ids).toContain("M");
+      expect(ids[0]).toBe("O");
+      expect(ids[ids.length - 1]).toBe("D");
+    }
+  });
+
+  test("a fuel-less waypoint is a pass-through; fuel state carries through", () => {
+    // Start at O with only 30 gal — enough for ~270 nm. Pin M (no fuel)
+    // at 184 nm out. Without carry-through (i.e. if we naively reset
+    // to full tanks at M), the planner would happily fly M→D directly
+    // even though we arrived at M with ~15 gal. With carry-through,
+    // the second sub-leg sees a tiny starting fuel and must detour
+    // through the only fuel-bearing field, F, to reach D.
+    const O = ap("O", 40, -120);
+    const M = ap("M", 40, -118); // ~92 nm east, no fuel
+    const F = ap("F", 40, -116, ["100LL"]); // ~184 nm east, fuel
+    const D = ap("D", 40, -100); // ~920 nm from O
+    const result = planWithWaypoints({
+      airports: [O, M, F, D],
+      origin: "O",
+      destination: "D",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      startingFuelGal: 30,
+      waypoints: ["M"],
+    });
+    expect(result.length).toBeGreaterThan(0);
+    for (const r of result) {
+      const ids = [r.legs[0].fromAirport.id, ...r.legs.map((l) => l.toAirport.id)];
+      expect(ids).toContain("M");
+      // F must show up after M as the actual refuel stop.
+      const mIdx = ids.indexOf("M");
+      const fIdx = ids.indexOf("F");
+      expect(fIdx).toBeGreaterThan(mIdx);
+    }
+  });
+
+  test("returns no route when a sub-leg is infeasible", () => {
+    // Pin a waypoint far enough that the first sub-leg has no edge
+    // meeting the max-leg cap and no intermediate airport on the way.
+    // plan() returns [] for that sub-leg, and the wrapper surfaces an
+    // empty overall result rather than a partial route.
+    const O = ap("O", 40, -120);
+    const W = ap("W", 40, -80, ["100LL"]); // ~1840 nm from O
+    const D = ap("D", 40, -70);
+    const result = planWithWaypoints({
+      airports: [O, W, D],
+      origin: "O",
+      destination: "D",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      maxLegHr: 2, // ~240 nm at 120 KTAS; O→W can't meet this with no stop
+      waypoints: ["W"],
+    });
+    expect(result).toEqual([]);
+  });
+
+  test("totals are the sum of sub-leg totals", () => {
+    const O = ap("O", 40, -120);
+    const M = ap("M", 40, -110, ["100LL"]);
+    const D = ap("D", 40, -100);
+    const result = planWithWaypoints({
+      airports: [O, M, D],
+      origin: "O",
+      destination: "D",
+      aircraft: aircraft(),
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      waypoints: ["M"],
+    });
+    expect(result.length).toBeGreaterThan(0);
+    for (const r of result) {
+      const summed = r.legs.reduce(
+        (acc, l) => ({
+          d: acc.d + l.distance_nm,
+          t: acc.t + l.time_hr,
+          f: acc.f + l.fuel_gal,
+        }),
+        { d: 0, t: 0, f: 0 },
+      );
+      expect(r.totals.distance_nm).toBeCloseTo(summed.d, 5);
+      expect(r.totals.time_hr).toBeCloseTo(summed.t, 5);
+      expect(r.totals.fuel_gal).toBeCloseTo(summed.f, 5);
+      expect(r.totals.stops).toBe(r.legs.length - 1);
+    }
   });
 });

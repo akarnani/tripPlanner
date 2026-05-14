@@ -44,13 +44,22 @@ export function AircraftPanel({
           ))}
         </select>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
+      <div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+          {/* Labels in row 1, inputs in row 2 so the two columns'
+              inputs share a y-position even when "Target altitude
+              (ft)" wraps and "Reserve (min)" doesn't. */}
           <label
             htmlFor="target-altitude"
             className="block text-xs font-medium uppercase tracking-wide text-slate-500"
           >
             Target altitude (ft)
+          </label>
+          <label
+            htmlFor="reserve-min"
+            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+          >
+            Reserve (min)
           </label>
           <input
             id="target-altitude"
@@ -62,20 +71,8 @@ export function AircraftPanel({
             onChange={(e) =>
               onTargetAltChange(Number.parseInt(e.target.value, 10) || 0)
             }
-            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
           />
-          <p className="mt-1 text-[11px] text-slate-500">
-            Each leg flies the next legal hemispheric altitude at or above
-            this for its course.
-          </p>
-        </div>
-        <div>
-          <label
-            htmlFor="reserve-min"
-            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
-          >
-            Reserve (min)
-          </label>
           <input
             id="reserve-min"
             type="number"
@@ -85,9 +82,13 @@ export function AircraftPanel({
             onChange={(e) =>
               onReserveChange(Number.parseInt(e.target.value, 10) || 0)
             }
-            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
           />
         </div>
+        <p className="mt-1 text-[11px] text-slate-500">
+          Each leg flies the next legal hemispheric altitude at or above
+          target altitude for its course.
+        </p>
       </div>
       <div>
         <label
