@@ -3,6 +3,7 @@ import type {
   HardFilters,
   TowerMode,
 } from "@/engine/filters";
+import type { FuelType } from "@/data/aircraft";
 
 interface Props {
   filters: HardFilters;
@@ -13,6 +14,9 @@ interface Props {
    *  load completes (the module-level loaders.hasApproachData binding
    *  changes but doesn't trigger React on its own). */
   hasApproachData: boolean;
+  /** Selected aircraft's fuel type — drives the label on the fuel
+   *  toggle so the user knows what's actually being matched. */
+  aircraftFuelType: FuelType;
 }
 
 export function FilterPanel({
@@ -21,6 +25,7 @@ export function FilterPanel({
   matchCount,
   totalCount,
   hasApproachData,
+  aircraftFuelType,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -95,6 +100,23 @@ export function FilterPanel({
             CIFP data not loaded yet — filter disabled.
           </p>
         )}
+      </div>
+      <div>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-800">
+          <input
+            type="checkbox"
+            checked={filters.requireFuel}
+            onChange={(e) =>
+              onChange({ ...filters, requireFuel: e.target.checked })
+            }
+            className="h-4 w-4 rounded border-slate-300"
+          />
+          Airport must sell {aircraftFuelType}
+        </label>
+        <p className="mt-1 text-[11px] text-slate-500">
+          Origin and destination are exempt — only intermediate fuel
+          stops are constrained.
+        </p>
       </div>
       <p className="text-xs text-slate-500">
         {matchCount.toLocaleString()} of {totalCount.toLocaleString()} airports

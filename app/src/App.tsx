@@ -98,8 +98,8 @@ export function App() {
   }, [selectedAircraft.slug]);
 
   const matches = useMemo(
-    () => applyFilters(datasets, filters),
-    [datasets, filters],
+    () => applyFilters(datasets, filters, selectedAircraft.fuel.type),
+    [datasets, filters, selectedAircraft.fuel.type],
   );
 
   function runPlan(targetFt: number) {
@@ -267,7 +267,9 @@ export function App() {
     setFlightRule(t.flightRule);
     setCapLegTime(t.capLegTime);
     setMaxLegHr(t.maxLegHr);
-    setFilters(t.filters);
+    // Merge over defaults so trips saved before a new filter field
+    // was added still load with sensible values for it.
+    setFilters({ ...DEFAULT_FILTERS, ...t.filters });
     setExcludedIds(new Set(t.excludedIds));
     setRoutes([]);
     setError(null);
@@ -406,6 +408,7 @@ export function App() {
             matchCount={matches.length}
             totalCount={datasets.airports.length}
             hasApproachData={datasets.hasApproachData}
+            aircraftFuelType={selectedAircraft.fuel.type}
           />
         </section>
       </aside>
