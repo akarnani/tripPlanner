@@ -1,69 +1,73 @@
-# Cessna 172S — cruise performance data
-#
-# Approximate values from the 172S POH cruise tables (standard atmosphere,
-# zero wind, mid-range power settings per altitude). Replace with values
-# read from your own aircraft's POH using the /poh-extract Claude skill.
-
 make: Cessna
 model: 172S
 fuel:
   type: 100LL
   density_lb_per_gal: 6.0
   usable_capacity_gal: 53
+# Cruise rows from the 172S POH Section 5 "Cruise Performance" table
+# at 2550 lb gross, recommended lean mixture, standard temperature.
+# The highest published RPM is used at each altitude (the row closest
+# to 75 % BHP) down to 55 % near the service ceiling.
 cruise:
   - altitude_ft: 2000
-    power_pct: 75
-    tas_kt: 124
-    fuel_gph: 9.6
+    power_pct: 77
+    tas_kt: 118
+    fuel_gph: 10.5
   - altitude_ft: 4000
-    power_pct: 75
-    tas_kt: 122
-    fuel_gph: 9.0
-  - altitude_ft: 6000
-    power_pct: 75
-    tas_kt: 120
-    fuel_gph: 8.8
-  - altitude_ft: 8000
-    power_pct: 65
+    power_pct: 73
     tas_kt: 117
-    fuel_gph: 7.6
+    fuel_gph: 9.9
+  - altitude_ft: 6000
+    power_pct: 73
+    tas_kt: 119
+    fuel_gph: 9.9
+  - altitude_ft: 8000
+    power_pct: 68
+    tas_kt: 119
+    fuel_gph: 9.4
   - altitude_ft: 10000
-    power_pct: 55
-    tas_kt: 110
-    fuel_gph: 6.5
+    power_pct: 57
+    tas_kt: 111
+    fuel_gph: 8.2
+  - altitude_ft: 12000
+    power_pct: 54
+    tas_kt: 109
+    fuel_gph: 7.8
 climb:
-  rate_fpm: 700
-  fuel_to_climb_gph: 10
-  # Cumulative time/fuel/distance to climb from sea level at maximum
-  # takeoff weight, standard atmosphere, full throttle / 2700 RPM.
-  # Values approximated from the 172S POH Section 5 "Time, Fuel, and
-  # Distance to Climb" chart.
+  # Best rate of climb at 2550 lb gross, sea level, ISA (15 °C),
+  # interpolated between the 0 °C (785 fpm) and 20 °C (710 fpm) rows
+  # of the Maximum Rate of Climb table.
+  rate_fpm: 730
+  fuel_to_climb_gph: 16
+  # Cumulative time/fuel/distance from sea level at 2550 lb gross,
+  # standard temperature, from the POH "Time, Fuel and Distance to
+  # Climb" table.
   table:
     - altitude_ft: 0
       time_min: 0
       fuel_gal: 0.0
       distance_nm: 0
     - altitude_ft: 2000
-      time_min: 2
-      fuel_gal: 0.4
-      distance_nm: 3
+      time_min: 3
+      fuel_gal: 0.8
+      distance_nm: 4
     - altitude_ft: 4000
-      time_min: 4
-      fuel_gal: 0.9
-      distance_nm: 6
+      time_min: 6
+      fuel_gal: 1.5
+      distance_nm: 8
     - altitude_ft: 6000
-      time_min: 7
-      fuel_gal: 1.4
-      distance_nm: 11
+      time_min: 10
+      fuel_gal: 2.2
+      distance_nm: 13
     - altitude_ft: 8000
-      time_min: 11
-      fuel_gal: 2.1
-      distance_nm: 17
-    - altitude_ft: 10000
-      time_min: 16
+      time_min: 14
       fuel_gal: 3.0
-      distance_nm: 25
+      distance_nm: 19
+    - altitude_ft: 10000
+      time_min: 20
+      fuel_gal: 3.9
+      distance_nm: 27
     - altitude_ft: 12000
-      time_min: 23
-      fuel_gal: 4.1
-      distance_nm: 36
+      time_min: 28
+      fuel_gal: 5.0
+      distance_nm: 38
