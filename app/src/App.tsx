@@ -7,7 +7,11 @@ import {
   type Datasets,
 } from "@/data/loaders";
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
-import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
+import {
+  airportsInRouteCorridor,
+  applyFilters,
+  DEFAULT_FILTERS,
+} from "@/engine/filters";
 import { planWithWaypoints, type PlannedRoute } from "@/engine/plan";
 import { greatCircleNM } from "@/engine/geo";
 import { obstaclesNearRoute } from "@/engine/obstacles";
@@ -136,9 +140,15 @@ export function App() {
     const pinnedAirports = pinned
       .map((id) => datasets.airports.find((a) => a.id === id))
       .filter((a): a is NonNullable<typeof a> => !!a);
+    // Drop airports that are nowhere near the direct route. With ~5k
+    // public-use airports in CONUS, the unfiltered routing graph has
+    // ~25M edges; an airport in Florida is never a useful fuel stop
+    // for a Bay Area → Wisconsin flight, so culling them here turns
+    // tens of seconds of planning into a fraction.
+    const onRoute = airportsInRouteCorridor(matches, o, d);
     const candidates = Array.from(
       new Map(
-        [...matches, o, d, ...pinnedAirports].map((a) => [a.id, a]),
+        [...onRoute, o, d, ...pinnedAirports].map((a) => [a.id, a]),
       ).values(),
     );
     try {
