@@ -74,7 +74,7 @@ const D = mkAirport("D", 40, -105);
 const E = mkAirport("E", 40, -100);
 
 describe("buildGraph + kShortestPaths", () => {
-  test("fewestStops picks the direct leg when range allows", () => {
+  test("picks the direct leg when range allows", () => {
     const graph = buildGraph({
       airports: [A, B, C, D, E],
       origin: "A",
@@ -88,7 +88,7 @@ describe("buildGraph + kShortestPaths", () => {
     expect(best.nodes).toEqual(["A", "E"]);
   });
 
-  test("fewestStops chains stops when no direct leg fits", () => {
+  test("chains stops when no direct leg fits", () => {
     const graph = buildGraph({
       airports: [A, B, C, D, E],
       origin: "A",
@@ -188,7 +188,7 @@ describe("buildGraph + kShortestPaths", () => {
     // the approach corridor; SOUTH is in flat terrain. With no DEM the
     // router is indifferent (picks whichever wins on greatCircle ties);
     // with the DEM the terrain penalty on edges into NORTH should push
-    // shortestTime onto the SOUTH path.
+    // totalTime onto the SOUTH path.
     const origin = mkAirport("O", 40, -120);
     const dest = mkAirport("D", 40, -110);
     const north = mkAirport("N", 41, -115);
