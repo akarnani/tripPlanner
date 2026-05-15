@@ -9,6 +9,7 @@ import {
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
 import { applyFilters, DEFAULT_FILTERS } from "@/engine/filters";
 import { planWithWaypoints, type PlannedRoute } from "@/engine/plan";
+import { greatCircleNM } from "@/engine/geo";
 import { obstaclesNearRoute } from "@/engine/obstacles";
 import { analyzeTerrain, type TerrainAnalysis } from "@/engine/terrain";
 import type { FlightRule } from "@/engine/hemispheric";
@@ -367,6 +368,44 @@ export function App() {
     });
   }
 
+  /** Map-drag snap radius: airports farther than this from the drop
+   *  point are not considered. Picked to be generous at the default
+   *  zoom (~13 px) but still small enough that a wild drop into open
+   *  ocean snaps to nothing rather than a random coastal field. */
+  const DRAG_SNAP_RADIUS_NM = 50;
+
+  function handleMoveStop(
+    oldAirportId: string,
+    dropLngLat: { lat: number; lon: number },
+  ): boolean {
+    if (isPlanning) return false;
+    // Search the filter-eligible set so a drop snaps to an airport
+    // that's actually visible on the map. Origin/destination get
+    // merged in for completeness but are skipped: dropping a stop
+    // onto the origin/destination doesn't make sense as a route edit.
+    const o = airportByIdent(datasets.airports, origin);
+    const d = airportByIdent(datasets.airports, destination);
+    let nearest: { id: string; ident: string; dist: number } | null = null;
+    for (const a of matches) {
+      if (a.id === oldAirportId) continue;
+      if (o && a.id === o.id) continue;
+      if (d && a.id === d.id) continue;
+      const dist = greatCircleNM(dropLngLat, { lat: a.lat, lon: a.lon });
+      if (dist > DRAG_SNAP_RADIUS_NM) continue;
+      if (!nearest || dist < nearest.dist) {
+        nearest = { id: a.id, ident: a.icao ?? a.lid, dist };
+      }
+    }
+    if (!nearest) return false;
+    if (nearest.id === oldAirportId) return false;
+    // Drag is purely additive: pin the dragged-to airport so the route
+    // is forced through it, but leave the dragged-from airport alone.
+    // The user can still exclude the old stop via its × in the leg
+    // table or excluded-stops panel if they want it gone.
+    handleAddPins([nearest.id]);
+    return true;
+  }
+
   function handleSaveTrip(name: string) {
     const trip: SavedTrip = {
       name,
@@ -505,7 +544,11 @@ export function App() {
         </section>
       </aside>
       <main className="relative flex-1">
-        <MapView airports={matches} route={currentRoute} />
+        <MapView
+          airports={matches}
+          route={currentRoute}
+          onMoveStop={handleMoveStop}
+        />
       </main>
       {routes.length > 0 && (
         <aside className="flex w-80 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
