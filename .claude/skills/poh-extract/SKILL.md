@@ -39,6 +39,21 @@ cruise:                   # One row per altitude/power point from the POH
 climb:
   rate_fpm: <integer>     # Best-rate-of-climb at gross weight, sea level
   fuel_to_climb_gph: <float>
+  # Optional but strongly preferred. The routing engine uses this
+  # cumulative-from-sea-level table to model climb fuel/time/distance
+  # per leg. Without it, the engine falls back to a coarse rate × duration
+  # estimate that systematically over-credits high-altitude short legs.
+  table:
+    - altitude_ft: 0
+      time_min: 0
+      fuel_gal: 0.0
+      distance_nm: 0
+    - altitude_ft: <integer>
+      time_min: <number>     # cumulative minutes from SL to this altitude
+      fuel_gal: <number>     # cumulative gallons burned getting here
+      distance_nm: <number>  # cumulative nm covered getting here
+    # ... typically 4–7 rows, ascending, every 2,000 ft up to the
+    # highest altitude the aircraft is rated for
 ```
 
 See `aircraft/cessna-172s/performance.yaml` for a reference example.
@@ -52,12 +67,21 @@ See `aircraft/cessna-172s/performance.yaml` for a reference example.
 2. **Read the relevant POH sections.** With the `Read` tool, open the
    PDF and skim:
    - Section 1 (general) for fuel type and usable capacity.
-   - Section 5 (performance) for the cruise tables and climb data.
+   - Section 5 (performance) for the cruise tables, the
+     "Maximum Rate of Climb" chart (for `rate_fpm`), and the
+     "Time, Fuel, and Distance to Climb" chart (for the optional
+     climb `table`).
 
    Standard POHs put cruise performance tables on facing pages, with
    one table per altitude (sea level, 2000, 4000, 6000, 8000, etc.)
    and rows for different power settings. Extract the **standard
    atmosphere** ("ISA" or "0° from standard") column.
+
+   The "Time, Fuel, and Distance to Climb" chart is usually a single
+   table with a row per altitude and three columns: minutes, gallons,
+   and nautical miles to reach that altitude **from sea level**. Copy
+   the values verbatim — they are already cumulative, so don't add or
+   subtract anything when transcribing.
 
 3. **Pick representative rows.** Cover the full altitude range the
    aircraft is rated for. A reasonable selection:
@@ -82,6 +106,9 @@ See `aircraft/cessna-172s/performance.yaml` for a reference example.
      should be roughly flat or decreasing with altitude for piston
      singles — flag any row where TAS > 1.15× the previous row's TAS)
    - GPH decreases or stays flat as power decreases at higher altitude
+   - Climb-table rows (if present) are strictly ascending by altitude,
+     and `time_min`, `fuel_gal`, and `distance_nm` are non-decreasing
+     down the table (they're cumulative from sea level)
 
    If any value looks anomalous, **read the POH page again** before
    writing.

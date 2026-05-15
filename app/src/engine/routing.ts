@@ -1,7 +1,7 @@
 import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
 import { greatCircleNM, type LatLon } from "./geo";
-import { cruiseAt } from "./performance";
+import { climbFromTo, cruiseAt } from "./performance";
 import {
   hemisphericAltitude,
   initialTrueCourseDeg,
@@ -155,16 +155,28 @@ export function buildGraph(input: BuildGraphInput): Graph {
         flightRule,
       );
       const c = cruiseAt(aircraft, cruise_alt_ft);
-      // Usable range at this leg's altitude after the requested
-      // reserve. The first leg from origin departs with whatever fuel
-      // the pilot loaded (origin-only); subsequent legs assume a
-      // top-off to capacity at each fuel stop.
+      // Decompose the leg into climb + cruise. Climb time/fuel/distance
+      // come from the aircraft's POH climb table when available, else
+      // from the scalar climb rate + burn fallback. Climb is pro-rated
+      // on legs too short to reach cruise altitude.
+      const fromElev = from.elevation_ft ?? 0;
+      const climb = climbFromTo(aircraft, fromElev, cruise_alt_ft);
+      const climb_distance_nm = Math.min(climb.distance_nm, distance_nm);
+      const climb_fraction =
+        climb.distance_nm > 0 ? climb_distance_nm / climb.distance_nm : 0;
+      const climb_time_hr = climb.time_hr * climb_fraction;
+      const climb_fuel_gal = climb.fuel_gal * climb_fraction;
+      const cruise_distance_nm = Math.max(0, distance_nm - climb_distance_nm);
+      const cruise_time_hr = cruise_distance_nm / c.tas_kt;
+      const cruise_fuel_gal = cruise_time_hr * c.fuel_gph;
+      const time_hr = climb_time_hr + cruise_time_hr;
+      const fuel_gal = climb_fuel_gal + cruise_fuel_gal;
+      // Usable fuel after reserve. The first leg from origin departs
+      // with whatever fuel the pilot loaded (origin-only); subsequent
+      // legs assume a top-off to capacity at each fuel stop.
       const reserve_gal = reserveHr * c.fuel_gph;
       const tankGal = fromId === origin ? originFuelGal : capacityGal;
-      const burnable_gal = Math.max(tankGal - reserve_gal, 0);
-      const range_nm = (burnable_gal / c.fuel_gph) * c.tas_kt;
-      if (distance_nm > range_nm) continue;
-      const time_hr = distance_nm / c.tas_kt;
+      if (fuel_gal + reserve_gal > tankGal) continue;
       if (maxLegHr !== undefined && time_hr > maxLegHr) continue;
       const extra: Record<string, number> = {};
       if (dem) {
@@ -172,7 +184,10 @@ export function buildGraph(input: BuildGraphInput): Graph {
           from,
           to,
           cruise_alt_ft,
-          climb_speed_kt: climbSpeedKt(aircraft, c.tas_kt),
+          climb_speed_kt:
+            climb.time_hr > 0
+              ? climb.distance_nm / climb.time_hr
+              : climbSpeedKt(aircraft, c.tas_kt),
           climb_rate_fpm: aircraft.climb.rate_fpm,
           dem,
           distance_nm,
@@ -189,7 +204,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
         to: to.id,
         distance_nm,
         time_hr,
-        fuel_gal: time_hr * c.fuel_gph,
+        fuel_gal,
         true_course_deg,
         magnetic_course_deg,
         variation_deg,

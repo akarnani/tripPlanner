@@ -75,6 +75,46 @@ function validate(file, data) {
     return fail(file, "climb.rate_fpm must be positive");
   if (!isNum(c.fuel_to_climb_gph) || c.fuel_to_climb_gph <= 0)
     return fail(file, "climb.fuel_to_climb_gph must be positive");
+
+  if (c.table !== undefined) {
+    if (!Array.isArray(c.table) || c.table.length < 2)
+      return fail(file, "climb.table must be an array of at least 2 rows");
+    let prevClimb = null;
+    for (const [i, row] of c.table.entries()) {
+      const where = `climb.table[${i}]`;
+      if (!isInt(row.altitude_ft) || row.altitude_ft < 0 || row.altitude_ft > 30000)
+        return fail(file, `${where}: altitude_ft out of range`);
+      if (!isNum(row.time_min) || row.time_min < 0 || row.time_min > 120)
+        return fail(file, `${where}: time_min out of range`);
+      if (!isNum(row.fuel_gal) || row.fuel_gal < 0 || row.fuel_gal > 50)
+        return fail(file, `${where}: fuel_gal out of range`);
+      if (!isNum(row.distance_nm) || row.distance_nm < 0 || row.distance_nm > 200)
+        return fail(file, `${where}: distance_nm out of range`);
+      if (prevClimb) {
+        if (row.altitude_ft <= prevClimb.altitude_ft)
+          return fail(
+            file,
+            `${where}: rows must be strictly ascending by altitude_ft`,
+          );
+        if (row.time_min < prevClimb.time_min)
+          return fail(
+            file,
+            `${where}: time_min must be non-decreasing (table is cumulative from sea level)`,
+          );
+        if (row.fuel_gal < prevClimb.fuel_gal)
+          return fail(
+            file,
+            `${where}: fuel_gal must be non-decreasing (table is cumulative from sea level)`,
+          );
+        if (row.distance_nm < prevClimb.distance_nm)
+          return fail(
+            file,
+            `${where}: distance_nm must be non-decreasing (table is cumulative from sea level)`,
+          );
+      }
+      prevClimb = row;
+    }
+  }
 }
 
 const aircraftDir = join(ROOT, "aircraft");

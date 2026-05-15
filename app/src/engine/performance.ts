@@ -1,4 +1,4 @@
-import type { Aircraft, CruiseRow } from "@/data/aircraft";
+import type { Aircraft, ClimbRow, CruiseRow } from "@/data/aircraft";
 
 export interface CruiseAtAltitude {
   tas_kt: number;
@@ -60,6 +60,68 @@ export interface RangeOutput {
   burnable_gal: number;
   endurance_hr: number;
   range_nm: number;
+}
+
+/**
+ * Time, fuel, and ground distance to climb from `from_ft` to `to_ft`.
+ *
+ * When the aircraft has a POH-derived `climb.table` (cumulative from
+ * sea level), the segment is `table[to] − table[from]` with linear
+ * interpolation. Without a table, falls back to the scalar
+ * `rate_fpm` and `fuel_to_climb_gph` and assumes climb groundspeed is
+ * roughly 70 % of cruise TAS at the target altitude. Returns zeros if
+ * `to_ft <= from_ft`, so callers don't need to special-case descents.
+ */
+export function climbFromTo(
+  aircraft: Aircraft,
+  from_ft: number,
+  to_ft: number,
+): ClimbSegment {
+  if (to_ft <= from_ft) {
+    return { time_hr: 0, fuel_gal: 0, distance_nm: 0 };
+  }
+  const table = aircraft.climb.table;
+  if (table && table.length >= 2) {
+    const lo = table[0].altitude_ft;
+    const hi = table[table.length - 1].altitude_ft;
+    const a = interpClimbRow(table, Math.max(from_ft, lo));
+    const b = interpClimbRow(table, Math.min(to_ft, hi));
+    return {
+      time_hr: Math.max(0, (b.time_min - a.time_min) / 60),
+      fuel_gal: Math.max(0, b.fuel_gal - a.fuel_gal),
+      distance_nm: Math.max(0, b.distance_nm - a.distance_nm),
+    };
+  }
+  const time_hr = (to_ft - from_ft) / aircraft.climb.rate_fpm / 60;
+  const fuel_gal = time_hr * aircraft.climb.fuel_to_climb_gph;
+  const climb_speed_kt = cruiseAt(aircraft, to_ft).tas_kt * 0.7;
+  return { time_hr, fuel_gal, distance_nm: time_hr * climb_speed_kt };
+}
+
+export interface ClimbSegment {
+  time_hr: number;
+  fuel_gal: number;
+  distance_nm: number;
+}
+
+function interpClimbRow(table: ClimbRow[], altitude_ft: number): ClimbRow {
+  if (altitude_ft <= table[0].altitude_ft) return table[0];
+  const last = table[table.length - 1];
+  if (altitude_ft >= last.altitude_ft) return last;
+  for (let i = 0; i < table.length - 1; i++) {
+    const a = table[i];
+    const b = table[i + 1];
+    if (altitude_ft >= a.altitude_ft && altitude_ft <= b.altitude_ft) {
+      const t = (altitude_ft - a.altitude_ft) / (b.altitude_ft - a.altitude_ft);
+      return {
+        altitude_ft,
+        time_min: lerp(a.time_min, b.time_min, t),
+        fuel_gal: lerp(a.fuel_gal, b.fuel_gal, t),
+        distance_nm: lerp(a.distance_nm, b.distance_nm, t),
+      };
+    }
+  }
+  throw new Error("unreachable: climb altitude not bracketed");
 }
 
 /**
