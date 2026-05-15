@@ -8,11 +8,19 @@ import {
 } from "@/data/loaders";
 import { aircraft as allAircraft, aircraftBySlug } from "@/data/aircraft";
 import {
+  airportSellsCompatibleFuel,
   airportsInRouteCorridor,
   applyFilters,
   DEFAULT_FILTERS,
 } from "@/engine/filters";
 import { planWithWaypoints, type PlannedRoute } from "@/engine/plan";
+import {
+  buildInteractiveLeg,
+  buildInteractiveRoute,
+  interactiveRangeRings,
+  recommendLegAltitude,
+  type LegAltitudeOverride,
+} from "@/engine/interactive";
 import { greatCircleNM } from "@/engine/geo";
 import { obstaclesNearRoute } from "@/engine/obstacles";
 import { analyzeTerrain, type TerrainAnalysis } from "@/engine/terrain";
@@ -30,6 +38,7 @@ import { LegTable } from "./ui/LegTable";
 import { TerrainPanel } from "./ui/TerrainPanel";
 import { ExportPanel } from "./ui/ExportPanel";
 import { ExcludedAirports } from "./ui/ExcludedAirports";
+import { InteractivePanel } from "./ui/InteractivePanel";
 import { PinnedStops } from "./ui/PinnedStops";
 import { TripsPanel } from "./ui/TripsPanel";
 import {
@@ -73,6 +82,18 @@ export function App() {
   const [pinnedStopIds, setPinnedStopIds] = useState<readonly string[]>([]);
   const [trips, setTrips] = useState<SavedTrip[]>(() => listTrips());
 
+  // Interactive-build state. Only consulted when planningMode is
+  // "interactive"; the auto-plan flow above is fully independent so
+  // toggling between modes never throws away the other mode's work.
+  type PlanningMode = "auto" | "interactive";
+  const [planningMode, setPlanningMode] = useState<PlanningMode>("auto");
+  const [interactiveStopIds, setInteractiveStopIds] = useState<readonly string[]>(
+    [],
+  );
+  const [legAltitudes, setLegAltitudes] = useState<readonly LegAltitudeOverride[]>(
+    [],
+  );
+
   // Datasets are fetched at runtime instead of being bundled into the
   // JS so the initial paint isn't blocked by parsing several MB of
   // JSON. The terrain DEM and magnetic-variation grids load in
@@ -109,6 +130,280 @@ export function App() {
     () => applyFilters(datasets, filters, selectedAircraft.fuel.type),
     [datasets, filters, selectedAircraft.fuel.type],
   );
+
+  // Resolved origin and destination airports — null until the user
+  // types valid idents and the dataset is loaded. Used by both modes
+  // for distance / ring math; the auto planner also resolves them
+  // inside runPlan() but interactive mode needs the live values
+  // every render.
+  const originAirport = useMemo(
+    () => airportByIdent(datasets.airports, origin),
+    [datasets.airports, origin],
+  );
+  const destinationAirport = useMemo(
+    () => airportByIdent(datasets.airports, destination),
+    [datasets.airports, destination],
+  );
+
+  const interactiveStopAirports = useMemo(() => {
+    const out = [];
+    for (const id of interactiveStopIds) {
+      const a = datasets.airports.find((x) => x.id === id);
+      if (a) out.push(a);
+    }
+    return out;
+  }, [interactiveStopIds, datasets.airports]);
+
+  // Build the interactive route + per-leg fuel feasibility from the
+  // current sequence. Recomputed on every dependency change (cheap —
+  // a handful of climbFromTo + cruiseAt + terrain calls).
+  const interactiveBuild = useMemo(() => {
+    if (planningMode !== "interactive") return null;
+    if (!originAirport || !destinationAirport) return null;
+    const sequence = [
+      originAirport,
+      ...interactiveStopAirports,
+      destinationAirport,
+    ];
+    try {
+      return buildInteractiveRoute({
+        sequence,
+        aircraft: selectedAircraft,
+        targetAltFt,
+        flightRule,
+        reserveHr: reserveMin / 60,
+        startingFuelGal,
+        legAltitudes,
+        variation: variationFn,
+        dem: demReady ? demSampler : undefined,
+      });
+    } catch {
+      return null;
+    }
+  }, [
+    planningMode,
+    originAirport,
+    destinationAirport,
+    interactiveStopAirports,
+    selectedAircraft,
+    targetAltFt,
+    flightRule,
+    reserveMin,
+    startingFuelGal,
+    legAltitudes,
+    demReady,
+  ]);
+
+  // The "current departure point" for interactive mode — the last
+  // stop the user picked, or the origin if none yet. The range rings
+  // center here and the next click adds the next stop after it.
+  const interactiveDeparture = useMemo(() => {
+    if (planningMode !== "interactive") return null;
+    return interactiveStopAirports.length > 0
+      ? interactiveStopAirports[interactiveStopAirports.length - 1]
+      : (originAirport ?? null);
+  }, [planningMode, interactiveStopAirports, originAirport]);
+
+  // Fuel actually onboard at the current departure point — depends
+  // on the upstream chain of refuel vs pass-through stops, so we
+  // pull it straight from the interactive build result rather than
+  // reproducing the propagation rules here. With no stops yet we
+  // depart on the pilot's configured starting fuel.
+  const interactiveDepartureFuelGal = useMemo(() => {
+    if (planningMode !== "interactive") return 0;
+    if (interactiveStopAirports.length === 0)
+      return Math.min(
+        startingFuelGal,
+        selectedAircraft.fuel.usable_capacity_gal,
+      );
+    if (!interactiveBuild) return 0;
+    // legStartFuelGal[i] is the fuel at the start of leg i. The
+    // current departure is `sequence[stops.length]`, which starts
+    // leg `stops.length` (the closing leg → destination). That's
+    // exactly the fuel we want.
+    return (
+      interactiveBuild.legStartFuelGal[interactiveStopAirports.length] ?? 0
+    );
+  }, [
+    planningMode,
+    interactiveStopAirports.length,
+    startingFuelGal,
+    selectedAircraft,
+    interactiveBuild,
+  ]);
+
+  // Range rings at the current departure point. Scaled to actual
+  // fuel onboard there — see interactiveDepartureFuelGal — so a
+  // pass-through stop visibly shrinks the next ring.
+  const interactiveRings = useMemo(() => {
+    if (planningMode !== "interactive" || !interactiveDeparture) return null;
+    return interactiveRangeRings({
+      aircraft: selectedAircraft,
+      altitude_ft: targetAltFt,
+      reserve_hr: reserveMin / 60,
+      fuel_onboard_gal: interactiveDepartureFuelGal,
+    });
+  }, [
+    planningMode,
+    interactiveDeparture,
+    interactiveDepartureFuelGal,
+    selectedAircraft,
+    targetAltFt,
+    reserveMin,
+  ]);
+
+  const interactiveDistanceToDest = useMemo(() => {
+    if (!interactiveDeparture || !destinationAirport) return 0;
+    return greatCircleNM(interactiveDeparture, destinationAirport);
+  }, [interactiveDeparture, destinationAirport]);
+
+  function handleEnterInteractive() {
+    setPlanningMode("interactive");
+    setInteractiveStopIds([]);
+    setLegAltitudes([]);
+    setRoutes([]);
+    setError(null);
+  }
+
+  function handleExitInteractive() {
+    setPlanningMode("auto");
+    setInteractiveStopIds([]);
+    setLegAltitudes([]);
+  }
+
+  function handleAddInteractiveStop(ident: string) {
+    if (planningMode !== "interactive") return;
+    if (!originAirport || !destinationAirport) return;
+    const airport = airportByIdent(datasets.airports, ident);
+    if (!airport) return;
+    if (airport.id === originAirport.id) return;
+    if (airport.id === destinationAirport.id) return;
+    const airportId = airport.id;
+    setInteractiveStopIds((prev) =>
+      prev.includes(airportId) ? prev : [...prev, airportId],
+    );
+    // Track a slot in legAltitudes for the newly-inserted leg's
+    // (= leg into the new stop) altitude. The closing leg to the
+    // destination was at index N (== stops.length) before; after the
+    // insert it moves to N+1. Insert a `null` before the closing
+    // entry so existing per-leg overrides stay attached to the same
+    // leg.
+    setLegAltitudes((prev) => {
+      const closing = prev[prev.length - 1];
+      const head = prev.slice(0, -1);
+      return [...head, null, closing ?? null];
+    });
+  }
+
+  function handleRemoveInteractiveStop(stopIndex: number) {
+    if (planningMode !== "interactive") return;
+    setInteractiveStopIds((prev) => prev.filter((_, i) => i !== stopIndex));
+    // Drop the altitude entry for the removed leg (= leg INTO the
+    // removed stop, at index stopIndex).
+    setLegAltitudes((prev) => prev.filter((_, i) => i !== stopIndex));
+  }
+
+  function handleChangeLegAltitude(legIndex: number, altFt: number | null) {
+    setLegAltitudes((prev) => {
+      const next = prev.slice();
+      while (next.length <= legIndex) next.push(null);
+      next[legIndex] = altFt;
+      return next;
+    });
+  }
+
+  /** Build the hover-popup HTML fragment for a candidate airport when
+   *  in interactive mode. Includes the leg distance from the current
+   *  departure, range status, any terrain warnings on the prospective
+   *  approach, and an altitude recommendation that differs from the
+   *  current target. Returns null when the airport isn't a sensible
+   *  candidate (origin / destination / already-selected stop). */
+  function interactiveHoverHtml(ident: string): string | null {
+    if (planningMode !== "interactive") return null;
+    if (!interactiveDeparture || !destinationAirport) return null;
+    const a = airportByIdent(datasets.airports, ident);
+    if (!a) return null;
+    if (a.id === interactiveDeparture.id) return null;
+    if (interactiveStopIds.includes(a.id)) return null;
+    const dist = greatCircleNM(interactiveDeparture, a);
+    const solid = interactiveRings?.solid_nm ?? 0;
+    const dashed = interactiveRings?.dashed_nm ?? 0;
+    const inSolid = dist <= solid;
+    const inDashed = dist <= dashed;
+    const reachability = inSolid
+      ? `<span style="color:#0f766e">in range (${Math.round(dist).toLocaleString()} nm, ${Math.round(solid - dist).toLocaleString()} nm to spare)</span>`
+      : inDashed
+        ? `<span style="color:#b45309">past reserve — ${Math.round(dist).toLocaleString()} nm, ${Math.round(dist - solid).toLocaleString()} nm into the reserve</span>`
+        : `<span style="color:#b91c1c">out of range (${Math.round(dist).toLocaleString()} nm, ${Math.round(dashed).toLocaleString()} nm max on this tank)</span>`;
+    const sellsFuel = airportSellsCompatibleFuel(a, selectedAircraft.fuel.type);
+    const fuelBit = sellsFuel
+      ? null
+      : `<span style="color:#b45309">no ${selectedAircraft.fuel.type} — pass-through only</span>`;
+    // Compute the prospective leg into this airport to surface
+    // terrain warnings and altitude advice. Use the global target
+    // altitude — the per-leg override hasn't been chosen yet for a
+    // not-yet-added leg.
+    const fuel =
+      interactiveStopAirports.length === 0
+        ? startingFuelGal
+        : selectedAircraft.fuel.usable_capacity_gal;
+    const probe = buildInteractiveLeg({
+      from: interactiveDeparture,
+      to: a,
+      aircraft: selectedAircraft,
+      targetAltFt,
+      flightRule,
+      startingFuelGal: fuel,
+      reserveHr: reserveMin / 60,
+      variation: variationFn,
+      dem: demReady ? demSampler : undefined,
+    });
+    const arrShort = probe.leg.extra?.terrain_arrival_shortfall_ft ?? 0;
+    const depShort = probe.leg.extra?.terrain_departure_shortfall_ft ?? 0;
+    const terrainBits: string[] = [];
+    if (arrShort > 0) {
+      terrainBits.push(
+        `arrival corridor needs +${Math.round(arrShort).toLocaleString()} ft`,
+      );
+    }
+    if (depShort > 0) {
+      terrainBits.push(
+        `departure corridor needs +${Math.round(depShort).toLocaleString()} ft`,
+      );
+    }
+    const rec = recommendLegAltitude({
+      aircraft: selectedAircraft,
+      from: interactiveDeparture,
+      to: a,
+      targetAltFt,
+      flightRule,
+      variation: variationFn,
+      minSafeAltFt:
+        arrShort > 0 || depShort > 0
+          ? probe.leg.cruise_alt_ft + Math.max(arrShort, depShort)
+          : null,
+    });
+    const altBits: string[] = [];
+    if (rec.defaultAltFt !== probe.leg.cruise_alt_ft) {
+      // Shouldn't really happen — probe uses the default. Defensive.
+    }
+    if (rec.cheapestAltFt !== rec.defaultAltFt) {
+      altBits.push(
+        `cheapest at ${rec.cheapestAltFt.toLocaleString()} ft (vs ${rec.defaultAltFt.toLocaleString()})`,
+      );
+    }
+    const parts: string[] = [`<div style="margin-top:4px">${reachability}</div>`];
+    if (fuelBit) parts.push(`<div>${fuelBit}</div>`);
+    if (terrainBits.length > 0) {
+      parts.push(
+        `<div style="color:#b45309">⚠ ${terrainBits.join(" · ")}</div>`,
+      );
+    }
+    if (altBits.length > 0) {
+      parts.push(`<div style="color:#475569">alt: ${altBits.join(" · ")}</div>`);
+    }
+    return parts.join("");
+  }
 
   interface PlanOverrides {
     /** Explicit exclusion set, used when the caller just mutated state
@@ -221,7 +516,10 @@ export function App() {
     runWithSpinner(targetAltFt);
   }
 
-  const currentRoute = routes[selectedRoute] ?? null;
+  const currentRoute =
+    planningMode === "interactive"
+      ? (interactiveBuild?.route ?? null)
+      : (routes[selectedRoute] ?? null);
   const routeObstacles = useMemo(
     () => obstaclesNearRoute(datasets.obstacles, currentRoute),
     [currentRoute, datasets.obstacles],
@@ -442,6 +740,16 @@ export function App() {
       filters,
       excludedIds: [...excludedIds],
       pinnedStopIds: [...pinnedStopIds],
+      planningMode,
+      // Persist interactive selections so a saved interactive trip
+      // can be loaded back with the same chain and per-leg altitudes
+      // (or none, for auto-mode trips). LegAltitudeOverride is
+      // `number | null | undefined`; collapse to `number | null` for
+      // JSON.
+      interactiveStopIds: [...interactiveStopIds],
+      legAltitudes: legAltitudes.map((a) =>
+        a === undefined || a === null ? null : a,
+      ),
       savedAt: new Date().toISOString(),
     };
     setTrips(saveTrip(trip));
@@ -462,6 +770,11 @@ export function App() {
     setFilters({ ...DEFAULT_FILTERS, ...t.filters });
     setExcludedIds(new Set(t.excludedIds));
     setPinnedStopIds(t.pinnedStopIds ?? []);
+    // Restore interactive-mode state. Trips saved before this field
+    // existed load into auto mode with empty interactive selections.
+    setPlanningMode(t.planningMode ?? "auto");
+    setInteractiveStopIds(t.interactiveStopIds ?? []);
+    setLegAltitudes(t.legAltitudes ?? []);
     setRoutes([]);
     setError(null);
   }
@@ -494,44 +807,77 @@ export function App() {
         </section>
         <section>
           <h2 className="mb-2 text-sm font-semibold text-slate-800">Trip</h2>
-          <TripPanel
-            origin={origin}
-            destination={destination}
-            onOriginChange={setOrigin}
-            onDestinationChange={setDestination}
-            flightRule={flightRule}
-            onFlightRuleChange={setFlightRule}
-            capLegTime={capLegTime}
-            onCapLegTimeChange={setCapLegTime}
-            maxLegHr={maxLegHr}
-            onMaxLegHrChange={setMaxLegHr}
-            onPlan={handlePlan}
-            isPlanning={isPlanning}
-            dataReady={dataReady}
-            error={error}
-          />
-          <div className="mt-3">
-            <PinnedStops
-              pinnedIds={pinnedStopIds}
-              airports={datasets.airports}
-              aircraftFuelType={selectedAircraft.fuel.type}
-              originIdent={origin}
-              destinationIdent={destination}
-              onAdd={handleAddPins}
-              onRemove={handleRemovePin}
-              onReorder={handleReorderPins}
+          {planningMode === "auto" ? (
+            <>
+              <TripPanel
+                origin={origin}
+                destination={destination}
+                onOriginChange={setOrigin}
+                onDestinationChange={setDestination}
+                flightRule={flightRule}
+                onFlightRuleChange={setFlightRule}
+                capLegTime={capLegTime}
+                onCapLegTimeChange={setCapLegTime}
+                maxLegHr={maxLegHr}
+                onMaxLegHrChange={setMaxLegHr}
+                onPlan={handlePlan}
+                isPlanning={isPlanning}
+                dataReady={dataReady}
+                error={error}
+              />
+              <button
+                type="button"
+                onClick={handleEnterInteractive}
+                disabled={!dataReady || !originAirport || !destinationAirport}
+                className="mt-2 w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                Build interactively →
+              </button>
+              <div className="mt-3">
+                <PinnedStops
+                  pinnedIds={pinnedStopIds}
+                  airports={datasets.airports}
+                  aircraftFuelType={selectedAircraft.fuel.type}
+                  originIdent={origin}
+                  destinationIdent={destination}
+                  onAdd={handleAddPins}
+                  onRemove={handleRemovePin}
+                  onReorder={handleReorderPins}
+                />
+              </div>
+              <div className="mt-3">
+                <ExcludedAirports
+                  excludedIds={excludedIds}
+                  airports={datasets.airports}
+                  originIdent={origin}
+                  destinationIdent={destination}
+                  onExclude={handleExcludeStops}
+                  onInclude={handleIncludeStop}
+                />
+              </div>
+            </>
+          ) : (
+            <InteractivePanel
+              originIdent={originAirport?.icao ?? originAirport?.lid ?? origin}
+              destinationIdent={
+                destinationAirport?.icao ?? destinationAirport?.lid ?? destination
+              }
+              stops={interactiveStopAirports}
+              route={currentRoute}
+              legAltitudes={legAltitudes}
+              legFeasibility={interactiveBuild?.feasibility ?? []}
+              stopRefuels={interactiveBuild?.stopRefuels ?? []}
+              distanceToDestNm={interactiveDistanceToDest}
+              rangeSolidNm={interactiveRings?.solid_nm ?? 0}
+              rangeDashedNm={interactiveRings?.dashed_nm ?? 0}
+              destInRange={
+                (interactiveRings?.solid_nm ?? 0) >= interactiveDistanceToDest
+              }
+              onRemoveStop={handleRemoveInteractiveStop}
+              onChangeLegAltitude={handleChangeLegAltitude}
+              onExit={handleExitInteractive}
             />
-          </div>
-          <div className="mt-3">
-            <ExcludedAirports
-              excludedIds={excludedIds}
-              airports={datasets.airports}
-              originIdent={origin}
-              destinationIdent={destination}
-              onExclude={handleExcludeStops}
-              onInclude={handleIncludeStop}
-            />
-          </div>
+          )}
         </section>
         <section>
           <h2 className="mb-2 text-sm font-semibold text-slate-800">
@@ -568,19 +914,40 @@ export function App() {
         <MapView
           airports={matches}
           route={currentRoute}
-          onMoveStop={handleMoveStop}
+          onMoveStop={planningMode === "auto" ? handleMoveStop : undefined}
           terminalWarnings={terminalWarnings}
+          interactive={
+            planningMode === "interactive" &&
+            interactiveDeparture &&
+            destinationAirport &&
+            interactiveRings
+              ? {
+                  center: interactiveDeparture,
+                  destination: destinationAirport,
+                  rangeSolidNm: interactiveRings.solid_nm,
+                  rangeDashedNm: interactiveRings.dashed_nm,
+                  onAirportClick: handleAddInteractiveStop,
+                  onAirportHoverHtml: interactiveHoverHtml,
+                }
+              : undefined
+          }
         />
       </main>
-      {routes.length > 0 && (
+      {(routes.length > 0 || (planningMode === "interactive" && currentRoute)) && (
         <aside className="flex w-80 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
           <div className="flex-1 overflow-y-auto">
             <LegTable
-              routes={routes}
-              selected={selectedRoute}
-              onSelect={setSelectedRoute}
-              onExcludeStop={(id) => handleExcludeStops([id])}
-              onReplaceStop={handleReplaceStop}
+              routes={planningMode === "interactive" && currentRoute ? [currentRoute] : routes}
+              selected={planningMode === "interactive" ? 0 : selectedRoute}
+              onSelect={planningMode === "interactive" ? () => {} : setSelectedRoute}
+              onExcludeStop={
+                planningMode === "interactive"
+                  ? () => {}
+                  : (id) => handleExcludeStops([id])
+              }
+              onReplaceStop={
+                planningMode === "interactive" ? () => {} : handleReplaceStop
+              }
             />
           </div>
           <TerrainPanel
