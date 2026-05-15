@@ -35,6 +35,18 @@ export const ARRIVAL_MIN_PER_KFT = 5;
  *  this is the "less bad" case per the routing requirements. */
 export const DEPARTURE_MIN_PER_KFT = 2;
 
+/** Minimum AGL the aircraft is modeled at inside the arrival corridor.
+ *  Convention is 1,000 ft for the traffic pattern; most arrivals fly
+ *  to pattern altitude and circle, not a long straight-in descent all
+ *  the way to field elevation. Terrain below this floor within a few
+ *  miles of the airport isn't a practical hazard — the aircraft is
+ *  comfortably above it — so the corridor scoring shouldn't flag it.
+ *  Without this floor, the 1,000/3 nm descent slope projects the
+ *  aircraft to field elevation at d=0 and routinely flags low terrain
+ *  within 1–2 nm of high-elevation fields that the pilot would never
+ *  actually fly through. */
+export const ARRIVAL_FLOOR_AGL_FT = 1000;
+
 export interface TerrainPenaltyInput {
   from: Airport;
   to: Airport;
@@ -105,6 +117,9 @@ export function computeTerrainPenalty(
     cruise_alt_ft,
     gradient_ft_per_nm: climb_ft_per_nm,
     dem,
+    // Departure: the aircraft really is at field elevation at d=0
+    // and climbs from there, so no AGL floor applies.
+    min_aircraft_agl_ft: 0,
   });
   const arrival_shortfall_ft = corridorShortfall({
     near: to,
@@ -114,6 +129,7 @@ export function computeTerrainPenalty(
     cruise_alt_ft,
     gradient_ft_per_nm: STANDARD_DESCENT_FT_PER_NM,
     dem,
+    min_aircraft_agl_ft: ARRIVAL_FLOOR_AGL_FT,
   });
   const departure_hr =
     (departure_shortfall_ft / 1000) * (DEPARTURE_MIN_PER_KFT / 60);
@@ -137,6 +153,11 @@ interface CorridorInput {
   cruise_alt_ft: number;
   gradient_ft_per_nm: number;
   dem: DEMSampler;
+  /** Floor on the modeled aircraft altitude above field elevation,
+   *  in feet. Used on the arrival corridor so that low terrain inside
+   *  the traffic pattern doesn't generate false warnings. Zero for
+   *  departure, where the aircraft really is on the runway at d=0. */
+  min_aircraft_agl_ft: number;
 }
 
 /** Degrees of latitude per nautical mile. */
@@ -170,16 +191,17 @@ function corridorShortfall(c: CorridorInput): number {
     const d_from_airport = (i / samples) * corridor_nm;
     const lat = c.near.lat + d_from_airport * dlat_per_nm;
     const lon = c.near.lon + d_from_airport * dlon_per_nm;
-    // Aircraft altitude profile from the airport outward: rising along
-    // the descent / climb slope until it intercepts cruise altitude,
-    // then level at cruise. Terrain above this profile (with the buffer)
-    // is what costs us — either it pierces the standard descent slope,
-    // or it pokes above the planned cruise so the leg itself isn't
-    // flyable at the chosen altitude.
-    const aircraft_alt = Math.min(
-      c.cruise_alt_ft,
-      c.airport_elev_ft + d_from_airport * c.gradient_ft_per_nm,
-    );
+    // Aircraft altitude profile from the airport outward: bounded
+    // below by the AGL floor (pattern altitude on arrival, zero on
+    // departure), rising along the descent / climb slope, capped at
+    // the planned cruise altitude. Terrain above this profile (with
+    // the buffer) is what costs us — either it pierces the standard
+    // descent slope, or it pokes above the planned cruise so the leg
+    // itself isn't flyable at the chosen altitude.
+    const slope_alt =
+      c.airport_elev_ft + d_from_airport * c.gradient_ft_per_nm;
+    const floor_alt = c.airport_elev_ft + c.min_aircraft_agl_ft;
+    const aircraft_alt = Math.min(c.cruise_alt_ft, Math.max(floor_alt, slope_alt));
     // Buffer doesn't drag the limit below the airport itself — at field
     // elevation the aircraft is on the runway and isn't expected to be
     // 500 ft above local terrain.
