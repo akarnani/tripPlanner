@@ -245,6 +245,36 @@ describe("computeTerrainPenalty", () => {
     expect(r.arrival_shortfall_ft).toBeGreaterThanOrEqual(TERMINAL_BUFFER_FT - 50);
   });
 
+  test("terrain above cruise altitude inside the corridor produces a shortfall", () => {
+    // Past the TOD point of the standard descent slope, the aircraft is
+    // at cruise altitude. Terrain that pokes above cruise inside the
+    // arrival corridor means the leg can't actually be flown at the
+    // chosen altitude — the descent isn't even the bottleneck. This is
+    // the case the pre-fix corridor cap missed (it stopped sampling at
+    // TOD, where the slope intersects cruise).
+    // Cruise 6,500 → TOD on the 1000/3 slope is at 19.5 nm. Place an
+    // 8,000 ft peak at 25 nm out, well past TOD but inside the 30-nm
+    // corridor.
+    const blocker = pointAtFraction(
+      TO,
+      FROM,
+      25 / greatCircleNM(TO, FROM),
+    );
+    const dem = peakAroundPoint(blocker, 8000, CORRIDOR_SAMPLE_NM);
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      tas_kt: 120,
+      climb_rate_fpm: 700,
+      dem,
+    });
+    // limit at d=25 = min(6500, 0 + 25*333) − 500 = min(6500, 8325) − 500
+    //             = 6500 − 500 = 6000.
+    // shortfall = 8000 − 6000 = 2000.
+    expect(r.arrival_shortfall_ft).toBeGreaterThan(1500);
+  });
+
   test("corridor never exceeds MAX_CORRIDOR_NM even with very high cruise altitudes", () => {
     // Cruise alt 30,000 would otherwise stretch the descent corridor
     // to (30000-0) / (1000/3) = 90 nm. The cap should clip it. A peak

@@ -125,13 +125,15 @@ interface CorridorInput {
 }
 
 function corridorShortfall(c: CorridorInput): number {
-  const climb_height_ft = c.cruise_alt_ft - c.airport_elev_ft;
-  if (climb_height_ft <= 0 || c.gradient_ft_per_nm <= 0) return 0;
-  const corridor_nm = Math.min(
-    c.total_nm,
-    MAX_CORRIDOR_NM,
-    climb_height_ft / c.gradient_ft_per_nm,
-  );
+  if (c.gradient_ft_per_nm <= 0) return 0;
+  // Defensive: cruise altitude at or below the airport itself is a
+  // degenerate input (negative climb / descent). Skip rather than score.
+  if (c.cruise_alt_ft <= c.airport_elev_ft) return 0;
+  // Always sample out to MAX_CORRIDOR_NM (or the leg length, if shorter).
+  // The corridor used to shrink to TOD distance, but that missed terrain
+  // *above* cruise altitude near the airport — exactly the case where a
+  // standard descent / gradual climb is impossible.
+  const corridor_nm = Math.min(c.total_nm, MAX_CORRIDOR_NM);
   if (corridor_nm <= 0) return 0;
   const segments = Math.max(1, Math.ceil(corridor_nm / CORRIDOR_SAMPLE_NM));
   const corridor_end = pointAtFraction(
@@ -144,15 +146,23 @@ function corridorShortfall(c: CorridorInput): number {
   let worst = 0;
   for (let i = 0; i < path.length; i++) {
     const d_from_airport = (i / segments) * corridor_nm;
-    const required_alt =
-      c.airport_elev_ft + d_from_airport * c.gradient_ft_per_nm;
+    // Aircraft altitude profile from the airport outward: rising along
+    // the descent / climb slope until it intercepts cruise altitude,
+    // then level at cruise. Terrain above this profile (with the buffer)
+    // is what costs us — either it pierces the standard descent slope,
+    // or it pokes above the planned cruise so the leg itself isn't
+    // flyable at the chosen altitude.
+    const aircraft_alt = Math.min(
+      c.cruise_alt_ft,
+      c.airport_elev_ft + d_from_airport * c.gradient_ft_per_nm,
+    );
     const e = c.dem.elevationFt(path[i]);
     if (e === null) continue;
     // Buffer doesn't drag the limit below the airport itself — at field
     // elevation the aircraft is on the runway and isn't expected to be
     // 500 ft above local terrain.
     const limit = Math.max(
-      required_alt - TERMINAL_BUFFER_FT,
+      aircraft_alt - TERMINAL_BUFFER_FT,
       c.airport_elev_ft,
     );
     const shortfall = e - limit;
