@@ -16,6 +16,6 @@ test-results/
 /pipelines/swift/sources/
 /pipelines/*.cache/
 
-# Aircraft POH PDFs are large; performance.yaml is committed, PDFs optional
-# (commented out — leaving in repo for now per plan)
-# /aircraft/**/*.pdf
+# Aircraft POH PDFs are large; only the extracted performance.yaml is
+# committed. Keep the source PDF locally if you want, but don't commit it.
+/aircraft/**/*.pdf
