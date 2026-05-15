@@ -2,6 +2,7 @@ import type { Airport } from "@/data/loaders";
 import { greatCircleNM } from "./geo";
 import { initialTrueCourseDeg } from "./hemispheric";
 import type { DEMSampler } from "./terrain";
+import type { PlannedRoute } from "./plan";
 
 /** Standard descent profile: 1,000 ft of altitude loss per 3 nm of ground
  *  distance — a comfortable ~3° glidepath at typical GA cruise speeds.
@@ -39,10 +40,13 @@ export interface TerrainPenaltyInput {
   to: Airport;
   /** Hemispheric-rounded cruise altitude actually flown on this leg. */
   cruise_alt_ft: number;
-  /** TAS at cruise; used to estimate climb groundspeed. A modest
-   *  overestimate is fine — under-penalizing slightly is better than
-   *  spurious penalties from assumed-slow climb. */
-  tas_kt: number;
+  /** Aircraft climb groundspeed in knots, used together with
+   *  `climb_rate_fpm` to derive ft-per-nm climb gradient. This is the
+   *  groundspeed *during the climb* (i.e. Vy or thereabouts) — NOT the
+   *  cruise TAS. Using cruise TAS makes the gradient look much
+   *  shallower than reality and falsely penalizes departure terrain
+   *  that the aircraft can comfortably climb over. */
+  climb_speed_kt: number;
   /** Aircraft climb rate (ft/min). */
   climb_rate_fpm: number;
   dem: DEMSampler;
@@ -79,7 +83,7 @@ const ZERO: TerrainPenalty = {
 export function computeTerrainPenalty(
   input: TerrainPenaltyInput,
 ): TerrainPenalty {
-  const { from, to, cruise_alt_ft, tas_kt, climb_rate_fpm, dem } = input;
+  const { from, to, cruise_alt_ft, climb_speed_kt, climb_rate_fpm, dem } = input;
   const total_nm = input.distance_nm ?? greatCircleNM(from, to);
   if (total_nm === 0) return ZERO;
   // Bearings out from each terminal. The leg bends very little over a
@@ -91,7 +95,7 @@ export function computeTerrainPenalty(
   const to_from_bearing_deg = initialTrueCourseDeg(to, from);
 
   const climb_ft_per_nm =
-    tas_kt > 0 ? (climb_rate_fpm * 60) / tas_kt : Infinity;
+    climb_speed_kt > 0 ? (climb_rate_fpm * 60) / climb_speed_kt : Infinity;
 
   const departure_shortfall_ft = corridorShortfall({
     near: from,
@@ -189,4 +193,52 @@ function corridorShortfall(c: CorridorInput): number {
     if (shortfall > worst) worst = shortfall;
   }
   return worst;
+}
+
+export interface TerminalCorridorWarning {
+  /** Airport ICAO/LID identifier the warning attaches to. */
+  ident: string;
+  /** Whether the warning applies to the climb out of this airport or
+   *  the approach into it. An intermediate stop can have both — the
+   *  caller receives two warnings in that case. */
+  kind: "departure" | "arrival";
+  /** Worst-sample shortfall in feet — terrain peak minus the safe
+   *  altitude profile (climb slope or descent slope, with buffer)
+   *  capped at the airport's own elevation. */
+  shortfall_ft: number;
+  /** Aircraft altitude in feet at the shortfall point. Useful for
+   *  phrasing the warning ("terrain X ft below your climb/descent"). */
+  aircraft_alt_ft: number;
+}
+
+/** Pulls per-airport terrain shortfalls off a planned route's edge
+ *  metadata into a tidy list for UI display. The shortfalls
+ *  themselves are written by `computeTerrainPenalty` into
+ *  `edge.extra.terrain_departure_shortfall_ft` /
+ *  `terrain_arrival_shortfall_ft` during graph construction. */
+export function terminalCorridorWarnings(
+  route: PlannedRoute,
+): TerminalCorridorWarning[] {
+  const out: TerminalCorridorWarning[] = [];
+  for (const leg of route.legs) {
+    const dep = leg.extra?.terrain_departure_shortfall_ft;
+    if (dep !== undefined && dep > 0) {
+      out.push({
+        ident: leg.fromAirport.icao ?? leg.fromAirport.lid,
+        kind: "departure",
+        shortfall_ft: dep,
+        aircraft_alt_ft: leg.fromAirport.elevation_ft ?? 0,
+      });
+    }
+    const arr = leg.extra?.terrain_arrival_shortfall_ft;
+    if (arr !== undefined && arr > 0) {
+      out.push({
+        ident: leg.toAirport.icao ?? leg.toAirport.lid,
+        kind: "arrival",
+        shortfall_ft: arr,
+        aircraft_alt_ft: leg.toAirport.elevation_ft ?? 0,
+      });
+    }
+  }
+  return out;
 }

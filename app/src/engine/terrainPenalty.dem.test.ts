@@ -67,7 +67,7 @@ describe("terrain penalty with the real DEM grid", () => {
       from: kPAO,
       to: kSVR,
       cruise_alt_ft: 11500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem,
     });
@@ -79,7 +79,7 @@ describe("terrain penalty with the real DEM grid", () => {
       from: kPAO,
       to: kSVR,
       cruise_alt_ft: 9500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem,
     });

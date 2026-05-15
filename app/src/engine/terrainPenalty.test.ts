@@ -60,7 +60,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: TO,
       cruise_alt_ft: 6500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem: flatDem,
     });
@@ -74,7 +74,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: TO,
       cruise_alt_ft: 6500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem: nullDem,
     });
@@ -94,7 +94,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: TO,
       cruise_alt_ft: 6500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem,
     });
@@ -118,7 +118,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: TO,
       cruise_alt_ft: 6500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem,
     });
@@ -145,7 +145,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: TO,
       cruise_alt_ft: 6500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem,
     });
@@ -175,7 +175,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: TO,
       cruise_alt_ft: 6500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem: arrivalOnly,
     });
@@ -183,7 +183,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: TO,
       cruise_alt_ft: 6500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem: departureOnly,
     });
@@ -205,7 +205,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: high,
       cruise_alt_ft: 5000,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem: peakAroundPoint(high, 20000, 5),
     });
@@ -218,7 +218,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: close,
       cruise_alt_ft: 6500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem: flatDem,
     });
@@ -238,7 +238,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: TO,
       cruise_alt_ft: 6500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem,
     });
@@ -265,7 +265,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: TO,
       cruise_alt_ft: 6500,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem,
     });
@@ -286,7 +286,7 @@ describe("computeTerrainPenalty", () => {
       from: FROM,
       to: TO,
       cruise_alt_ft: 30000,
-      tas_kt: 120,
+      climb_speed_kt: 78,
       climb_rate_fpm: 700,
       dem,
     });

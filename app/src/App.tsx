@@ -16,6 +16,7 @@ import { planWithWaypoints, type PlannedRoute } from "@/engine/plan";
 import { greatCircleNM } from "@/engine/geo";
 import { obstaclesNearRoute } from "@/engine/obstacles";
 import { analyzeTerrain, type TerrainAnalysis } from "@/engine/terrain";
+import { terminalCorridorWarnings } from "@/engine/terrainPenalty";
 import type { FlightRule } from "@/engine/hemispheric";
 import { TerrainGridDEMSampler } from "@/engine/terrainGrid";
 import { MagneticVariationGrid } from "@/engine/magneticVariation";
@@ -241,6 +242,11 @@ export function App() {
       variation: variationFn,
     });
   }, [currentRoute, routeObstacles, flightRule, demReady]);
+
+  const terminalWarnings = useMemo(
+    () => (currentRoute ? terminalCorridorWarnings(currentRoute) : []),
+    [currentRoute],
+  );
 
   function handleReplanAtMinSafe() {
     if (!terrain) return;
@@ -563,6 +569,7 @@ export function App() {
           airports={matches}
           route={currentRoute}
           onMoveStop={handleMoveStop}
+          terminalWarnings={terminalWarnings}
         />
       </main>
       {routes.length > 0 && (
@@ -580,6 +587,7 @@ export function App() {
             analysis={terrain}
             targetAltFt={targetAltFt}
             onReplanAtMinSafe={handleReplanAtMinSafe}
+            terminalWarnings={terminalWarnings}
           />
           {currentRoute && (
             <ExportPanel

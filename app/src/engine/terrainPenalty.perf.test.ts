@@ -84,7 +84,7 @@ describe.skip("PERF: terrain penalty hot loop", () => {
           from,
           to,
           cruise_alt_ft: 7500,
-          tas_kt: 120,
+          climb_speed_kt: 78,
           climb_rate_fpm: 700,
           dem,
           distance_nm,

@@ -172,7 +172,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
           from,
           to,
           cruise_alt_ft,
-          tas_kt: c.tas_kt,
+          climb_speed_kt: climbSpeedKt(aircraft, c.tas_kt),
           climb_rate_fpm: aircraft.climb.rate_fpm,
           dem,
           distance_nm,
@@ -204,6 +204,15 @@ export function buildGraph(input: BuildGraphInput): Graph {
   }
 
   return { byId, origin, destination, neighbors };
+}
+
+/** Best-guess climb groundspeed for terrain-clearance gradient math.
+ *  Piston singles typically climb at Vy ≈ 0.65 × cruise TAS (e.g. 76 kt
+ *  in a C172S that cruises 120). Using cruise TAS here makes the climb
+ *  path look much shallower than reality and falsely penalizes
+ *  departure terrain the aircraft can actually climb over. */
+function climbSpeedKt(_aircraft: Aircraft, cruise_tas_kt: number): number {
+  return Math.max(50, cruise_tas_kt * 0.65);
 }
 
 export type CostFn = (edge: Edge) => number;
