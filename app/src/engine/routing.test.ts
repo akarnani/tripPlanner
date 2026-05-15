@@ -2,6 +2,8 @@ import { describe, expect, test } from "vitest";
 import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
 import { buildGraph, kShortestPaths, type Edge } from "./routing";
+import type { DEMSampler } from "./terrain";
+import { greatCircleNM, pointAtFraction } from "./geo";
 
 function mkAirport(id: string, lat: number, lon: number): Airport {
   return {
@@ -153,6 +155,48 @@ describe("buildGraph + kShortestPaths", () => {
     expect(path.edges[0].cruise_alt_ft).toBe(6500);
     expect(path.edges[0].true_course_deg).toBeGreaterThanOrEqual(180);
     expect(path.edges[0].true_course_deg).toBeLessThan(360);
+  });
+
+  test("DEM sampler routes around a stop with high terrain on approach", () => {
+    // Two candidate intermediate stops at ~equal distance from origin
+    // and destination. A 6,000 ft mountain sits 10 nm before NORTH on
+    // the approach corridor; SOUTH is in flat terrain. With no DEM the
+    // router is indifferent (picks whichever wins on greatCircle ties);
+    // with the DEM the terrain penalty on edges into NORTH should push
+    // shortestTime onto the SOUTH path.
+    const origin = mkAirport("O", 40, -120);
+    const dest = mkAirport("D", 40, -110);
+    const north = mkAirport("N", 41, -115);
+    const south = mkAirport("S", 39, -115);
+    // Force the planner to stop somewhere — direct must exceed range.
+    const aircraft = mkAircraft(120, 10, 35); // ~350 nm range
+    const peak = pointAtFraction(
+      north,
+      origin,
+      10 / greatCircleNM(north, origin),
+    );
+    const dem: DEMSampler = {
+      elevationFt: (p) => (greatCircleNM(peak, p) <= 1 ? 6000 : 0),
+    };
+    const graphWith = buildGraph({
+      airports: [origin, dest, north, south],
+      origin: "O",
+      destination: "D",
+      aircraft,
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      dem,
+    });
+    const cost = (e: Edge) => e.time_hr + (e.extra?.terrain_penalty_hr ?? 0);
+    const [pickedWith] = kShortestPaths(graphWith, cost, 1);
+    expect(pickedWith.nodes).toContain("S");
+    expect(pickedWith.nodes).not.toContain("N");
+    // Sanity: at least one edge into N must carry a terrain penalty.
+    const intoNorth = graphWith
+      .neighbors("O")
+      .find((e) => e.to === "N");
+    expect(intoNorth?.extra?.terrain_penalty_hr ?? 0).toBeGreaterThan(0);
   });
 
   test("mock cheapestFuel cost can be injected at runtime", () => {

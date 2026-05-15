@@ -1,5 +1,9 @@
 import type { Airport, Datasets } from "@/data/loaders";
 import type { FuelType } from "@/data/aircraft";
+import { greatCircleNM } from "./geo";
+import { initialTrueCourseDeg } from "./hemispheric";
+
+const EARTH_NM = 3440.065;
 
 export type TowerMode = "any" | "required" | "forbidden";
 
@@ -103,5 +107,59 @@ export function applyFilters(
       return false;
     }
     return true;
+  });
+}
+
+/**
+ * Drop airports more than `maxCrossTrackNM` from the great-circle line
+ * between origin and destination, and airports whose along-track
+ * position is well before origin or well past destination. Origin and
+ * destination themselves are always kept.
+ *
+ * Without this filter the routing graph considers every airport in the
+ * dataset (~5,000 in CONUS), giving N² edges — for a long
+ * cross-country that's tens of millions of edges and several seconds
+ * of work *before* any objective sees the graph, even though stops in
+ * Florida are nonsensical for a Bay-Area-to-Wisconsin flight.
+ *
+ * The corridor is a fixed lateral width (default 100 nm) rather than
+ * a detour-budget percentage, so it doesn't balloon on transcontinental
+ * routes where even a small percentage of 2,500 nm covers most of CONUS.
+ */
+export function airportsInRouteCorridor(
+  airports: readonly Airport[],
+  origin: Airport,
+  destination: Airport,
+  maxCrossTrackNM = 100,
+  alongTrackPaddingNM = 50,
+): Airport[] {
+  const direct = greatCircleNM(origin, destination);
+  if (direct === 0) return airports.slice();
+  const bearing_od_rad = (initialTrueCourseDeg(origin, destination) * Math.PI) / 180;
+  const sin_bod = Math.sin(bearing_od_rad);
+  const cos_bod = Math.cos(bearing_od_rad);
+
+  return airports.filter((a) => {
+    if (a.id === origin.id || a.id === destination.id) return true;
+    const d_op = greatCircleNM(origin, a);
+    if (d_op === 0) return true;
+    const bearing_op_rad = (initialTrueCourseDeg(origin, a) * Math.PI) / 180;
+    const sin_bop = Math.sin(bearing_op_rad);
+    const cos_bop = Math.cos(bearing_op_rad);
+    // Standard spherical cross-track + along-track decomposition. The
+    // angle is computed via the sine of the bearing delta — for the
+    // distances and CTDs we're working with, the small-angle terms
+    // dominate, and any error is well below the corridor width.
+    const sin_bearing_delta = sin_bop * cos_bod - cos_bop * sin_bod;
+    const d_op_rad = d_op / EARTH_NM;
+    const ctd_rad = Math.asin(Math.sin(d_op_rad) * sin_bearing_delta);
+    const ctd_nm = Math.abs(ctd_rad) * EARTH_NM;
+    if (ctd_nm > maxCrossTrackNM) return false;
+    const along_rad = Math.acos(
+      Math.cos(d_op_rad) / Math.max(1e-9, Math.cos(ctd_rad)),
+    );
+    const along_nm = along_rad * EARTH_NM;
+    return along_nm >= -alongTrackPaddingNM &&
+           along_nm <= direct + alongTrackPaddingNM;
   });
 }

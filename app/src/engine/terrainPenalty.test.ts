@@ -1,0 +1,295 @@
+import { describe, expect, test } from "vitest";
+import type { Airport } from "@/data/loaders";
+import type { LatLon } from "./geo";
+import { greatCircleNM, pointAtFraction } from "./geo";
+import type { DEMSampler } from "./terrain";
+import {
+  ARRIVAL_MIN_PER_KFT,
+  CORRIDOR_SAMPLE_NM,
+  DEPARTURE_MIN_PER_KFT,
+  MAX_CORRIDOR_NM,
+  TERMINAL_BUFFER_FT,
+  computeTerrainPenalty,
+} from "./terrainPenalty";
+
+function mkAirport(
+  id: string,
+  lat: number,
+  lon: number,
+  elevation_ft = 0,
+): Airport {
+  return {
+    id,
+    lid: id,
+    icao: id,
+    name: id,
+    city: "",
+    state: null,
+    lat,
+    lon,
+    elevation_ft,
+    has_control_tower: false,
+    public_use: true,
+    runway_count: 1,
+    max_runway_ft: 5000,
+    fuels: [],
+  };
+}
+
+const flatDem: DEMSampler = { elevationFt: () => 0 };
+const nullDem: DEMSampler = { elevationFt: () => null };
+
+/** DEM that returns a constant high elevation within a great-circle
+ *  distance window of an anchor point. Outside the window, sea level. */
+function peakAroundPoint(
+  anchor: LatLon,
+  height_ft: number,
+  radius_nm: number,
+): DEMSampler {
+  return {
+    elevationFt: (p) => (greatCircleNM(anchor, p) <= radius_nm ? height_ft : 0),
+  };
+}
+
+const FROM = mkAirport("FROM", 40, -120);
+const TO = mkAirport("TO", 40, -118); // ~92 nm east
+
+describe("computeTerrainPenalty", () => {
+  test("flat terrain produces zero penalty", () => {
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem: flatDem,
+    });
+    expect(r.hr).toBe(0);
+    expect(r.departure_shortfall_ft).toBe(0);
+    expect(r.arrival_shortfall_ft).toBe(0);
+  });
+
+  test("DEM returning null everywhere produces zero penalty", () => {
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem: nullDem,
+    });
+    expect(r.hr).toBe(0);
+  });
+
+  test("a peak just outside the descent corridor does not penalize", () => {
+    // 30 nm corridor max; place a peak 50 nm out from the arrival airport
+    // along the leg's reverse direction (well past the descent window).
+    const farPoint = pointAtFraction(
+      TO,
+      FROM,
+      50 / greatCircleNM(TO, FROM),
+    );
+    const dem = peakAroundPoint(farPoint, 12000, 0.5);
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem,
+    });
+    expect(r.arrival_shortfall_ft).toBe(0);
+  });
+
+  test("a peak just inside the descent corridor produces an arrival penalty", () => {
+    // Place a 5,000 ft peak ~10 nm before the arrival airport along the
+    // leg. At 10 nm out the standard descent path expects to be at
+    // airport_elev + 10 * 1000/3 ≈ 3,333 ft, less the 500 ft buffer
+    // → the descent path must clear ~2,833 ft. A 5,000 ft mountain at
+    // that position is clearly above it, so we expect a positive
+    // shortfall and a measurable penalty.
+    const blocker = pointAtFraction(
+      TO,
+      FROM,
+      10 / greatCircleNM(TO, FROM),
+    );
+    const dem = peakAroundPoint(blocker, 5000, CORRIDOR_SAMPLE_NM);
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem,
+    });
+    expect(r.arrival_shortfall_ft).toBeGreaterThan(1000);
+    // Penalty translates ft of shortfall into hours via
+    // (ft/1000) * (min/60).
+    const expectedHr =
+      (r.arrival_shortfall_ft / 1000) * (ARRIVAL_MIN_PER_KFT / 60) +
+      (r.departure_shortfall_ft / 1000) * (DEPARTURE_MIN_PER_KFT / 60);
+    expect(r.hr).toBeCloseTo(expectedHr, 6);
+    expect(r.hr).toBeGreaterThan(0);
+  });
+
+  test("a peak just inside the climb corridor produces a departure penalty", () => {
+    // 700 fpm at 120 kt → 350 ft/nm climb gradient. At 5 nm out, the
+    // climb path expects ~1,750 ft. A 4,000 ft peak there is well above.
+    const blocker = pointAtFraction(
+      FROM,
+      TO,
+      5 / greatCircleNM(FROM, TO),
+    );
+    const dem = peakAroundPoint(blocker, 4000, CORRIDOR_SAMPLE_NM);
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem,
+    });
+    expect(r.departure_shortfall_ft).toBeGreaterThan(1000);
+    expect(r.arrival_shortfall_ft).toBe(0);
+  });
+
+  test("arrival cost-per-foot is heavier than departure cost-per-foot", () => {
+    // Identical 4,000 ft peak, identically placed 5 nm from each
+    // endpoint. The shortfall magnitudes won't be exactly equal because
+    // the climb gradient (~350 ft/nm at 700 fpm / 120 kt) differs from
+    // the standard descent gradient (333 ft/nm), but the per-foot
+    // time penalty ratio should match the configured constants.
+    const arrivalSpot = pointAtFraction(TO, FROM, 5 / greatCircleNM(TO, FROM));
+    const departureSpot = pointAtFraction(
+      FROM,
+      TO,
+      5 / greatCircleNM(FROM, TO),
+    );
+    const arrivalOnly = peakAroundPoint(arrivalSpot, 4000, CORRIDOR_SAMPLE_NM);
+    const departureOnly = peakAroundPoint(
+      departureSpot,
+      4000,
+      CORRIDOR_SAMPLE_NM,
+    );
+    const a = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem: arrivalOnly,
+    });
+    const d = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem: departureOnly,
+    });
+    expect(a.arrival_shortfall_ft).toBeGreaterThan(0);
+    expect(d.departure_shortfall_ft).toBeGreaterThan(0);
+    const arrivalPerFt = a.hr / a.arrival_shortfall_ft;
+    const departurePerFt = d.hr / d.departure_shortfall_ft;
+    expect(arrivalPerFt / departurePerFt).toBeCloseTo(
+      ARRIVAL_MIN_PER_KFT / DEPARTURE_MIN_PER_KFT,
+      6,
+    );
+  });
+
+  test("cruise altitude below airport elevation produces zero penalty", () => {
+    // Defensive: an upstream caller can't normally produce this, but if
+    // they did, we shouldn't synthesize a corridor.
+    const high = mkAirport("HIGH", 40, -118, 10000);
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: high,
+      cruise_alt_ft: 5000,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem: peakAroundPoint(high, 20000, 5),
+    });
+    expect(r.arrival_shortfall_ft).toBe(0);
+  });
+
+  test("very short legs don't crash and don't sample past the other endpoint", () => {
+    const close = mkAirport("CLOSE", 40, -119.9); // ~4.6 nm
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: close,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem: flatDem,
+    });
+    expect(r.hr).toBe(0);
+  });
+
+  test("buffer is enforced — terrain at exactly the required altitude is still a shortfall", () => {
+    // At 10 nm out on a 1000/3 descent, required_alt = 0 + 3333. A
+    // terrain spike of exactly 3333 still pierces the buffer by 500.
+    const blocker = pointAtFraction(
+      TO,
+      FROM,
+      10 / greatCircleNM(TO, FROM),
+    );
+    const dem = peakAroundPoint(blocker, 3333, CORRIDOR_SAMPLE_NM);
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem,
+    });
+    expect(r.arrival_shortfall_ft).toBeGreaterThanOrEqual(TERMINAL_BUFFER_FT - 50);
+  });
+
+  test("terrain above cruise altitude inside the corridor produces a shortfall", () => {
+    // Past the TOD point of the standard descent slope, the aircraft is
+    // at cruise altitude. Terrain that pokes above cruise inside the
+    // arrival corridor means the leg can't actually be flown at the
+    // chosen altitude — the descent isn't even the bottleneck. This is
+    // the case the pre-fix corridor cap missed (it stopped sampling at
+    // TOD, where the slope intersects cruise).
+    // Cruise 6,500 → TOD on the 1000/3 slope is at 19.5 nm. Place an
+    // 8,000 ft peak at 25 nm out, well past TOD but inside the 30-nm
+    // corridor.
+    const blocker = pointAtFraction(
+      TO,
+      FROM,
+      25 / greatCircleNM(TO, FROM),
+    );
+    const dem = peakAroundPoint(blocker, 8000, CORRIDOR_SAMPLE_NM);
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem,
+    });
+    // limit at d=25 = min(6500, 0 + 25*333) − 500 = min(6500, 8325) − 500
+    //             = 6500 − 500 = 6000.
+    // shortfall = 8000 − 6000 = 2000.
+    expect(r.arrival_shortfall_ft).toBeGreaterThan(1500);
+  });
+
+  test("corridor never exceeds MAX_CORRIDOR_NM even with very high cruise altitudes", () => {
+    // Cruise alt 30,000 would otherwise stretch the descent corridor
+    // to (30000-0) / (1000/3) = 90 nm. The cap should clip it. A peak
+    // 50 nm out should be ignored.
+    const peak = pointAtFraction(TO, FROM, 50 / greatCircleNM(TO, FROM));
+    const dem = peakAroundPoint(peak, 20000, 0.5);
+    expect(MAX_CORRIDOR_NM).toBeLessThan(50);
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 30000,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem,
+    });
+    expect(r.arrival_shortfall_ft).toBe(0);
+  });
+});

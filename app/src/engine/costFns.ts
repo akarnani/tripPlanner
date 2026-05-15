@@ -30,8 +30,12 @@ export const costFunctions: CostFnDefinition[] = [
   {
     id: "shortestTime",
     label: "Shortest total time",
-    description: "Minimize sum of leg times.",
-    build: () => (e: Edge) => e.time_hr,
+    description:
+      "Minimize sum of leg times. Includes a soft terrain penalty " +
+      "(folded in as added flight time) for stops where high terrain " +
+      "would block a gradual climb after takeoff or a standard 1,000/3 " +
+      "nm descent before landing.",
+    build: () => (e: Edge) => e.time_hr + (e.extra?.terrain_penalty_hr ?? 0),
   },
 ];
 

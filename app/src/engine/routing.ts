@@ -8,6 +8,8 @@ import {
   magneticCourseDeg,
   type FlightRule,
 } from "./hemispheric";
+import type { DEMSampler } from "./terrain";
+import { computeTerrainPenalty } from "./terrainPenalty";
 
 /** East-positive magnetic variation in degrees at a point, or null if
  *  unavailable. v1 routes that fall outside the WMM grid silently use
@@ -73,6 +75,11 @@ export interface BuildGraphInput {
    *  origin or arrive at destination even if the caller mistakenly
    *  includes them). */
   excludedAirportIds?: ReadonlySet<string>;
+  /** Optional DEM sampler. When provided, each edge is scored for
+   *  terrain that blocks a gradual departure climb or a standard
+   *  1,000/3 nm arrival descent; the equivalent-time cost lands in
+   *  `edge.extra.terrain_penalty_hr` for cost functions to consume. */
+  dem?: DEMSampler;
 }
 
 export interface Graph {
@@ -104,6 +111,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
     maxLegHr,
     startingFuelGal,
     excludedAirportIds,
+    dem,
   } = input;
   const capacityGal = aircraft.fuel.usable_capacity_gal;
   const originFuelGal =
@@ -158,6 +166,24 @@ export function buildGraph(input: BuildGraphInput): Graph {
       if (distance_nm > range_nm) continue;
       const time_hr = distance_nm / c.tas_kt;
       if (maxLegHr !== undefined && time_hr > maxLegHr) continue;
+      const extra: Record<string, number> = {};
+      if (dem) {
+        const penalty = computeTerrainPenalty({
+          from,
+          to,
+          cruise_alt_ft,
+          climb_speed_kt: climbSpeedKt(aircraft, c.tas_kt),
+          climb_rate_fpm: aircraft.climb.rate_fpm,
+          dem,
+          distance_nm,
+          true_course_deg,
+        });
+        if (penalty.hr > 0) {
+          extra.terrain_penalty_hr = penalty.hr;
+          extra.terrain_departure_shortfall_ft = penalty.departure_shortfall_ft;
+          extra.terrain_arrival_shortfall_ft = penalty.arrival_shortfall_ft;
+        }
+      }
       edges.push({
         from: from.id,
         to: to.id,
@@ -170,6 +196,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
         cruise_alt_ft,
         tas_kt: c.tas_kt,
         fuel_gph: c.fuel_gph,
+        ...(Object.keys(extra).length > 0 ? { extra } : {}),
       });
     }
     cache.set(fromId, edges);
@@ -177,6 +204,15 @@ export function buildGraph(input: BuildGraphInput): Graph {
   }
 
   return { byId, origin, destination, neighbors };
+}
+
+/** Best-guess climb groundspeed for terrain-clearance gradient math.
+ *  Piston singles typically climb at Vy ≈ 0.65 × cruise TAS (e.g. 76 kt
+ *  in a C172S that cruises 120). Using cruise TAS here makes the climb
+ *  path look much shallower than reality and falsely penalizes
+ *  departure terrain the aircraft can actually climb over. */
+function climbSpeedKt(_aircraft: Aircraft, cruise_tas_kt: number): number {
+  return Math.max(50, cruise_tas_kt * 0.65);
 }
 
 export type CostFn = (edge: Edge) => number;

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import type { Airport } from "@/data/loaders";
 import type { PlannedRoute } from "@/engine/plan";
+import type { TerminalCorridorWarning } from "@/engine/terrainPenalty";
 import { interpolateGreatCircle } from "@/engine/geo";
 import statesUrl from "@data/us-states.geojson?url";
 
@@ -16,12 +17,14 @@ const SRC_AIRPORTS = "airports";
 const SRC_ROUTE = "route";
 const SRC_STOPS = "route-stops";
 const SRC_STATES = "us-states";
+const SRC_TERRAIN_WARN = "route-terrain-warnings";
 const LAYER_TOWERED = "airports-towered";
 const LAYER_NONTOWERED = "airports-nontowered";
 const LAYER_ROUTE = "route-line";
 const LAYER_STOPS = "route-stops-pts";
 const LAYER_STOPS_LABELS = "route-stops-labels";
 const LAYER_STATES = "us-states-borders";
+const LAYER_TERRAIN_WARN = "route-terrain-warning-halo";
 
 interface Props {
   airports: readonly Airport[];
@@ -36,6 +39,10 @@ interface Props {
     oldAirportId: string,
     dropLngLat: { lat: number; lon: number },
   ) => boolean;
+  /** Per-airport corridor warnings to highlight on the map. Each warning
+   *  paints an amber halo around its airport with a hover popup that
+   *  spells out the shortfall. */
+  terminalWarnings?: readonly TerminalCorridorWarning[];
 }
 
 function airportsToGeoJSON(
@@ -129,7 +136,58 @@ function buildStopMarkerElement(ident: string): HTMLElement {
   return dot;
 }
 
-export function MapView({ airports, route, onMoveStop }: Props) {
+function terrainWarningsToGeoJSON(
+  route: PlannedRoute | null,
+  warnings: readonly TerminalCorridorWarning[],
+): GeoJSON.FeatureCollection {
+  if (!route || warnings.length === 0) {
+    return { type: "FeatureCollection", features: [] };
+  }
+  // Look up airport lat/lon by ident once instead of per warning.
+  const byIdent = new Map<string, { lat: number; lon: number; name: string }>();
+  for (const leg of route.legs) {
+    for (const a of [leg.fromAirport, leg.toAirport]) {
+      const ident = a.icao ?? a.lid;
+      byIdent.set(ident, { lat: a.lat, lon: a.lon, name: a.name });
+    }
+  }
+  // Multiple warnings may target the same airport (e.g. an intermediate
+  // stop with both arrival and departure issues). Merge them so the map
+  // shows a single halo per airport with combined hover text.
+  const merged = new Map<
+    string,
+    { warnings: TerminalCorridorWarning[]; lat: number; lon: number; name: string }
+  >();
+  for (const w of warnings) {
+    const ap = byIdent.get(w.ident);
+    if (!ap) continue;
+    const entry = merged.get(w.ident);
+    if (entry) entry.warnings.push(w);
+    else merged.set(w.ident, { warnings: [w], ...ap });
+  }
+  const features: GeoJSON.Feature[] = [];
+  for (const [ident, m] of merged) {
+    const summary = m.warnings
+      .map(
+        (w) =>
+          `${w.kind === "departure" ? "Departure" : "Arrival"}: terrain ${Math.round(w.shortfall_ft).toLocaleString()} ft above profile`,
+      )
+      .join(" · ");
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [m.lon, m.lat] },
+      properties: {
+        ident,
+        name: m.name,
+        summary,
+      },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+export function MapView({ airports, route, onMoveStop, terminalWarnings }: Props) {
+  const warnings = terminalWarnings ?? [];
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   // styleReady is state, not a ref, so the source-update effects below
@@ -271,6 +329,27 @@ export function MapView({ airports, route, onMoveStop }: Props) {
         },
       });
 
+      // Terrain-warning halos go BELOW the stop dots so the dot stays
+       // visible and the amber ring just signals "look here". Added
+       // before the stops layer for that reason.
+      map.addSource(SRC_TERRAIN_WARN, {
+        type: "geojson",
+        data: terrainWarningsToGeoJSON(route, warnings),
+      });
+      map.addLayer({
+        id: LAYER_TERRAIN_WARN,
+        type: "circle",
+        source: SRC_TERRAIN_WARN,
+        paint: {
+          "circle-radius": 12,
+          "circle-color": "#f59e0b",
+          "circle-opacity": 0.35,
+          "circle-stroke-color": "#b45309",
+          "circle-stroke-width": 1.5,
+          "circle-stroke-opacity": 0.9,
+        },
+      });
+
       map.addSource(SRC_STOPS, {
         type: "geojson",
         data: stopsToGeoJSON(route),
@@ -329,6 +408,26 @@ export function MapView({ airports, route, onMoveStop }: Props) {
           popup.remove();
         });
       }
+      // Terrain-warning halo popup: shows the shortfall summary for the
+      // hovered stop. Falls through to the route-stop tooltip if both
+      // layers cover the same pixel.
+      map.on("mouseenter", LAYER_TERRAIN_WARN, (e) => {
+        map.getCanvas().style.cursor = "pointer";
+        const f = e.features?.[0];
+        if (!f || f.geometry.type !== "Point") return;
+        const [lon, lat] = f.geometry.coordinates as [number, number];
+        const p = f.properties ?? {};
+        popup
+          .setLngLat([lon, lat])
+          .setHTML(
+            `<div class="text-xs"><strong>${p.ident}</strong> ${p.name}<br/><span class="text-amber-700">⚠ ${p.summary}</span></div>`,
+          )
+          .addTo(map);
+      });
+      map.on("mouseleave", LAYER_TERRAIN_WARN, () => {
+        map.getCanvas().style.cursor = "";
+        popup.remove();
+      });
 
       mapRef.current = map;
       ensureStopMarkers(map, route);
@@ -364,6 +463,12 @@ export function MapView({ airports, route, onMoveStop }: Props) {
       mapRef.current.fitBounds(bounds, { padding: 80, duration: 600 });
     }
   }, [route, styleReady]);
+
+  useEffect(() => {
+    if (!mapRef.current || !styleReady) return;
+    (mapRef.current.getSource(SRC_TERRAIN_WARN) as maplibregl.GeoJSONSource)
+      ?.setData(terrainWarningsToGeoJSON(route, warnings));
+  }, [route, warnings, styleReady]);
 
   return <div ref={containerRef} className="absolute inset-0" />;
 }

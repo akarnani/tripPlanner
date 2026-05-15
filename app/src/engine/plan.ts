@@ -10,6 +10,7 @@ import {
 import { costFnById } from "./costFns";
 import { airportSellsCompatibleFuel } from "./filters";
 import type { FlightRule } from "./hemispheric";
+import type { DEMSampler } from "./terrain";
 
 export interface PlanInput {
   airports: readonly Airport[]; // already filtered
@@ -30,6 +31,10 @@ export interface PlanInput {
   startingFuelGal?: number;
   /** Airports the user has excluded from being a stop. */
   excludedAirportIds?: ReadonlySet<string>;
+  /** Optional DEM sampler. When provided, candidate stops with terrain
+   *  that blocks a gradual climb after takeoff or a standard 1,000/3 nm
+   *  descent before landing are softly penalized in shortestTime. */
+  dem?: DEMSampler;
   /** Cost-function ids to compute one route each. Default:
    *  ["fewestStops", "shortestTime"]. Duplicate routes (same node
    *  sequence) are returned once, keyed to the first objective that
@@ -82,6 +87,7 @@ export function plan(input: PlanInput): PlannedRoute[] {
     maxLegHr: input.maxLegHr,
     startingFuelGal: input.startingFuelGal,
     excludedAirportIds: input.excludedAirportIds,
+    dem: input.dem,
   });
   // One Dijkstra per objective. We deliberately do *not* return Yen's
   // K-shortest within a single objective: on a sparse airport graph the
