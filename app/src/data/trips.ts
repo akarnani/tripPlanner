@@ -27,6 +27,18 @@ export interface SavedTrip {
    *  intermediate stops. Loaded as `[]` for trips saved before this
    *  field existed. */
   pinnedStopIds?: string[];
+  /** Which planning UI the user was in when they saved. Trips saved
+   *  before this field shipped load back into "auto" mode. */
+  planningMode?: "auto" | "interactive";
+  /** For interactive-mode trips, the ordered chain of intermediate
+   *  airport ids the user picked between origin and destination.
+   *  Empty / missing means no stops (direct leg). */
+  interactiveStopIds?: string[];
+  /** For interactive-mode trips, per-leg cruise altitude overrides
+   *  parallel to the leg list (origin→stop1, stop1→stop2, …,
+   *  lastStop→destination). `null` entries mean "let auto pick".
+   *  Length matches `interactiveStopIds.length + 1` when saved. */
+  legAltitudes?: (number | null)[];
   /** ISO timestamp of last save. Used for sort + display. */
   savedAt: string;
 }

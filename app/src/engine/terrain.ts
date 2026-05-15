@@ -79,6 +79,38 @@ export interface AnalyzeInput {
   variation?: VariationFn;
 }
 
+/** Minimum hemispheric-correct cruise altitude that clears the
+ *  terrain on a single great-circle leg, with the standard 2,000 ft
+ *  buffer. Returns 0 when the DEM has no data for the leg. */
+export function legMinSafeCruiseAltFt(input: {
+  from: Airport;
+  to: Airport;
+  flightRule: FlightRule;
+  variation?: VariationFn;
+  dem: DEMSampler;
+  /** Optional override for the vertical buffer above terrain. Defaults
+   *  to TERRAIN_BUFFER_FT (2,000 ft). */
+  buffer_ft?: number;
+}): number {
+  const { from, to, flightRule, variation, dem } = input;
+  const buffer = input.buffer_ft ?? TERRAIN_BUFFER_FT;
+  const dist = greatCircleNM(from, to);
+  if (dist <= 0) return 0;
+  const segments = Math.max(1, Math.ceil(dist / SAMPLE_SPACING_NM));
+  const path = interpolateGreatCircle(from, to, segments);
+  let worst = Math.max(from.elevation_ft ?? 0, to.elevation_ft ?? 0);
+  for (const p of path) {
+    const e = dem.elevationFt(p);
+    if (e !== null && e > worst) worst = e;
+  }
+  if (worst <= 0) return 0;
+  const trueCourse = initialTrueCourseDeg(from, to);
+  const varDeg = variation?.(from) ?? null;
+  const magCourse =
+    varDeg !== null ? magneticCourseDeg(trueCourse, varDeg) : trueCourse;
+  return hemisphericAltitude(worst + buffer, magCourse, flightRule);
+}
+
 export function analyzeTerrain(input: AnalyzeInput): TerrainAnalysis {
   const dem = input.dem ?? nullDEMSampler;
   const samples: TerrainSample[] = [];

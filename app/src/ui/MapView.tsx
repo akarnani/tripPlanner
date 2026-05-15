@@ -3,7 +3,7 @@ import maplibregl from "maplibre-gl";
 import type { Airport } from "@/data/loaders";
 import type { PlannedRoute } from "@/engine/plan";
 import type { TerminalCorridorWarning } from "@/engine/terrainPenalty";
-import { interpolateGreatCircle } from "@/engine/geo";
+import { geodesicCircle, interpolateGreatCircle } from "@/engine/geo";
 import statesUrl from "@data/us-states.geojson?url";
 
 const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
@@ -18,6 +18,8 @@ const SRC_ROUTE = "route";
 const SRC_STOPS = "route-stops";
 const SRC_STATES = "us-states";
 const SRC_TERRAIN_WARN = "route-terrain-warnings";
+const SRC_RANGE_SOLID = "interactive-range-solid";
+const SRC_RANGE_DASHED = "interactive-range-dashed";
 const LAYER_TOWERED = "airports-towered";
 const LAYER_NONTOWERED = "airports-nontowered";
 const LAYER_ROUTE = "route-line";
@@ -25,6 +27,9 @@ const LAYER_STOPS = "route-stops-pts";
 const LAYER_STOPS_LABELS = "route-stops-labels";
 const LAYER_STATES = "us-states-borders";
 const LAYER_TERRAIN_WARN = "route-terrain-warning-halo";
+const LAYER_RANGE_SOLID_FILL = "interactive-range-solid-fill";
+const LAYER_RANGE_SOLID_LINE = "interactive-range-solid-line";
+const LAYER_RANGE_DASHED_LINE = "interactive-range-dashed-line";
 
 interface Props {
   airports: readonly Airport[];
@@ -43,6 +48,27 @@ interface Props {
    *  paints an amber halo around its airport with a hover popup that
    *  spells out the shortfall. */
   terminalWarnings?: readonly TerminalCorridorWarning[];
+  /** When provided, the map is in interactive build mode: a range
+   *  ring is drawn around `center`, a tentative great-circle line is
+   *  drawn from `center` to `destination`, and clicking any airport
+   *  fires `onAirportClick` instead of the default hover-only
+   *  behavior. */
+  interactive?: {
+    center: Airport;
+    destination: Airport;
+    rangeSolidNm: number;
+    rangeDashedNm: number;
+    /** Called with the clicked airport's ICAO or LID (whichever is
+     *  set). The handler should ignore identifiers that match
+     *  `center` or `destination`. */
+    onAirportClick: (ident: string) => void;
+    /** Optional hover enrichment. When provided, the airport popup
+     *  appends this HTML fragment below the standard info — used to
+     *  show distance from the current departure, terrain warnings,
+     *  and altitude recommendations specific to interactive mode.
+     *  Return `null` to skip the augmentation. */
+    onAirportHoverHtml?: (ident: string) => string | null;
+  };
 }
 
 function airportsToGeoJSON(
@@ -186,7 +212,40 @@ function terrainWarningsToGeoJSON(
   return { type: "FeatureCollection", features };
 }
 
-export function MapView({ airports, route, onMoveStop, terminalWarnings }: Props) {
+function rangeRingToGeoJSON(
+  center: Airport | undefined,
+  radiusNm: number,
+): GeoJSON.FeatureCollection {
+  if (!center || radiusNm <= 0) {
+    return { type: "FeatureCollection", features: [] };
+  }
+  const ring = geodesicCircle(
+    { lat: center.lat, lon: center.lon },
+    radiusNm,
+    72,
+  );
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        geometry: {
+          type: "Polygon",
+          coordinates: [ring.map((p) => [p.lon, p.lat])],
+        },
+        properties: { radius_nm: radiusNm },
+      },
+    ],
+  };
+}
+
+export function MapView({
+  airports,
+  route,
+  onMoveStop,
+  terminalWarnings,
+  interactive,
+}: Props) {
   const warnings = terminalWarnings ?? [];
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -205,6 +264,17 @@ export function MapView({ airports, route, onMoveStop, terminalWarnings }: Props
   // tear down and rebuild markers on every parent re-render.
   const onMoveStopRef = useRef(onMoveStop);
   onMoveStopRef.current = onMoveStop;
+  // Same trick for the interactive callback: airport click handlers
+  // are bound once at map load, but the React-side callback closes
+  // over fresh state every render.
+  const onAirportClickRef = useRef<((id: string) => void) | undefined>(
+    interactive?.onAirportClick,
+  );
+  onAirportClickRef.current = interactive?.onAirportClick;
+  const onAirportHoverHtmlRef = useRef<
+    ((ident: string) => string | null) | undefined
+  >(interactive?.onAirportHoverHtml);
+  onAirportHoverHtmlRef.current = interactive?.onAirportHoverHtml;
 
   function ensureStopMarkers(
     map: maplibregl.Map,
@@ -350,6 +420,48 @@ export function MapView({ airports, route, onMoveStop, terminalWarnings }: Props
         },
       });
 
+      // Interactive-mode range rings sit below airports / stops so
+       // the markers stay clickable through the translucent fill.
+       // Dashed ring is line-only; solid ring fills lightly so the
+       // "you can definitely make it" area reads at a glance.
+      map.addSource(SRC_RANGE_DASHED, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: LAYER_RANGE_DASHED_LINE,
+        type: "line",
+        source: SRC_RANGE_DASHED,
+        paint: {
+          "line-color": "#475569",
+          "line-width": 1.5,
+          "line-opacity": 0.75,
+          "line-dasharray": [3, 3],
+        },
+      });
+      map.addSource(SRC_RANGE_SOLID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: LAYER_RANGE_SOLID_FILL,
+        type: "fill",
+        source: SRC_RANGE_SOLID,
+        paint: {
+          "fill-color": "#0f766e",
+          "fill-opacity": 0.08,
+        },
+      });
+      map.addLayer({
+        id: LAYER_RANGE_SOLID_LINE,
+        type: "line",
+        source: SRC_RANGE_SOLID,
+        paint: {
+          "line-color": "#0f766e",
+          "line-width": 1.5,
+          "line-opacity": 0.85,
+        },
+      });
       map.addSource(SRC_STOPS, {
         type: "geojson",
         data: stopsToGeoJSON(route),
@@ -390,16 +502,30 @@ export function MapView({ airports, route, onMoveStop, terminalWarnings }: Props
         closeOnClick: false,
       });
       for (const layer of [LAYER_TOWERED, LAYER_NONTOWERED]) {
+        map.on("click", layer, (e) => {
+          const cb = onAirportClickRef.current;
+          if (!cb) return;
+          const f = e.features?.[0];
+          const ident = f?.properties?.ident;
+          if (typeof ident !== "string") return;
+          // The map's source carries `ident` (ICAO or LID); the App
+          // resolves it to an airport id via its own lookup.
+          cb(ident);
+        });
         map.on("mouseenter", layer, (e) => {
           map.getCanvas().style.cursor = "pointer";
           const f = e.features?.[0];
           if (!f || f.geometry.type !== "Point") return;
           const [lon, lat] = f.geometry.coordinates as [number, number];
           const p = f.properties ?? {};
+          const extraHtml =
+            typeof p.ident === "string"
+              ? (onAirportHoverHtmlRef.current?.(p.ident) ?? null)
+              : null;
           popup
             .setLngLat([lon, lat])
             .setHTML(
-              `<div class="text-xs"><strong>${p.ident}</strong> ${p.name}<br/>${p.city}${p.state ? ", " + p.state : ""}<br/>${p.max_runway_ft.toLocaleString()} ft · ${p.has_control_tower ? "towered" : "non-towered"}</div>`,
+              `<div class="text-xs"><strong>${p.ident}</strong> ${p.name}<br/>${p.city}${p.state ? ", " + p.state : ""}<br/>${p.max_runway_ft.toLocaleString()} ft · ${p.has_control_tower ? "towered" : "non-towered"}${extraHtml ?? ""}</div>`,
             )
             .addTo(map);
         });
@@ -469,6 +595,26 @@ export function MapView({ airports, route, onMoveStop, terminalWarnings }: Props
     (mapRef.current.getSource(SRC_TERRAIN_WARN) as maplibregl.GeoJSONSource)
       ?.setData(terrainWarningsToGeoJSON(route, warnings));
   }, [route, warnings, styleReady]);
+
+  useEffect(() => {
+    if (!mapRef.current || !styleReady) return;
+    const m = mapRef.current;
+    if (interactive) {
+      (m.getSource(SRC_RANGE_SOLID) as maplibregl.GeoJSONSource)?.setData(
+        rangeRingToGeoJSON(interactive.center, interactive.rangeSolidNm),
+      );
+      (m.getSource(SRC_RANGE_DASHED) as maplibregl.GeoJSONSource)?.setData(
+        rangeRingToGeoJSON(interactive.center, interactive.rangeDashedNm),
+      );
+    } else {
+      const empty: GeoJSON.FeatureCollection = {
+        type: "FeatureCollection",
+        features: [],
+      };
+      (m.getSource(SRC_RANGE_SOLID) as maplibregl.GeoJSONSource)?.setData(empty);
+      (m.getSource(SRC_RANGE_DASHED) as maplibregl.GeoJSONSource)?.setData(empty);
+    }
+  }, [interactive, styleReady]);
 
   return <div ref={containerRef} className="absolute inset-0" />;
 }

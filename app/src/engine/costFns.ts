@@ -58,6 +58,17 @@ function shortLegPenalty(distance_nm: number, maxLegNm: number): number {
 
 export const costFunctions: CostFnDefinition[] = [
   {
+    // Hand-built routes from the interactive planner reuse the same
+    // PlannedRoute pipeline as the auto planner — they're tagged with
+    // this id so the LegTable header reads "Interactive build" rather
+    // than the raw string. The `build` function is never called: the
+    // interactive engine computes per-leg numbers directly.
+    id: "interactive",
+    label: "Interactive build",
+    description: "Hand-picked stops from the interactive planner.",
+    build: () => () => 0,
+  },
+  {
     id: "totalTime",
     label: "Total time",
     description:

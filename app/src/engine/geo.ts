@@ -52,6 +52,41 @@ export function interpolateGreatCircle(
   return out;
 }
 
+/** Approximate a geodesic circle of `radiusNm` around `center`, sampled
+ *  at `segments` equally-spaced bearings (0..360°). Returns a closed
+ *  ring (first point repeated as the last) so the result can drop
+ *  straight into a GeoJSON Polygon. The result is a true small circle
+ *  on the sphere — not an equirectangular ellipse — so the rendered
+ *  ring stays visually correct near the poles or at large radii. */
+export function geodesicCircle(
+  center: LatLon,
+  radiusNm: number,
+  segments: number,
+): LatLon[] {
+  if (radiusNm <= 0 || segments < 3) return [];
+  const δ = radiusNm / EARTH_RADIUS_NM;
+  const φ1 = toRad(center.lat);
+  const λ1 = toRad(center.lon);
+  const sinφ1 = Math.sin(φ1);
+  const cosφ1 = Math.cos(φ1);
+  const sinδ = Math.sin(δ);
+  const cosδ = Math.cos(δ);
+  const out: LatLon[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const θ = (2 * Math.PI * i) / segments;
+    const sinφ2 = sinφ1 * cosδ + cosφ1 * sinδ * Math.cos(θ);
+    const φ2 = Math.asin(sinφ2);
+    const λ2 =
+      λ1 +
+      Math.atan2(
+        Math.sin(θ) * sinδ * cosφ1,
+        cosδ - sinφ1 * sinφ2,
+      );
+    out.push({ lat: toDeg(φ2), lon: toDeg(λ2) });
+  }
+  return out;
+}
+
 /** Point at fractional great-circle distance from `a` toward `b`. f<=0
  *  returns a, f>=1 returns b. Useful when only one point is needed and
  *  building the full interpolated path would be wasteful. */

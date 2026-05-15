@@ -248,4 +248,26 @@ test.describe("trip planner smoke", () => {
     expect(body).toContain("KSEA");
     expect(body).toContain("KBOI");
   });
+
+  test("interactive mode swaps the trip panel and shows range info", async ({
+    page,
+  }) => {
+    // Entering interactive mode hides the auto-plan controls and
+    // brings up the InteractivePanel with the stop chain and range
+    // numbers. With no stops yet, the origin → destination leg is
+    // the entire route.
+    await page.getByRole("button", { name: "Build interactively →" }).click();
+    await expect(
+      page.getByRole("button", { name: "Switch to auto plan" }),
+    ).toBeVisible();
+    // The leg table now reflects the interactive build.
+    await expect(
+      page.getByRole("button", { name: /Interactive build · \d+ stop/ }),
+    ).toBeVisible({ timeout: 5_000 });
+    // Range numbers are populated (any value over zero).
+    await expect(page.getByText(/Range from here:/)).toBeVisible();
+    // Returning to auto mode brings the Plan button back.
+    await page.getByRole("button", { name: "Switch to auto plan" }).click();
+    await expect(page.getByTestId("plan-trip")).toBeVisible();
+  });
 });

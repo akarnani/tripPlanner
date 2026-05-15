@@ -88,4 +88,28 @@ describe("trips localStorage CRUD", () => {
     localStorage.setItem("trip-planner.trips.v1", "{not-json}");
     expect(listTrips()).toEqual([]);
   });
+
+  test("interactive selections round-trip with the trip", () => {
+    const trip: SavedTrip = {
+      ...mkTrip("interactive", "2026-05-15T12:00:00Z"),
+      planningMode: "interactive",
+      interactiveStopIds: ["a1", "a2"],
+      legAltitudes: [9500, null, 11500],
+    };
+    saveTrip(trip);
+    const [loaded] = listTrips();
+    expect(loaded.planningMode).toBe("interactive");
+    expect(loaded.interactiveStopIds).toEqual(["a1", "a2"]);
+    expect(loaded.legAltitudes).toEqual([9500, null, 11500]);
+  });
+
+  test("trips saved before interactive fields existed load as auto", () => {
+    // Synthesize an old-shape blob directly into storage.
+    const old = mkTrip("legacy", "2026-05-10T00:00:00Z");
+    localStorage.setItem("trip-planner.trips.v1", JSON.stringify([old]));
+    const [loaded] = listTrips();
+    expect(loaded.planningMode).toBeUndefined();
+    expect(loaded.interactiveStopIds).toBeUndefined();
+    expect(loaded.legAltitudes).toBeUndefined();
+  });
 });
