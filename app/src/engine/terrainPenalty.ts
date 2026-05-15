@@ -28,14 +28,14 @@ export const MAX_CORRIDOR_NM = 30;
 export const CORRIDOR_SAMPLE_NM = 1;
 
 /** Minutes of equivalent flight time charged per 1,000 ft of arrival
- *  shortfall. ~3 min per 1,000 ft is roughly what circling at 500 fpm
- *  costs to shed unwanted altitude. */
-export const ARRIVAL_MIN_PER_KFT = 3;
+ *  shortfall. Roughly approximates the cost of holding/circling to shed
+ *  unwanted altitude when the standard descent is blocked. */
+export const ARRIVAL_MIN_PER_KFT = 5;
 
 /** Minutes of equivalent flight time charged per 1,000 ft of departure
  *  shortfall. Climb-before-on-course costs less than a forced hold —
  *  this is the "less bad" case per the routing requirements. */
-export const DEPARTURE_MIN_PER_KFT = 1;
+export const DEPARTURE_MIN_PER_KFT = 2;
 
 export interface TerrainPenaltyInput {
   from: Airport;
