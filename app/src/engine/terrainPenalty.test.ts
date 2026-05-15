@@ -4,6 +4,7 @@ import type { LatLon } from "./geo";
 import { greatCircleNM, pointAtFraction } from "./geo";
 import type { DEMSampler } from "./terrain";
 import {
+  ARRIVAL_FLOOR_AGL_FT,
   ARRIVAL_MIN_PER_KFT,
   CORRIDOR_SAMPLE_NM,
   DEPARTURE_MIN_PER_KFT,
@@ -273,6 +274,85 @@ describe("computeTerrainPenalty", () => {
     //             = 6500 − 500 = 6000.
     // shortfall = 8000 − 6000 = 2000.
     expect(r.arrival_shortfall_ft).toBeGreaterThan(1500);
+  });
+
+  test("low terrain inside pattern altitude near the arrival airport is not flagged", () => {
+    // Mountain-elevation field (KRKS-like, 6,800 ft) with surrounding
+    // hills at 7,000 ft (~200 ft AGL). The aircraft would enter the
+    // pattern at ~7,800 ft, well above the hills, so this should *not*
+    // produce an arrival warning. Without the pattern-altitude floor,
+    // the descent slope projects the aircraft to field elevation at
+    // d=0 and the buffer drives the limit below the field, so any
+    // hill above field elevation would generate a shortfall.
+    const high = mkAirport("HIGH", 40, -118, 6800);
+    const dem: DEMSampler = {
+      // 200 ft AGL hill 2 nm in on the approach corridor.
+      elevationFt: (p) => {
+        const hill = pointAtFraction(high, FROM, 2 / greatCircleNM(high, FROM));
+        return greatCircleNM(hill, p) <= CORRIDOR_SAMPLE_NM ? 7000 : 6800;
+      },
+    };
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: high,
+      cruise_alt_ft: 10500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem,
+    });
+    expect(r.arrival_shortfall_ft).toBe(0);
+  });
+
+  test("terrain that pokes above pattern altitude near arrival still flags", () => {
+    // Same field but with a hill at field + 1,200 ft (above pattern
+    // altitude). The aircraft can't be at the pattern altitude floor
+    // without clipping it — the warning must fire.
+    const high = mkAirport("HIGH", 40, -118, 6800);
+    const dem: DEMSampler = {
+      elevationFt: (p) => {
+        const hill = pointAtFraction(high, FROM, 2 / greatCircleNM(high, FROM));
+        return greatCircleNM(hill, p) <= CORRIDOR_SAMPLE_NM
+          ? 6800 + ARRIVAL_FLOOR_AGL_FT + 200
+          : 6800;
+      },
+    };
+    const r = computeTerrainPenalty({
+      from: FROM,
+      to: high,
+      cruise_alt_ft: 10500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem,
+    });
+    // Pattern floor (6,800 + 1,000 = 7,800) - 500 ft buffer = 7,300.
+    // Hill at 7,800 + 200 = 8,000. Shortfall ≈ 700 ft.
+    expect(r.arrival_shortfall_ft).toBeGreaterThan(500);
+  });
+
+  test("departure corridor is unaffected by the arrival-side pattern floor", () => {
+    // 200 ft AGL hill 2 nm out on departure from a high field. Climb
+    // gradient 350 ft/nm at 700 fpm / 78 kt → at 2 nm the climb path
+    // expects ~700 AGL, buffer drops the limit to ~200 AGL → a hill
+    // at 200 AGL still needs to be cleared, so it produces a small
+    // departure shortfall. Confirms that the pattern-altitude floor
+    // applies *only* to the arrival corridor.
+    const high = mkAirport("HIGH", 40, -120, 6800);
+    const far = mkAirport("FAR", 40, -118, 0);
+    const dem: DEMSampler = {
+      elevationFt: (p) => {
+        const hill = pointAtFraction(high, far, 2 / greatCircleNM(high, far));
+        return greatCircleNM(hill, p) <= CORRIDOR_SAMPLE_NM ? 7000 : 0;
+      },
+    };
+    const r = computeTerrainPenalty({
+      from: high,
+      to: far,
+      cruise_alt_ft: 10500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem,
+    });
+    expect(r.departure_shortfall_ft).toBeGreaterThan(0);
   });
 
   test("corridor never exceeds MAX_CORRIDOR_NM even with very high cruise altitudes", () => {
