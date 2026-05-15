@@ -10,6 +10,7 @@ import {
 import { costFnById } from "./costFns";
 import { airportSellsCompatibleFuel } from "./filters";
 import type { FlightRule } from "./hemispheric";
+import { usableRange } from "./performance";
 import type { DEMSampler } from "./terrain";
 
 export interface PlanInput {
@@ -36,9 +37,8 @@ export interface PlanInput {
    *  descent before landing are softly penalized in shortestTime. */
   dem?: DEMSampler;
   /** Cost-function ids to compute one route each. Default:
-   *  ["fewestStops", "shortestTime"]. Duplicate routes (same node
-   *  sequence) are returned once, keyed to the first objective that
-   *  produced them. */
+   *  ["totalTime"]. Duplicate routes (same node sequence) are returned
+   *  once, keyed to the first objective that produced them. */
   objectives?: string[];
   /** Optional per-objective parameters, keyed by objective id. */
   params?: Record<string, Record<string, number>>;
@@ -61,7 +61,7 @@ export interface PlannedRoute {
   };
 }
 
-const DEFAULT_OBJECTIVES = ["fewestStops", "shortestTime"];
+const DEFAULT_OBJECTIVES = ["totalTime"];
 
 export function plan(input: PlanInput): PlannedRoute[] {
   const {
@@ -89,6 +89,17 @@ export function plan(input: PlanInput): PlannedRoute[] {
     excludedAirportIds: input.excludedAirportIds,
     dem: input.dem,
   });
+  // Practical full-tank cruise range at the chosen altitude. Used by
+  // the built-in cost functions as the normalization constant for the
+  // "unused range" penalty that biases the planner toward evenly-spaced
+  // fuel stops. Computed once here so every objective sees the same
+  // value; callers can still override via `params[id].maxLegNm`.
+  const maxLegNm = usableRange({
+    aircraft,
+    altitude_ft: targetAltFt,
+    reserve_hours: reserveHr,
+  }).range_nm;
+
   // One Dijkstra per objective. We deliberately do *not* return Yen's
   // K-shortest within a single objective: on a sparse airport graph the
   // 2nd/3rd "different" paths almost always backtrack, which is useless
@@ -98,7 +109,7 @@ export function plan(input: PlanInput): PlannedRoute[] {
   for (const id of objectives) {
     const def = costFnById(id);
     if (!def) continue;
-    const costFn = def.build(params?.[id] ?? {});
+    const costFn = def.build({ maxLegNm, ...(params?.[id] ?? {}) });
     const [best] = kShortestPaths(graph, costFn, 1);
     if (!best) continue;
     const key = best.nodes.join(">");

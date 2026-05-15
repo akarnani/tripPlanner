@@ -28,7 +28,7 @@ function mkRoute(): PlannedRoute {
   const b = ap("B", 47.62, -117.53, "KGEG");
   const c = ap("C", 43.56, -116.22, "KBOI");
   return {
-    costFnId: "fewestStops",
+    costFnId: "totalTime",
     cost: 2,
     legs: [
       {
@@ -96,7 +96,7 @@ describe("toFPL", () => {
     const a = ap("X1", 40, -120, null);
     const b = ap("X2", 41, -121, null);
     const route: PlannedRoute = {
-      costFnId: "fewestStops",
+      costFnId: "totalTime",
       cost: 1,
       legs: [
         {

@@ -42,10 +42,11 @@ function aircraft(): Aircraft {
 }
 
 describe("plan() alternatives are useful, not arbitrary k-shortest paths", () => {
-  test("returns one route per objective, deduped when objectives agree", () => {
+  test("returns one route per objective", () => {
     // Five colinear airports A→B→C→D→E. With 1500-nm range, the
-    // direct A→E is optimal under both fewestStops AND shortestTime,
-    // so plan() returns a single deduped route.
+    // direct A→E is the optimal totalTime route — every intermediate
+    // stop just adds ground time without saving any cruise time in a
+    // no-wind model.
     const A = ap("A", 40, -120);
     const B = ap("B", 40, -115);
     const C = ap("C", 40, -110);
@@ -62,7 +63,7 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
     });
     expect(result).toHaveLength(1);
     expect(result[0].legs).toHaveLength(1);
-    expect(result[0].costFnId).toBe("fewestStops");
+    expect(result[0].costFnId).toBe("totalTime");
   });
 
   test("never returns a backtracking 'alternative' on a sparse graph", () => {
@@ -82,7 +83,7 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
       targetAltFt: 6500,
       flightRule: "VFR",
       reserveHr: 0.75,
-      objectives: ["fewestStops", "shortestTime"],
+      objectives: ["totalTime"],
     });
     // Every returned route's total distance must be at most ~1.05× the
     // direct great-circle distance — a backtracking k-shortest path
@@ -121,11 +122,13 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
     }
   });
 
-  test("fewestStops tiebreaks on time when stops are equal", () => {
+  test("prefers the on-line waypoint over a same-stop-count detour", () => {
     // Origin and destination with two parallel one-stop options.
-    // Direct O→D (920 nm) is out of range, so the fewest-stops floor
-    // is two legs. M is on the straight line; S detours ~120 nm north
-    // and produces a longer total path. The tiebreak should pick M.
+    // Direct O→D (920 nm) is out of range, so the floor is two legs.
+    // M is on the straight line; S detours ~120 nm north and produces
+    // a longer total path. Both routes have the same number of stops,
+    // so the only differentiator is flight time — totalTime should
+    // pick M.
     const O = ap("O", 40, -120);
     const D = ap("D", 40, -100);
     const M = ap("M", 40, -110); // on the great-circle path
@@ -138,13 +141,13 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
       targetAltFt: 6500,
       flightRule: "VFR",
       reserveHr: 0.75,
-      // Force the fewest-stops floor up to 2 by capping legs.
+      // Force a 2-leg route by capping per-leg time.
       maxLegHr: 5,
-      objectives: ["fewestStops"],
+      objectives: ["totalTime"],
     });
     expect(result).toHaveLength(1);
     expect(result[0].legs).toHaveLength(2);
-    // Tiebreak picks the on-line waypoint M over the northern detour S.
+    // Pick the on-line waypoint M over the northern detour S.
     expect(result[0].legs[0].toAirport.id).toBe("M");
   });
 
@@ -237,6 +240,69 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
     }
   });
 
+  test("prefers evenly-spaced stops over a wasteful short first leg", () => {
+    // Repro for the KPAO→KRKS→KOSH bug: KRKS→KOSH needs two fuel
+    // stops, and there are multiple 3-leg paths that satisfy the
+    // range constraint. The old cost function had no way to choose
+    // between them and would pick whichever the airport iteration
+    // order surfaced first — often one that stops 86 nm after the
+    // previous refuel and then takes long legs from there.
+    //
+    // Layout (lat 40, west→east at 46 nm/° lon):
+    //   O      -120  (origin, 0 nm)
+    //   close  -118.13  (86 nm)   — wasteful early stop
+    //   mid1   -113.33  (307 nm)  — well-spaced first stop
+    //   midA   -109.13  (500 nm)  — reachable only via close/mid1
+    //   mid2   -106.66  (614 nm)
+    //   D      -100   (920 nm)
+    //
+    // Aircraft range ≈ 460 nm forces 3 legs (no 2-leg path fits)
+    // and rules out a direct O→midA hop, so the planner must pick
+    // among:
+    //   wasteful: O → close → midA  → D  (86 + 414 + 420)
+    //   mixed:    O → mid1  → midA  → D  (307 + 193 + 420)
+    //   spaced:   O → mid1  → mid2  → D  (307 + 307 + 306)
+    const O = ap("O", 40, -120);
+    const close = ap("close", 40, -118.13);
+    const mid1 = ap("mid1", 40, -113.33);
+    const midA = ap("midA", 40, -109.13);
+    const mid2 = ap("mid2", 40, -106.66);
+    const D = ap("D", 40, -100);
+    // 47-gal aircraft → range ≈ 460 nm at 120 kt / 10 gph with a
+    // 0.75 hr reserve, after accounting for climb fuel.
+    const ac: Aircraft = {
+      slug: "t-small",
+      make: "T",
+      model: "T",
+      fuel: { type: "100LL", density_lb_per_gal: 6, usable_capacity_gal: 47 },
+      cruise: [
+        { altitude_ft: 0, power_pct: 75, tas_kt: 120, fuel_gph: 10 },
+        { altitude_ft: 18000, power_pct: 75, tas_kt: 120, fuel_gph: 10 },
+      ],
+      climb: { rate_fpm: 700, fuel_to_climb_gph: 10 },
+    };
+    const result = plan({
+      airports: [O, close, mid1, midA, mid2, D],
+      origin: "O",
+      destination: "D",
+      aircraft: ac,
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      objectives: ["totalTime"],
+    });
+    expect(result.length).toBeGreaterThan(0);
+    for (const r of result) {
+      // Should pick the evenly-spaced 3-leg route, not the wasteful
+      // 86-nm first leg.
+      const ids = [
+        r.legs[0].fromAirport.id,
+        ...r.legs.map((l) => l.toAirport.id),
+      ];
+      expect(ids).toEqual(["O", "mid1", "mid2", "D"]);
+    }
+  });
+
   test("each returned route is unique by node sequence", () => {
     const A = ap("A", 40, -120);
     const B = ap("B", 40, -115);
@@ -249,7 +315,7 @@ describe("plan() alternatives are useful, not arbitrary k-shortest paths", () =>
       targetAltFt: 6500,
       flightRule: "VFR",
       reserveHr: 0.75,
-      objectives: ["fewestStops", "shortestTime"],
+      objectives: ["totalTime"],
     });
     const keys = new Set(result.map((r) => r.legs.map((l) => l.to).join(">")));
     expect(keys.size).toBe(result.length);

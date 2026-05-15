@@ -82,7 +82,7 @@ test.describe("trip planner smoke", () => {
     await btn.click();
 
     await expect(
-      page.getByRole("button", { name: /Fewest stops · \d+ stop/ }).first(),
+      page.getByRole("button", { name: /Total time · \d+ stop/ }).first(),
     ).toBeVisible({ timeout: 30_000 });
     await expect(btn).toHaveAttribute("data-state", "idle");
 
@@ -108,7 +108,7 @@ test.describe("trip planner smoke", () => {
     await page.getByTestId("plan-trip").click();
 
     const legHeader = page.getByRole("button", {
-      name: /Fewest stops · \d+ stop/,
+      name: /Total time · \d+ stop/,
     });
     await expect(legHeader.first()).toBeVisible({ timeout: 30_000 });
 
@@ -140,7 +140,7 @@ test.describe("trip planner smoke", () => {
   }) => {
     await page.getByTestId("plan-trip").click();
     await expect(
-      page.getByRole("button", { name: /Fewest stops · \d+ stop/ }).first(),
+      page.getByRole("button", { name: /Total time · \d+ stop/ }).first(),
     ).toBeVisible({ timeout: 30_000 });
 
     const firstAlt = () =>
@@ -213,7 +213,7 @@ test.describe("trip planner smoke", () => {
   }) => {
     await page.getByTestId("plan-trip").click();
     await expect(
-      page.getByRole("button", { name: /Fewest stops · \d+ stop/ }).first(),
+      page.getByRole("button", { name: /Total time · \d+ stop/ }).first(),
     ).toBeVisible({ timeout: 30_000 });
 
     const targetInput = page.getByLabel("Target altitude (ft)");
@@ -233,7 +233,7 @@ test.describe("trip planner smoke", () => {
   test("GPX export downloads a non-empty file", async ({ page }) => {
     await page.getByTestId("plan-trip").click();
     await expect(
-      page.getByRole("button", { name: /Fewest stops · \d+ stop/ }).first(),
+      page.getByRole("button", { name: /Total time · \d+ stop/ }).first(),
     ).toBeVisible({ timeout: 30_000 });
 
     const downloadPromise = page.waitForEvent("download");
