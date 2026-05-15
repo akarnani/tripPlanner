@@ -4,7 +4,6 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import type { Airport } from "@/data/loaders";
-import type { Aircraft } from "@/data/aircraft";
 import { TerrainGridDEMSampler } from "./terrainGrid";
 import { computeTerrainPenalty } from "./terrainPenalty";
 import { greatCircleNM } from "./geo";
@@ -52,15 +51,6 @@ function ap(id: string, lat: number, lon: number, elev: number): Airport {
     fuels: [],
   };
 }
-
-const aircraft: Aircraft = {
-  slug: "c172",
-  make: "Cessna",
-  model: "172S",
-  fuel: { type: "100LL", density_lb_per_gal: 6, usable_capacity_gal: 53 },
-  cruise: [{ altitude_ft: 6000, power_pct: 75, tas_kt: 120, fuel_gph: 8.8 }],
-  climb: { rate_fpm: 700, fuel_to_climb_gph: 10 },
-};
 
 // Skipped by default — manual benchmark. Run with:
 //   npx vitest run app/src/engine/terrainPenalty.perf.test.ts \
