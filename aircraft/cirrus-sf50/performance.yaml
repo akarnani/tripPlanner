@@ -1,0 +1,122 @@
+make: Cirrus
+model: SF50
+fuel:
+  type: Jet-A
+  density_lb_per_gal: 6.7
+  usable_capacity_gal: 296
+# Cruise rows are taken from the SF50 AFM Section 5 cruise tables at
+# 6000 lb gross weight, ISA standard temperature, second-from-top
+# power setting (one notch below Maximum Continuous Thrust). %N1 is
+# reported as power_pct, which is the conventional published power
+# reference for turbofan engines.
+cruise:
+  - altitude_ft: 5000
+    power_pct: 87
+    tas_kt: 234
+    fuel_gph: 88
+  - altitude_ft: 10000
+    power_pct: 90
+    tas_kt: 252
+    fuel_gph: 86
+  - altitude_ft: 15000
+    power_pct: 92
+    tas_kt: 260
+    fuel_gph: 78
+  - altitude_ft: 17000
+    power_pct: 93
+    tas_kt: 265
+    fuel_gph: 76
+  - altitude_ft: 19000
+    power_pct: 94
+    tas_kt: 270
+    fuel_gph: 74
+  - altitude_ft: 21000
+    power_pct: 95
+    tas_kt: 274
+    fuel_gph: 71
+  - altitude_ft: 23000
+    power_pct: 95
+    tas_kt: 276
+    fuel_gph: 68
+  - altitude_ft: 25000
+    power_pct: 95
+    tas_kt: 278
+    fuel_gph: 66
+  - altitude_ft: 27000
+    power_pct: 96
+    tas_kt: 279
+    fuel_gph: 62
+  - altitude_ft: 28000
+    power_pct: 96
+    tas_kt: 280
+    fuel_gph: 61
+climb:
+  # Max Rate of Climb at 6000 lb gross, sea level, ISA (15 °C),
+  # interpolated between the 10 °C (2125 fpm) and 20 °C (1613 fpm)
+  # rows of the Enroute Climb table.
+  rate_fpm: 1869
+  fuel_to_climb_gph: 110
+  # Cumulative time/fuel/distance to climb from sea level at 6000 lb
+  # gross weight, ISA standard temperature. From AFM "Time, Fuel, &
+  # Distance to Climb" chart, ISA / Aircraft Weight: 6000 lb.
+  table:
+    - altitude_ft: 0
+      time_min: 0
+      fuel_gal: 0.0
+      distance_nm: 0
+    - altitude_ft: 2000
+      time_min: 1
+      fuel_gal: 2
+      distance_nm: 3
+    - altitude_ft: 4000
+      time_min: 2
+      fuel_gal: 5
+      distance_nm: 6
+    - altitude_ft: 6000
+      time_min: 3
+      fuel_gal: 7
+      distance_nm: 9
+    - altitude_ft: 8000
+      time_min: 5
+      fuel_gal: 9
+      distance_nm: 13
+    - altitude_ft: 10000
+      time_min: 6
+      fuel_gal: 11
+      distance_nm: 16
+    - altitude_ft: 12000
+      time_min: 7
+      fuel_gal: 13
+      distance_nm: 20
+    - altitude_ft: 14000
+      time_min: 8
+      fuel_gal: 16
+      distance_nm: 24
+    - altitude_ft: 16000
+      time_min: 10
+      fuel_gal: 18
+      distance_nm: 29
+    - altitude_ft: 18000
+      time_min: 11
+      fuel_gal: 20
+      distance_nm: 33
+    - altitude_ft: 20000
+      time_min: 13
+      fuel_gal: 22
+      distance_nm: 38
+    - altitude_ft: 22000
+      time_min: 15
+      fuel_gal: 24
+      distance_nm: 44
+    - altitude_ft: 24000
+      time_min: 17
+      fuel_gal: 27
+      distance_nm: 51
+    - altitude_ft: 26000
+      time_min: 19
+      fuel_gal: 29
+      distance_nm: 59
+    - altitude_ft: 28000
+      time_min: 21
+      fuel_gal: 32
+      distance_nm: 68
