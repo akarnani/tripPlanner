@@ -234,8 +234,12 @@ export function App() {
 
   function handleReplanAtMinSafe() {
     if (!terrain) return;
-    setTargetAltFt(terrain.replanTargetFt);
-    handlePlan();
+    const newAlt = terrain.replanTargetFt;
+    setTargetAltFt(newAlt);
+    // Plan synchronously with the new altitude — setTargetAltFt only
+    // takes effect on the next render, so handlePlan()'s closure would
+    // otherwise see the stale value and replan at the old altitude.
+    runWithSpinner(newAlt);
   }
 
   function handleExcludeStops(airportIds: string[]) {
