@@ -1,0 +1,91 @@
+make: Cessna
+model: TR182
+fuel:
+  type: 100LL
+  density_lb_per_gal: 6.0
+  usable_capacity_gal: 88
+cruise:
+  - altitude_ft: 2000
+    power_pct: 78
+    tas_kt: 150
+    fuel_gph: 14.8
+  - altitude_ft: 6000
+    power_pct: 72
+    tas_kt: 149
+    fuel_gph: 13.6
+  - altitude_ft: 8000
+    power_pct: 73
+    tas_kt: 153
+    fuel_gph: 13.8
+  - altitude_ft: 10000
+    power_pct: 72
+    tas_kt: 156
+    fuel_gph: 13.8
+  - altitude_ft: 12000
+    power_pct: 72
+    tas_kt: 159
+    fuel_gph: 13.8
+  - altitude_ft: 14000
+    power_pct: 71
+    tas_kt: 161
+    fuel_gph: 13.7
+  - altitude_ft: 16000
+    power_pct: 72
+    tas_kt: 164
+    fuel_gph: 13.6
+  - altitude_ft: 18000
+    power_pct: 71
+    tas_kt: 166
+    fuel_gph: 13.5
+  - altitude_ft: 20000
+    power_pct: 71
+    tas_kt: 168
+    fuel_gph: 13.5
+climb:
+  rate_fpm: 1040
+  fuel_to_climb_gph: 24
+  table:
+    - altitude_ft: 0
+      time_min: 0
+      fuel_gal: 0.0
+      distance_nm: 0
+    - altitude_ft: 2000
+      time_min: 2
+      fuel_gal: 0.8
+      distance_nm: 3
+    - altitude_ft: 4000
+      time_min: 4
+      fuel_gal: 1.6
+      distance_nm: 6
+    - altitude_ft: 6000
+      time_min: 6
+      fuel_gal: 2.4
+      distance_nm: 9
+    - altitude_ft: 8000
+      time_min: 8
+      fuel_gal: 3.3
+      distance_nm: 13
+    - altitude_ft: 10000
+      time_min: 10
+      fuel_gal: 4.2
+      distance_nm: 16
+    - altitude_ft: 12000
+      time_min: 13
+      fuel_gal: 5.1
+      distance_nm: 20
+    - altitude_ft: 14000
+      time_min: 15
+      fuel_gal: 6.1
+      distance_nm: 25
+    - altitude_ft: 16000
+      time_min: 18
+      fuel_gal: 7.1
+      distance_nm: 29
+    - altitude_ft: 18000
+      time_min: 20
+      fuel_gal: 8.2
+      distance_nm: 34
+    - altitude_ft: 20000
+      time_min: 23
+      fuel_gal: 9.4
+      distance_nm: 40
