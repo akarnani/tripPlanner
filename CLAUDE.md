@@ -59,3 +59,4 @@ The deployed site runs on Cloudflare Pages, which builds directly from the repo 
 - US-only scope for v1; weather and live fuel pricing are out of scope.
 - Engine code is pure and framework-agnostic — keep React imports out of `app/src/engine/` and `app/src/exports/`.
 - Tests are colocated next to source as `*.test.ts`; E2E tests are in `tests/e2e/` and run separately.
+- As much as is reasonable keep each feature in one commit — amend and force-push to update an open PR rather than stacking follow-up "fix" commits.
