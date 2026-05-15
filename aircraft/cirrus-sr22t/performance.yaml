@@ -1,0 +1,128 @@
+make: Cirrus
+model: SR22T
+fuel:
+  type: 100LL
+  density_lb_per_gal: 6.0
+  usable_capacity_gal: 92
+# All cruise rows are from the SR22T POH Section 5 "Cruise Performance"
+# table at 3200 lb, ISA standard temperature, 75% power (% of 315 HP).
+# The turbo-normalized engine can hold 75% all the way to the 25,000 ft
+# certified ceiling.
+cruise:
+  - altitude_ft: 2000
+    power_pct: 75
+    tas_kt: 163
+    fuel_gph: 16.4
+  - altitude_ft: 4000
+    power_pct: 75
+    tas_kt: 166
+    fuel_gph: 16.4
+  - altitude_ft: 6000
+    power_pct: 75
+    tas_kt: 169
+    fuel_gph: 16.4
+  - altitude_ft: 8000
+    power_pct: 75
+    tas_kt: 173
+    fuel_gph: 16.4
+  - altitude_ft: 10000
+    power_pct: 75
+    tas_kt: 176
+    fuel_gph: 16.4
+  - altitude_ft: 12000
+    power_pct: 75
+    tas_kt: 179
+    fuel_gph: 16.4
+  - altitude_ft: 14000
+    power_pct: 75
+    tas_kt: 183
+    fuel_gph: 16.4
+  - altitude_ft: 16000
+    power_pct: 75
+    tas_kt: 186
+    fuel_gph: 16.4
+  - altitude_ft: 18000
+    power_pct: 75
+    tas_kt: 190
+    fuel_gph: 16.4
+  - altitude_ft: 20000
+    power_pct: 75
+    tas_kt: 193
+    fuel_gph: 16.4
+  - altitude_ft: 22000
+    power_pct: 75
+    tas_kt: 197
+    fuel_gph: 16.4
+  - altitude_ft: 24000
+    power_pct: 75
+    tas_kt: 201
+    fuel_gph: 16.4
+  - altitude_ft: 25000
+    power_pct: 75
+    tas_kt: 203
+    fuel_gph: 16.4
+climb:
+  # Best Rate of Climb at gross (3400 lb), sea level, ISA from the
+  # Enroute Rate of Climb table.
+  rate_fpm: 1218
+  fuel_to_climb_gph: 36
+  # Cumulative time/fuel/distance from sea level at 3400 lb gross,
+  # ISA standard temperature, from "Time, Fuel & Distance to Climb:
+  # Full Power Climb".
+  table:
+    - altitude_ft: 0
+      time_min: 0.0
+      fuel_gal: 0.0
+      distance_nm: 0.0
+    - altitude_ft: 2000
+      time_min: 1.6
+      fuel_gal: 1.0
+      distance_nm: 3.4
+    - altitude_ft: 4000
+      time_min: 3.3
+      fuel_gal: 2.0
+      distance_nm: 6.8
+    - altitude_ft: 6000
+      time_min: 4.9
+      fuel_gal: 2.9
+      distance_nm: 10.3
+    - altitude_ft: 8000
+      time_min: 6.5
+      fuel_gal: 3.9
+      distance_nm: 14.0
+    - altitude_ft: 10000
+      time_min: 8.2
+      fuel_gal: 4.9
+      distance_nm: 17.8
+    - altitude_ft: 12000
+      time_min: 9.8
+      fuel_gal: 5.9
+      distance_nm: 21.7
+    - altitude_ft: 14000
+      time_min: 11.5
+      fuel_gal: 6.9
+      distance_nm: 25.9
+    - altitude_ft: 16000
+      time_min: 13.3
+      fuel_gal: 8.0
+      distance_nm: 30.3
+    - altitude_ft: 18000
+      time_min: 15.1
+      fuel_gal: 9.1
+      distance_nm: 35.1
+    - altitude_ft: 20000
+      time_min: 17.1
+      fuel_gal: 10.2
+      distance_nm: 40.5
+    - altitude_ft: 22000
+      time_min: 19.3
+      fuel_gal: 11.5
+      distance_nm: 46.7
+    - altitude_ft: 24000
+      time_min: 21.9
+      fuel_gal: 12.9
+      distance_nm: 54.2
+    - altitude_ft: 25000
+      time_min: 23.4
+      fuel_gal: 13.7
+      distance_nm: 58.7
