@@ -1,9 +1,6 @@
 import type { Airport } from "@/data/loaders";
-import {
-  greatCircleNM,
-  interpolateGreatCircle,
-  pointAtFraction,
-} from "./geo";
+import { greatCircleNM } from "./geo";
+import { initialTrueCourseDeg } from "./hemispheric";
 import type { DEMSampler } from "./terrain";
 
 /** Standard descent profile: 1,000 ft of altitude loss per 3 nm of ground
@@ -49,6 +46,13 @@ export interface TerrainPenaltyInput {
   /** Aircraft climb rate (ft/min). */
   climb_rate_fpm: number;
   dem: DEMSampler;
+  /** Precomputed great-circle distance from→to (nm). The routing
+   *  graph already has this for every edge — passing it in skips a
+   *  redundant sqrt + 4 trig on the hot path. */
+  distance_nm?: number;
+  /** Precomputed initial true course from→to (degrees). Same
+   *  hot-path optimization as `distance_nm`. */
+  true_course_deg?: number;
 }
 
 export interface TerrainPenalty {
@@ -76,16 +80,23 @@ export function computeTerrainPenalty(
   input: TerrainPenaltyInput,
 ): TerrainPenalty {
   const { from, to, cruise_alt_ft, tas_kt, climb_rate_fpm, dem } = input;
-  const total_nm = greatCircleNM(from, to);
+  const total_nm = input.distance_nm ?? greatCircleNM(from, to);
   if (total_nm === 0) return ZERO;
+  // Bearings out from each terminal. The leg bends very little over a
+  // 30 nm corridor, so using the initial true course out of each airport
+  // (rather than reinterpolating along the great-circle) introduces
+  // negligible spatial error and saves hundreds of trig calls per edge.
+  const from_to_bearing_deg =
+    input.true_course_deg ?? initialTrueCourseDeg(from, to);
+  const to_from_bearing_deg = initialTrueCourseDeg(to, from);
 
   const climb_ft_per_nm =
     tas_kt > 0 ? (climb_rate_fpm * 60) / tas_kt : Infinity;
 
   const departure_shortfall_ft = corridorShortfall({
     near: from,
-    far: to,
     total_nm,
+    bearing_deg: from_to_bearing_deg,
     airport_elev_ft: from.elevation_ft ?? 0,
     cruise_alt_ft,
     gradient_ft_per_nm: climb_ft_per_nm,
@@ -93,8 +104,8 @@ export function computeTerrainPenalty(
   });
   const arrival_shortfall_ft = corridorShortfall({
     near: to,
-    far: from,
     total_nm,
+    bearing_deg: to_from_bearing_deg,
     airport_elev_ft: to.elevation_ft ?? 0,
     cruise_alt_ft,
     gradient_ft_per_nm: STANDARD_DESCENT_FT_PER_NM,
@@ -115,14 +126,17 @@ interface CorridorInput {
   /** Airport the corridor anchors on (origin for departure, destination
    *  for arrival). Sampling proceeds outward from here along the leg. */
   near: Airport;
-  /** Other endpoint of the leg; defines the corridor's direction. */
-  far: Airport;
   total_nm: number;
+  /** Initial true course leaving `near` along the leg, in degrees. */
+  bearing_deg: number;
   airport_elev_ft: number;
   cruise_alt_ft: number;
   gradient_ft_per_nm: number;
   dem: DEMSampler;
 }
+
+/** Degrees of latitude per nautical mile. */
+const DEG_PER_NM = 1 / 60;
 
 function corridorShortfall(c: CorridorInput): number {
   if (c.gradient_ft_per_nm <= 0) return 0;
@@ -135,17 +149,23 @@ function corridorShortfall(c: CorridorInput): number {
   // standard descent / gradual climb is impossible.
   const corridor_nm = Math.min(c.total_nm, MAX_CORRIDOR_NM);
   if (corridor_nm <= 0) return 0;
-  const segments = Math.max(1, Math.ceil(corridor_nm / CORRIDOR_SAMPLE_NM));
-  const corridor_end = pointAtFraction(
-    c.near,
-    c.far,
-    corridor_nm / c.total_nm,
-  );
-  const path = interpolateGreatCircle(c.near, corridor_end, segments);
+  const samples = Math.max(1, Math.ceil(corridor_nm / CORRIDOR_SAMPLE_NM));
+  // Equirectangular projection. At 30 nm scales the great-circle path
+  // differs from a straight line by sub-arcminute — using a flat-earth
+  // step here skips the per-sample trig the full geodesic needs and
+  // makes the hot loop a few-multiplies-per-sample affair.
+  const bearing_rad = (c.bearing_deg * Math.PI) / 180;
+  const lat_rad = (c.near.lat * Math.PI) / 180;
+  const cos_lat = Math.cos(lat_rad);
+  const dlat_per_nm = Math.cos(bearing_rad) * DEG_PER_NM;
+  const dlon_per_nm =
+    cos_lat !== 0 ? (Math.sin(bearing_rad) * DEG_PER_NM) / cos_lat : 0;
 
   let worst = 0;
-  for (let i = 0; i < path.length; i++) {
-    const d_from_airport = (i / segments) * corridor_nm;
+  for (let i = 1; i <= samples; i++) {
+    const d_from_airport = (i / samples) * corridor_nm;
+    const lat = c.near.lat + d_from_airport * dlat_per_nm;
+    const lon = c.near.lon + d_from_airport * dlon_per_nm;
     // Aircraft altitude profile from the airport outward: rising along
     // the descent / climb slope until it intercepts cruise altitude,
     // then level at cruise. Terrain above this profile (with the buffer)
@@ -156,8 +176,6 @@ function corridorShortfall(c: CorridorInput): number {
       c.cruise_alt_ft,
       c.airport_elev_ft + d_from_airport * c.gradient_ft_per_nm,
     );
-    const e = c.dem.elevationFt(path[i]);
-    if (e === null) continue;
     // Buffer doesn't drag the limit below the airport itself — at field
     // elevation the aircraft is on the runway and isn't expected to be
     // 500 ft above local terrain.
@@ -165,6 +183,8 @@ function corridorShortfall(c: CorridorInput): number {
       aircraft_alt - TERMINAL_BUFFER_FT,
       c.airport_elev_ft,
     );
+    const e = c.dem.elevationFt({ lat, lon });
+    if (e === null) continue;
     const shortfall = e - limit;
     if (shortfall > worst) worst = shortfall;
   }

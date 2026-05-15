@@ -175,6 +175,8 @@ export function buildGraph(input: BuildGraphInput): Graph {
           tas_kt: c.tas_kt,
           climb_rate_fpm: aircraft.climb.rate_fpm,
           dem,
+          distance_nm,
+          true_course_deg,
         });
         if (penalty.hr > 0) {
           extra.terrain_penalty_hr = penalty.hr;
