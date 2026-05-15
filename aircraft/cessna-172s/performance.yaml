@@ -34,3 +34,36 @@ cruise:
 climb:
   rate_fpm: 700
   fuel_to_climb_gph: 10
+  # Cumulative time/fuel/distance to climb from sea level at maximum
+  # takeoff weight, standard atmosphere, full throttle / 2700 RPM.
+  # Values approximated from the 172S POH Section 5 "Time, Fuel, and
+  # Distance to Climb" chart.
+  table:
+    - altitude_ft: 0
+      time_min: 0
+      fuel_gal: 0.0
+      distance_nm: 0
+    - altitude_ft: 2000
+      time_min: 2
+      fuel_gal: 0.4
+      distance_nm: 3
+    - altitude_ft: 4000
+      time_min: 4
+      fuel_gal: 0.9
+      distance_nm: 6
+    - altitude_ft: 6000
+      time_min: 7
+      fuel_gal: 1.4
+      distance_nm: 11
+    - altitude_ft: 8000
+      time_min: 11
+      fuel_gal: 2.1
+      distance_nm: 17
+    - altitude_ft: 10000
+      time_min: 16
+      fuel_gal: 3.0
+      distance_nm: 25
+    - altitude_ft: 12000
+      time_min: 23
+      fuel_gal: 4.1
+      distance_nm: 36

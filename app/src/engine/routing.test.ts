@@ -41,6 +41,31 @@ function mkAircraft(rangeKt: number, gph: number, capacity_gal: number): Aircraf
   };
 }
 
+// Aircraft with cruise fuel burn that drops with altitude (like real
+// piston singles) plus a climb table — for testing that altitude changes
+// produce realistic per-leg fuel differences.
+function mkAircraftWithClimbTable(): Aircraft {
+  return {
+    slug: "test-with-climb",
+    make: "T",
+    model: "T",
+    fuel: { type: "100LL", density_lb_per_gal: 6, usable_capacity_gal: 53 },
+    cruise: [
+      { altitude_ft: 2000, power_pct: 75, tas_kt: 124, fuel_gph: 9.6 },
+      { altitude_ft: 8000, power_pct: 65, tas_kt: 117, fuel_gph: 7.6 },
+    ],
+    climb: {
+      rate_fpm: 700,
+      fuel_to_climb_gph: 10,
+      table: [
+        { altitude_ft: 0, time_min: 0, fuel_gal: 0, distance_nm: 0 },
+        { altitude_ft: 2000, time_min: 2, fuel_gal: 0.4, distance_nm: 3 },
+        { altitude_ft: 8000, time_min: 11, fuel_gal: 2.1, distance_nm: 17 },
+      ],
+    },
+  };
+}
+
 // Five airports laid out roughly west-to-east across the US.
 const A = mkAirport("A", 40, -120);
 const B = mkAirport("B", 40, -115);
@@ -197,6 +222,102 @@ describe("buildGraph + kShortestPaths", () => {
       .neighbors("O")
       .find((e) => e.to === "N");
     expect(intoNorth?.extra?.terrain_penalty_hr ?? 0).toBeGreaterThan(0);
+  });
+
+  test("changing cruise altitude meaningfully changes per-leg fuel", () => {
+    // Regression for the reported "altitude doesn't affect fuel"
+    // symptom. With climb decomposition, a 200-nm leg planned at 7500
+    // ft should burn measurably less fuel than the same leg at 3500 ft
+    // (higher altitude → lower cruise gph → real savings, partially
+    // offset by climb burn).
+    const origin = mkAirport("O", 40, -120);
+    const dest = mkAirport("D", 40, -116); // ~184 nm east
+    const aircraft = mkAircraftWithClimbTable();
+    const low = buildGraph({
+      airports: [origin, dest],
+      origin: "O",
+      destination: "D",
+      aircraft,
+      targetAltFt: 3500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+    });
+    const high = buildGraph({
+      airports: [origin, dest],
+      origin: "O",
+      destination: "D",
+      aircraft,
+      targetAltFt: 7500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+    });
+    const lowEdge = low.neighbors("O").find((e) => e.to === "D");
+    const highEdge = high.neighbors("O").find((e) => e.to === "D");
+    expect(lowEdge).toBeDefined();
+    expect(highEdge).toBeDefined();
+    // Different hemispheric altitudes get picked at the two targets.
+    expect(highEdge!.cruise_alt_ft).toBeGreaterThan(lowEdge!.cruise_alt_ft);
+    // Higher altitude → lower total fuel (climb cost more than offset
+    // by cruise efficiency over a 184 nm leg).
+    expect(highEdge!.fuel_gal).toBeLessThan(lowEdge!.fuel_gal);
+    // ...by a non-trivial amount (more than a few percent).
+    const savingsPct =
+      (lowEdge!.fuel_gal - highEdge!.fuel_gal) / lowEdge!.fuel_gal;
+    expect(savingsPct).toBeGreaterThan(0.05);
+  });
+
+  test("short legs prefer low altitudes once climb fuel is counted", () => {
+    // Same C172S-style aircraft. On a 30 nm leg the high-altitude
+    // climb burn exceeds the cruise savings, so total fuel should be
+    // higher at 7500 ft than at 3500 ft.
+    const origin = mkAirport("O", 40, -120);
+    const close = mkAirport("C", 40, -119.35); // ~30 nm east
+    const aircraft = mkAircraftWithClimbTable();
+    const low = buildGraph({
+      airports: [origin, close],
+      origin: "O",
+      destination: "C",
+      aircraft,
+      targetAltFt: 3500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+    });
+    const high = buildGraph({
+      airports: [origin, close],
+      origin: "O",
+      destination: "C",
+      aircraft,
+      targetAltFt: 7500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+    });
+    const lowEdge = low.neighbors("O").find((e) => e.to === "C")!;
+    const highEdge = high.neighbors("O").find((e) => e.to === "C")!;
+    expect(highEdge.fuel_gal).toBeGreaterThan(lowEdge.fuel_gal);
+  });
+
+  test("legs too short to reach cruise pro-rate the climb segment", () => {
+    // 10 nm leg, requested cruise 7500 ft requires ~17 nm to reach.
+    // The edge fuel should be approximately the climb table's value
+    // at the achievable altitude, NOT the full climb fuel for the
+    // requested cruise.
+    const origin = mkAirport("O", 40, -120);
+    const veryClose = mkAirport("V", 40, -119.78); // ~10 nm
+    const aircraft = mkAircraftWithClimbTable();
+    const graph = buildGraph({
+      airports: [origin, veryClose],
+      origin: "O",
+      destination: "V",
+      aircraft,
+      targetAltFt: 7500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+    });
+    const edge = graph.neighbors("O").find((e) => e.to === "V")!;
+    // Full climb to 7500 from POH-style table would be ~2.0 gal over
+    // ~16 nm. On a 10 nm leg we should see fractional climb fuel.
+    expect(edge.fuel_gal).toBeGreaterThan(0);
+    expect(edge.fuel_gal).toBeLessThan(2.0);
   });
 
   test("mock cheapestFuel cost can be injected at runtime", () => {
