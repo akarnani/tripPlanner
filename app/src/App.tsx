@@ -155,6 +155,7 @@ export function App() {
         startingFuelGal,
         excludedAirportIds: excluded,
         waypoints: pinned,
+        dem: demReady ? demSampler : undefined,
       });
       if (result.length === 0) {
         setError("no route found — try relaxing constraints");

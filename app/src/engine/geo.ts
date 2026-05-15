@@ -51,3 +51,25 @@ export function interpolateGreatCircle(
   }
   return out;
 }
+
+/** Point at fractional great-circle distance from `a` toward `b`. f<=0
+ *  returns a, f>=1 returns b. Useful when only one point is needed and
+ *  building the full interpolated path would be wasteful. */
+export function pointAtFraction(a: LatLon, b: LatLon, f: number): LatLon {
+  if (f <= 0) return { ...a };
+  if (f >= 1) return { ...b };
+  const d = greatCircleNM(a, b) / EARTH_RADIUS_NM;
+  if (d === 0) return { ...a };
+  const φ1 = toRad(a.lat);
+  const λ1 = toRad(a.lon);
+  const φ2 = toRad(b.lat);
+  const λ2 = toRad(b.lon);
+  const A = Math.sin((1 - f) * d) / Math.sin(d);
+  const B = Math.sin(f * d) / Math.sin(d);
+  const x = A * Math.cos(φ1) * Math.cos(λ1) + B * Math.cos(φ2) * Math.cos(λ2);
+  const y = A * Math.cos(φ1) * Math.sin(λ1) + B * Math.cos(φ2) * Math.sin(λ2);
+  const z = A * Math.sin(φ1) + B * Math.sin(φ2);
+  const φ = Math.atan2(z, Math.sqrt(x * x + y * y));
+  const λ = Math.atan2(y, x);
+  return { lat: toDeg(φ), lon: toDeg(λ) };
+}
