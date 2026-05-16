@@ -205,11 +205,11 @@ describe("buildInteractiveRoute", () => {
 
   test("auto altitude bumps above terrain on the leg's great-circle path", () => {
     // Flat sea-level fields, but the path between them crosses a
-    // simulated 11,000 ft ridge. The default altitude based on the
-    // pilot's 6,500 ft target rounds to 7,500 (eastbound VFR), which
-    // wouldn't clear the ridge with the 2,000 ft buffer (would need
-    // 13,000 → 13,500). The terrain-aware auto altitude must bump.
-    const ridgeMsl = 11000;
+    // simulated 9,000 ft ridge. The pilot's 6,500 ft target rounds
+    // to 7,500 (eastbound VFR), which wouldn't clear the ridge with
+    // the 2,000 ft buffer (would need 11,000 → 11,500). The
+    // terrain-aware auto altitude must bump.
+    const ridgeMsl = 9000;
     const dem: DEMSampler = {
       elevationFt: (p) => (p.lon > -118 && p.lon < -117 ? ridgeMsl : 0),
     };
@@ -222,9 +222,99 @@ describe("buildInteractiveRoute", () => {
       startingFuelGal: 53,
       dem,
     });
-    // 11,000 + 2,000 buffer = 13,000 → next hemispheric (odd+500
-    // eastbound) is 13,500.
-    expect(route.legs[0].cruise_alt_ft).toBe(13500);
+    // 9,000 + 2,000 buffer = 11,000 → next hemispheric (odd+500
+    // eastbound) is 11,500, comfortably within the test aircraft's
+    // 12,000 ft cruise ceiling.
+    expect(route.legs[0].cruise_alt_ft).toBeGreaterThanOrEqual(11500);
+  });
+
+  test("auto altitude prefers a higher cruise on a long leg with no terrain", () => {
+    // Aircraft with a clear high-altitude efficiency edge (nm/gal at
+    // 12,000 ft is much better than at 2,000 ft) and a long enough
+    // leg that climb fuel doesn't dominate. Without optimization,
+    // the auto pick would just round the 6,500 ft target to 7,500;
+    // with it, the engine climbs to 12,500 (next-higher hemispheric
+    // odd+500) because the cruise row is so much more efficient.
+    const efficient: Aircraft = {
+      ...aircraft(),
+      cruise: [
+        { altitude_ft: 2000, power_pct: 75, tas_kt: 110, fuel_gph: 12 },
+        { altitude_ft: 8000, power_pct: 65, tas_kt: 115, fuel_gph: 9 },
+        { altitude_ft: 12000, power_pct: 55, tas_kt: 115, fuel_gph: 6.5 },
+      ],
+    };
+    const O = ap("O", 40, -120);
+    const D = ap("D", 40, -113); // ~322 nm east — plenty of cruise
+    const { route } = buildInteractiveRoute({
+      sequence: [O, D],
+      aircraft: efficient,
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      startingFuelGal: 53,
+    });
+    // Auto picks one of the most efficient hemispheric levels — at
+    // or above 11,500 (the highest east-VFR level inside the cruise
+    // table; auto may also pick one above the top to pin to the
+    // best-published cruise row).
+    expect(route.legs[0].cruise_alt_ft).toBeGreaterThanOrEqual(11500);
+  });
+
+  test("auto altitude never exceeds the published cruise table top", () => {
+    // POH-verbatim rule: the engine doesn't pick above the highest
+    // published cruise row, even when the pilot's target altitude
+    // is higher. Above the table the engine would have to clamp /
+    // invent — we'd rather honestly cap at the published ceiling.
+    const jetlike: Aircraft = {
+      ...aircraft(),
+      weights: { max_gross_lb: 6000 },
+      cruise: [
+        { altitude_ft: 24000, power_pct: 95, tas_kt: 276, fuel_gph: 68 },
+        { altitude_ft: 26000, power_pct: 95, tas_kt: 279, fuel_gph: 62 },
+        { altitude_ft: 28000, power_pct: 96, tas_kt: 280, fuel_gph: 61 },
+      ],
+      climb: { rate_fpm: 1500, fuel_to_climb_gph: 110 },
+    };
+    const O = ap("O", 40, -120);
+    const D = ap("D", 40, -100); // ~920 nm
+    const { route } = buildInteractiveRoute({
+      sequence: [O, D],
+      aircraft: jetlike,
+      // Pilot asks for FL310 — but the POH only covers up to FL280.
+      targetAltFt: 31000,
+      flightRule: "IFR",
+      reserveHr: 0.75,
+      startingFuelGal: 296,
+    });
+    expect(route.legs[0].cruise_alt_ft).toBeLessThanOrEqual(28000);
+  });
+
+  test("auto altitude stays low on short legs where climb fuel dominates", () => {
+    // Same efficiency edge at altitude, but with a realistic
+    // climb-fuel rate (18 gph at full power, well above cruise
+    // GPH). On a 60 nm leg the climb cost to 11,500 ft swamps the
+    // cruise savings, so auto should stay at the hemispheric
+    // default of 7,500 ft for a 6,500 ft target eastbound VFR.
+    const efficient: Aircraft = {
+      ...aircraft(),
+      climb: { rate_fpm: 700, fuel_to_climb_gph: 18 },
+      cruise: [
+        { altitude_ft: 2000, power_pct: 75, tas_kt: 110, fuel_gph: 12 },
+        { altitude_ft: 8000, power_pct: 65, tas_kt: 115, fuel_gph: 9 },
+        { altitude_ft: 12000, power_pct: 55, tas_kt: 115, fuel_gph: 6.5 },
+      ],
+    };
+    const O = ap("O", 40, -120);
+    const D = ap("D", 40, -118.7); // ~60 nm east
+    const { route } = buildInteractiveRoute({
+      sequence: [O, D],
+      aircraft: efficient,
+      targetAltFt: 6500,
+      flightRule: "VFR",
+      reserveHr: 0.75,
+      startingFuelGal: 53,
+    });
+    expect(route.legs[0].cruise_alt_ft).toBe(7500);
   });
 
   test("explicit per-leg override beats the terrain-aware default", () => {
@@ -244,7 +334,7 @@ describe("buildInteractiveRoute", () => {
     expect(route.legs[0].cruise_alt_ft).toBe(9500);
   });
 
-  test("legAltitudes overrides the hemispheric default", () => {
+  test("legAltitudes overrides the auto pick", () => {
     const { route } = buildInteractiveRoute({
       sequence: [A, B, C],
       aircraft: aircraft(),
@@ -252,11 +342,15 @@ describe("buildInteractiveRoute", () => {
       flightRule: "VFR",
       reserveHr: 0.75,
       startingFuelGal: 53,
-      legAltitudes: [9500, undefined], // first leg explicitly 9,500; second leg default
+      legAltitudes: [9500, undefined], // first leg explicitly 9,500; second leg auto
     });
     expect(route.legs[0].cruise_alt_ft).toBe(9500);
-    // Eastbound at 6,500 VFR default → 7,500 ft.
-    expect(route.legs[1].cruise_alt_ft).toBe(7500);
+    // Second leg auto-picked — just verify it's at or above the
+    // 6,500 ft target and an eastbound-VFR-legal level (odd
+    // thousands + 500). odd_thousand % 2000 === 1000.
+    const auto = route.legs[1].cruise_alt_ft;
+    expect(auto).toBeGreaterThanOrEqual(6500);
+    expect((auto - 500) % 2000).toBe(1000);
   });
 });
 

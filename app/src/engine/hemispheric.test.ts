@@ -77,4 +77,16 @@ describe("hemisphericAltitude", () => {
     expect(hemisphericAltitude(2500, 90, "VFR")).toBe(2500);
     expect(hemisphericAltitude(2500, 270, "IFR")).toBe(2500);
   });
+  test("VFR +500 drops at FL180 (Class A is IFR-only)", () => {
+    // A turbo aircraft asking for "27,500 ft VFR eastbound" should
+    // get 29,000 — the next legal IFR eastbound thousand above
+    // 27,500 — not 27,500 itself. The +500 convention doesn't exist
+    // above FL180.
+    expect(hemisphericAltitude(27500, 90, "VFR")).toBe(29000);
+    expect(hemisphericAltitude(18000, 90, "VFR")).toBe(19000);
+    expect(hemisphericAltitude(18500, 270, "VFR")).toBe(20000);
+    // IFR is unchanged across the boundary.
+    expect(hemisphericAltitude(27500, 90, "IFR")).toBe(29000);
+    expect(hemisphericAltitude(27000, 90, "IFR")).toBe(27000);
+  });
 });

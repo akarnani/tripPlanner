@@ -22,6 +22,34 @@ import {
   type LegAltitudeOverride,
 } from "@/engine/interactive";
 import { greatCircleNM } from "@/engine/geo";
+import {
+  aircraftSupportsRunwayCheck,
+  classifyAirportRunwayFit,
+  DEFAULT_RUNWAY_SETTINGS,
+  filterByRunwayFit,
+  oatFromIsaDelta,
+  perLegWeights,
+  type RunwayFitStatus,
+  type RunwaySettings,
+} from "@/engine/runway";
+
+interface RunwayLegWarning {
+  legIndex: number;
+  phase: "takeoff" | "landing";
+  ident: string;
+  status: RunwayFitStatus;
+  required_ft: number;
+  available_ft: number;
+  buffer_ft: number;
+  weight_lb: number;
+  /** Field pressure altitude used for the POH lookup (we use field
+   *  elevation as a proxy when altimeter isn't known). Echoed in
+   *  the warning so the pilot can spot-check against the chart. */
+  pressure_alt_ft: number;
+  /** OAT used for the POH lookup, in °C. Currently always
+   *  ISA + the configured delta. */
+  temp_c: number;
+}
 import { obstaclesNearRoute } from "@/engine/obstacles";
 import { analyzeTerrain, type TerrainAnalysis } from "@/engine/terrain";
 import { terminalCorridorWarnings } from "@/engine/terrainPenalty";
@@ -40,6 +68,8 @@ import { ExportPanel } from "./ui/ExportPanel";
 import { ExcludedAirports } from "./ui/ExcludedAirports";
 import { InteractivePanel } from "./ui/InteractivePanel";
 import { PinnedStops } from "./ui/PinnedStops";
+import { RunwayPanel } from "./ui/RunwayPanel";
+import { RunwayWarnings } from "./ui/RunwayWarnings";
 import { TripsPanel } from "./ui/TripsPanel";
 import {
   deleteTrip,
@@ -93,6 +123,9 @@ export function App() {
   const [legAltitudes, setLegAltitudes] = useState<readonly LegAltitudeOverride[]>(
     [],
   );
+  const [runwaySettings, setRunwaySettings] = useState<RunwaySettings>(
+    DEFAULT_RUNWAY_SETTINGS,
+  );
 
   // Datasets are fetched at runtime instead of being bundled into the
   // JS so the initial paint isn't blocked by parsing several MB of
@@ -126,9 +159,55 @@ export function App() {
     setStartingFuelGal(selectedAircraft.fuel.usable_capacity_gal);
   }, [selectedAircraft.slug]);
 
+  // The POH-driven runway check supersedes the manual minimum-
+  // runway filter when both could apply. We only consider it
+  // "active" when the toggle is on AND the aircraft has POH data —
+  // without data the runway check is a no-op and the manual filter
+  // should remain available.
+  const runwayCheckActive =
+    runwaySettings.enabled && aircraftSupportsRunwayCheck(selectedAircraft);
+
+  const baseMatches = useMemo(() => {
+    // When the runway check is active, ignore the manual
+    // minRunwayFt floor — the POH check is strictly more accurate
+    // and the manual cutoff was either redundant or contradictory.
+    const effectiveFilters = runwayCheckActive
+      ? { ...filters, minRunwayFt: 0 }
+      : filters;
+    return applyFilters(datasets, effectiveFilters, selectedAircraft.fuel.type);
+  }, [datasets, filters, selectedAircraft.fuel.type, runwayCheckActive]);
+
+  // Runway-fit filter sits on top of `applyFilters` so the user can
+  // toggle it independently. Origin / destination / pinned stops are
+  // exempt — the pilot has explicitly chosen them; runway concerns
+  // surface as per-leg warnings rather than silently dropping the
+  // requested route.
+  const runwayExemptIds = useMemo(() => {
+    const ids = new Set<string>();
+    const o = airportByIdent(datasets.airports, origin);
+    const d = airportByIdent(datasets.airports, destination);
+    if (o) ids.add(o.id);
+    if (d) ids.add(d.id);
+    for (const id of pinnedStopIds) ids.add(id);
+    for (const id of interactiveStopIds) ids.add(id);
+    return ids;
+  }, [
+    datasets.airports,
+    origin,
+    destination,
+    pinnedStopIds,
+    interactiveStopIds,
+  ]);
+
   const matches = useMemo(
-    () => applyFilters(datasets, filters, selectedAircraft.fuel.type),
-    [datasets, filters, selectedAircraft.fuel.type],
+    () =>
+      filterByRunwayFit({
+        airports: baseMatches,
+        aircraft: selectedAircraft,
+        settings: runwaySettings,
+        exemptIds: runwayExemptIds,
+      }),
+    [baseMatches, selectedAircraft, runwaySettings, runwayExemptIds],
   );
 
   // Resolved origin and destination airports — null until the user
@@ -546,6 +625,84 @@ export function App() {
     [currentRoute],
   );
 
+  // Per-leg runway-fit warnings. Skipped entirely when the runway
+  // check is off, the aircraft lacks POH data, or there's no route.
+  // Pass-through stops (interactive mode) carry weight through to
+  // the next leg's takeoff per the perLegWeights model.
+  const runwayWarnings = useMemo(() => {
+    if (!currentRoute) return [] as RunwayLegWarning[];
+    if (!runwaySettings.enabled) return [];
+    if (!aircraftSupportsRunwayCheck(selectedAircraft)) return [];
+    const legs = currentRoute.legs;
+    // Per-stop refuel flags: each leg-origin after the first refuels
+    // iff that airport sells the aircraft's fuel type. The trip
+    // origin always counts as a refuel for the weight-model entry
+    // point (the pilot fills up before departure).
+    const legOriginRefuels = legs.map((leg, i) =>
+      i === 0
+        ? true
+        : airportSellsCompatibleFuel(
+            leg.fromAirport,
+            selectedAircraft.fuel.type,
+          ),
+    );
+    const weights = perLegWeights({
+      aircraft: selectedAircraft,
+      legFuelBurnGal: legs.map((l) => l.fuel_gal),
+      legOriginRefuels,
+      startingFuelGal,
+    });
+    if (!weights) return [];
+    const out: RunwayLegWarning[] = [];
+    for (let i = 0; i < legs.length; i++) {
+      const leg = legs[i];
+      const wt = weights[i];
+      const takeoffFit = classifyAirportRunwayFit({
+        aircraft: selectedAircraft,
+        airport: leg.fromAirport,
+        settings: runwaySettings,
+        takeoff_weight_lb: wt.takeoff_lb,
+      });
+      const fromElev = leg.fromAirport.elevation_ft ?? 0;
+      const toElev = leg.toAirport.elevation_ft ?? 0;
+      if (takeoffFit && takeoffFit.takeoff_status !== "ok") {
+        out.push({
+          legIndex: i,
+          phase: "takeoff",
+          ident: leg.fromAirport.icao ?? leg.fromAirport.lid,
+          status: takeoffFit.takeoff_status,
+          required_ft: takeoffFit.takeoff_required_ft,
+          available_ft: takeoffFit.available_ft,
+          buffer_ft: runwaySettings.buffer_ft,
+          weight_lb: wt.takeoff_lb,
+          pressure_alt_ft: fromElev,
+          temp_c: oatFromIsaDelta(fromElev, runwaySettings.isa_delta_c),
+        });
+      }
+      const landingFit = classifyAirportRunwayFit({
+        aircraft: selectedAircraft,
+        airport: leg.toAirport,
+        settings: runwaySettings,
+        landing_weight_lb: wt.landing_lb,
+      });
+      if (landingFit && landingFit.landing_status !== "ok") {
+        out.push({
+          legIndex: i,
+          phase: "landing",
+          ident: leg.toAirport.icao ?? leg.toAirport.lid,
+          status: landingFit.landing_status,
+          required_ft: landingFit.landing_required_ft,
+          available_ft: landingFit.available_ft,
+          buffer_ft: runwaySettings.buffer_ft,
+          weight_lb: wt.landing_lb,
+          pressure_alt_ft: toElev,
+          temp_c: oatFromIsaDelta(toElev, runwaySettings.isa_delta_c),
+        });
+      }
+    }
+    return out;
+  }, [currentRoute, runwaySettings, selectedAircraft, startingFuelGal]);
+
   function handleReplanAtMinSafe() {
     if (!terrain) return;
     const newAlt = terrain.replanTargetFt;
@@ -750,6 +907,7 @@ export function App() {
       legAltitudes: legAltitudes.map((a) =>
         a === undefined || a === null ? null : a,
       ),
+      runwaySettings,
       savedAt: new Date().toISOString(),
     };
     setTrips(saveTrip(trip));
@@ -775,6 +933,7 @@ export function App() {
     setPlanningMode(t.planningMode ?? "auto");
     setInteractiveStopIds(t.interactiveStopIds ?? []);
     setLegAltitudes(t.legAltitudes ?? []);
+    setRunwaySettings(t.runwaySettings ?? DEFAULT_RUNWAY_SETTINGS);
     setRoutes([]);
     setError(null);
   }
@@ -873,6 +1032,10 @@ export function App() {
               destInRange={
                 (interactiveRings?.solid_nm ?? 0) >= interactiveDistanceToDest
               }
+              cruiseCeilingFt={
+                selectedAircraft.cruise[selectedAircraft.cruise.length - 1]
+                  ?.altitude_ft ?? 0
+              }
               onRemoveStop={handleRemoveInteractiveStop}
               onChangeLegAltitude={handleChangeLegAltitude}
               onExit={handleExitInteractive}
@@ -898,6 +1061,17 @@ export function App() {
         </section>
         <section>
           <h2 className="mb-2 text-sm font-semibold text-slate-800">
+            Runway check
+          </h2>
+          <RunwayPanel
+            settings={runwaySettings}
+            onChange={setRunwaySettings}
+            aircraftHasData={aircraftSupportsRunwayCheck(selectedAircraft)}
+            aircraftModel={selectedAircraft.model}
+          />
+        </section>
+        <section>
+          <h2 className="mb-2 text-sm font-semibold text-slate-800">
             Airport filters
           </h2>
           <FilterPanel
@@ -907,6 +1081,7 @@ export function App() {
             totalCount={datasets.airports.length}
             hasApproachData={datasets.hasApproachData}
             aircraftFuelType={selectedAircraft.fuel.type}
+            runwayCheckActive={runwayCheckActive}
           />
         </section>
       </aside>
@@ -956,6 +1131,7 @@ export function App() {
             onReplanAtMinSafe={handleReplanAtMinSafe}
             terminalWarnings={terminalWarnings}
           />
+          <RunwayWarnings warnings={runwayWarnings} />
           {currentRoute && (
             <ExportPanel
               route={currentRoute}

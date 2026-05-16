@@ -39,9 +39,17 @@ export function magneticCourseDeg(
  *   eastbound (0–179°)  · IFR: odd thousands  · VFR: odd + 500
  *   westbound (180–359°)· IFR: even thousands · VFR: even + 500
  *
+ * The +500 VFR offset only applies below FL180. At 18,000 ft and
+ * above, US airspace is Class A (positive control, IFR only), so
+ * the cruise altitude is a straight odd/even thousand regardless
+ * of the requested flight rule — a VFR target above 17,999 ft is
+ * effectively a request for the next legal IFR level.
+ *
  * The rule applies more than 3,000 ft AGL (VFR) or always for IFR
  * cruise; below the floor we return the floor altitude unchanged.
  */
+export const CLASS_A_FLOOR_FT = 18000;
+
 export function hemisphericAltitude(
   targetFt: number,
   courseDeg: number,
@@ -53,9 +61,10 @@ export function hemisphericAltitude(
   // Eastbound cruises odd thousands (3000, 5000, 7000, …);
   // westbound cruises even thousands (4000, 6000, 8000, …).
   const firstThousand = eastbound ? 3 : 4;
-  const offset = rule === "VFR" ? 500 : 0;
   for (let k = 0; k < 30; k++) {
-    const candidate = (firstThousand + k * 2) * 1000 + offset;
+    const thousands = (firstThousand + k * 2) * 1000;
+    const offset = rule === "VFR" && thousands < CLASS_A_FLOOR_FT ? 500 : 0;
+    const candidate = thousands + offset;
     if (candidate >= targetFt) return candidate;
   }
   return targetFt;

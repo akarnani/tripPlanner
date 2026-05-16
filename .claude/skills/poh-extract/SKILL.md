@@ -1,13 +1,24 @@
 ---
 name: poh-extract
-description: Extract cruise performance data from an aircraft POH PDF into the trip-planner's performance.yaml schema. Trigger when the user asks to "extract POH", "generate performance.yaml", or invokes /poh-extract on a directory under aircraft/.
+description: Extract cruise, climb, takeoff, and landing performance data from an aircraft POH PDF into the trip-planner's performance.yaml schema. Trigger when the user asks to "extract POH", "generate performance.yaml", or invokes /poh-extract on a directory under aircraft/.
 ---
 
 # POH performance extraction
 
-You are extracting cruise performance data from an aircraft Pilot's
-Operating Handbook (POH) PDF into a `performance.yaml` file that the
-trip planner uses for range and fuel-burn calculations.
+You are extracting performance data from an aircraft Pilot's Operating
+Handbook (POH) PDF into a `performance.yaml` file that the trip planner
+uses for range, fuel-burn, terrain, and runway-fit calculations. There
+are four data blocks:
+
+1. **Cruise** — TAS and GPH at a handful of altitude × power points.
+2. **Climb** — best rate of climb at sea level + the cumulative
+   time/fuel/distance climb table.
+3. **Takeoff** (optional) — POH takeoff distance grid(s).
+4. **Landing** (optional) — POH landing distance grid(s).
+
+The runway-fit feature needs the takeoff and landing tables to do
+anything for an aircraft; without them the runway check is a no-op
+for that airframe.
 
 ## Inputs
 
@@ -30,6 +41,12 @@ fuel:
   type: 100LL | Jet-A | MoGas
   density_lb_per_gal: <float>     # 6.0 for 100LL, 6.7 for Jet-A
   usable_capacity_gal: <number>   # POH "usable fuel" figure
+weights:                          # Optional but strongly preferred —
+  max_gross_lb: <number>          # without it, runway-fit checks
+  max_landing_lb: <number>        # are skipped for this aircraft.
+                                  # `max_landing_lb` defaults to
+                                  # max_gross_lb when absent (typical
+                                  # for piston singles).
 cruise:                   # One row per altitude/power point from the POH
   - altitude_ft: <integer>
     power_pct: <integer>
@@ -54,6 +71,30 @@ climb:
       distance_nm: <number>  # cumulative nm covered getting here
     # ... typically 4–7 rows, ascending, every 2,000 ft up to the
     # highest altitude the aircraft is rated for
+takeoff:                    # Optional — POH takeoff distance grids
+  distance_table:
+    # Every cell from every POH weight tier the chart publishes.
+    # If the POH publishes tables at multiple weights (common — e.g.
+    # 2,550 / 2,400 / 2,200 lb for the 172S takeoff chart) include
+    # all of them, tagging each row with its `weight_lb`. If the POH
+    # only publishes one weight, you can omit `weight_lb` and the
+    # loader defaults it to `weights.max_gross_lb`.
+    - weight_lb: <integer>             # match the POH weight tier
+      pressure_alt_ft: <integer>       # SL, 1000, 2000, …
+      temp_c: <integer>                # 0, 10, 20, 30, 40 (typical)
+      ground_roll_ft: <integer>        # POH "Grnd Roll"
+      total_50ft_ft: <integer>         # POH "Total to clear 50 ft obstacle"
+    # ... one row per (weight × altitude × temperature) cell the POH
+    # publishes. Each weight tier must form a complete grid (every
+    # altitude crosses every temperature) or validation will fail —
+    # better to drop a hot/high corner than fake it.
+landing:                    # Optional — POH landing distance grids
+  distance_table:
+    - weight_lb: <integer>             # often only `max_landing_lb`
+      pressure_alt_ft: <integer>
+      temp_c: <integer>
+      ground_roll_ft: <integer>
+      total_50ft_ft: <integer>
 ```
 
 See `aircraft/cessna-172s/performance.yaml` for a reference example.
@@ -66,11 +107,14 @@ See `aircraft/cessna-172s/performance.yaml` for a reference example.
 
 2. **Read the relevant POH sections.** With the `Read` tool, open the
    PDF and skim:
-   - Section 1 (general) for fuel type and usable capacity.
+   - Section 1 (general) for fuel type, usable capacity, and the
+     operating weights (`MAXIMUM TAKEOFF WEIGHT` / `MAXIMUM RAMP
+     WEIGHT` / `MAXIMUM LANDING WEIGHT`).
    - Section 5 (performance) for the cruise tables, the
-     "Maximum Rate of Climb" chart (for `rate_fpm`), and the
+     "Maximum Rate of Climb" chart (for `rate_fpm`), the
      "Time, Fuel, and Distance to Climb" chart (for the optional
-     climb `table`).
+     climb `table`), the "Takeoff Distance" chart(s), and the
+     "Landing Distance" chart(s).
 
    Standard POHs put cruise performance tables on facing pages, with
    one table per altitude (sea level, 2000, 4000, 6000, 8000, etc.)
@@ -95,7 +139,29 @@ See `aircraft/cessna-172s/performance.yaml` for a reference example.
    Use the TAS and fuel flow figures **at gross weight**, ignoring any
    "lean of peak" alternates unless that's the only column.
 
-4. **Sanity check.** Before writing, verify the values pass these
+4. **Extract takeoff & landing tables** (optional but strongly
+   preferred). For each POH chart that publishes a runway distance:
+   - Copy every cell from every weight tier the POH shows. Tag each
+     row with `weight_lb` matching the POH chart heading. If the
+     POH chart only publishes one weight, you can omit `weight_lb`
+     and the loader uses the appropriate reference weight; but
+     including all the published tiers gives the planner accurate
+     "estimated weight" lookups instead of only the worst case.
+   - Use the values **exactly as published**. Do NOT apply a weight
+     correction, density-altitude correction, or any other formula.
+     The engine looks up the POH cell and uses it verbatim — it
+     never interpolates between cells. At runtime the lookup rounds
+     each axis UP to the next published cell (heavier / hotter /
+     higher = longer distance), so the more weight tiers / altitude
+     rows / temperature columns you transcribe, the closer the
+     planner's answer is to what the chart actually shows.
+   - Each weight tier must form a complete (pressure_alt × temp)
+     grid. If the POH leaves the warm-end / high-altitude corner
+     blank (outside the certified envelope), trim the temperature
+     or altitude range so the remaining grid is rectangular. Don't
+     guess.
+
+5. **Sanity check.** Before writing, verify the values pass these
    invariants — they're what `pipelines/validate_perf.mjs` enforces in
    CI:
    - `tas_kt` > 0 and < 400 (no jets in v1)
@@ -109,21 +175,28 @@ See `aircraft/cessna-172s/performance.yaml` for a reference example.
    - Climb-table rows (if present) are strictly ascending by altitude,
      and `time_min`, `fuel_gal`, and `distance_nm` are non-decreasing
      down the table (they're cumulative from sea level)
+   - Takeoff / landing rows: `weight_lb` (if set) ≤ `max_gross_lb`;
+     `total_50ft_ft` ≥ `ground_roll_ft`; each weight tier's
+     (pressure_alt × temp) sub-grid is complete.
 
    If any value looks anomalous, **read the POH page again** before
    writing.
 
-5. **Write the YAML.** Use the `Write` tool to create
+6. **Write the YAML.** Use the `Write` tool to create
    `<aircraft-dir>/performance.yaml`. Keep it tidy — alphabetical
    inside each block isn't required, but match the structure above
    exactly.
 
-6. **Report.** Print a one-screen summary to the user with:
+7. **Report.** Print a one-screen summary to the user with:
    - Make / model
    - Fuel type, usable capacity
+   - Weights (max gross / max landing)
    - The number of cruise rows extracted and the altitude range
    - The lowest- and highest-altitude TAS/GPH values, so they can
      spot-check against the POH at a glance.
+   - Takeoff / landing tables: weight tiers covered, altitude /
+     temperature extents, and one spot-check cell per phase
+     (e.g. "SL @ 20 °C @ max gross → ground X ft, total Y ft").
 
 Stop there. Don't commit; the contributor opens a PR after reviewing
 the file against their POH. The `perf-validate.yml` workflow runs the
@@ -133,6 +206,10 @@ schema check + invariants automatically on the PR.
 
 - Do **not** invent values. If the POH doesn't show 10,000 ft, omit
   that row rather than extrapolating.
+- Do **not** apply weight, altitude, or temperature corrections to
+  POH numbers when transcribing — transcribe what's printed. The
+  engine handles weight interpolation between POH tiers itself; it
+  never scales a single tier with a synthetic formula.
 - Do **not** include performance for non-standard conditions
   (turbocharged variants, alternate engines, etc.) unless that
   variant is what the directory is for.

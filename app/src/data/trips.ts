@@ -1,5 +1,6 @@
 import type { FlightRule } from "@/engine/hemispheric";
 import type { HardFilters } from "@/engine/filters";
+import type { RunwaySettings } from "@/engine/runway";
 
 const STORAGE_KEY = "trip-planner.trips.v1";
 
@@ -39,6 +40,10 @@ export interface SavedTrip {
    *  lastStop→destination). `null` entries mean "let auto pick".
    *  Length matches `interactiveStopIds.length + 1` when saved. */
   legAltitudes?: (number | null)[];
+  /** Runway-fit check settings. Missing on trips saved before this
+   *  field shipped; the app falls back to DEFAULT_RUNWAY_SETTINGS
+   *  (check disabled, +15 °C ISA, 1,000 ft buffer, estimated weight). */
+  runwaySettings?: RunwaySettings;
   /** ISO timestamp of last save. Used for sort + display. */
   savedAt: string;
 }
