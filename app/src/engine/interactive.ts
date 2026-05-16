@@ -55,6 +55,94 @@ export interface BuildInteractiveLegResult {
   fuel_short_gal: number;
 }
 
+/** Returns the total fuel cost (climb + cruise) for flying `distance_nm`
+ *  from `from_elev_ft` at the given cruise altitude. Climb is
+ *  pro-rated for legs too short to reach cruise altitude — same
+ *  math `buildInteractiveLeg` uses for the actual leg. */
+function totalLegFuelGal(input: {
+  aircraft: Aircraft;
+  from_elev_ft: number;
+  cruise_alt_ft: number;
+  distance_nm: number;
+}): number {
+  const { aircraft, from_elev_ft, cruise_alt_ft, distance_nm } = input;
+  const c = cruiseAt(aircraft, cruise_alt_ft);
+  const climb = climbFromTo(aircraft, from_elev_ft, cruise_alt_ft);
+  const climb_distance_nm = Math.min(climb.distance_nm, distance_nm);
+  const climb_fraction =
+    climb.distance_nm > 0 ? climb_distance_nm / climb.distance_nm : 0;
+  const climb_fuel_gal = climb.fuel_gal * climb_fraction;
+  const cruise_distance_nm = Math.max(0, distance_nm - climb_distance_nm);
+  const cruise_fuel_gal = (cruise_distance_nm / c.tas_kt) * c.fuel_gph;
+  return climb_fuel_gal + cruise_fuel_gal;
+}
+
+/** Pick the cruise altitude that minimizes total leg fuel (climb +
+ *  cruise) while respecting (a) the hemispheric rule for the leg's
+ *  magnetic course, (b) a floor altitude (pilot target or terrain),
+ *  and (c) the aircraft's published cruise envelope (never exceeds
+ *  the highest cruise row). Enumerates legal hemispheric levels in
+ *  2,000 ft steps; for piston/turbine pisos the climb-fuel penalty
+ *  usually outweighs cruise efficiency on short legs, so this
+ *  rightly picks a lower alt for those. */
+export function cheapestCruiseAltFt(input: {
+  aircraft: Aircraft;
+  from_elev_ft: number;
+  floor_ft: number;
+  magnetic_course_deg: number;
+  flightRule: FlightRule;
+  distance_nm: number;
+}): number {
+  const {
+    aircraft,
+    from_elev_ft,
+    floor_ft,
+    magnetic_course_deg,
+    flightRule,
+    distance_nm,
+  } = input;
+  const ceiling =
+    aircraft.cruise[aircraft.cruise.length - 1]?.altitude_ft ?? floor_ft;
+  // POH-verbatim: never search above the published cruise table.
+  // Above that, the engine would clamp to the top row — i.e.
+  // invent a number for an altitude the POH doesn't actually
+  // cover. The dropdown UI applies the same cap so the pilot can't
+  // override into uncovered territory either.
+  const startAlt = Math.min(
+    hemisphericAltitude(floor_ft, magnetic_course_deg, flightRule),
+    ceiling,
+  );
+  let bestAlt = startAlt;
+  let bestFuel = totalLegFuelGal({
+    aircraft,
+    from_elev_ft,
+    cruise_alt_ft: startAlt,
+    distance_nm,
+  });
+  // Step in 2,000 ft increments — that's the hemispheric spacing
+  // (both VFR and IFR move 2,000 ft between consecutive same-
+  // direction levels). hemisphericAltitude normalizes each step.
+  for (let alt = startAlt + 2000; alt <= ceiling; alt += 2000) {
+    const candidate = hemisphericAltitude(
+      alt,
+      magnetic_course_deg,
+      flightRule,
+    );
+    if (candidate <= bestAlt || candidate > ceiling) continue;
+    const fuel = totalLegFuelGal({
+      aircraft,
+      from_elev_ft,
+      cruise_alt_ft: candidate,
+      distance_nm,
+    });
+    if (fuel < bestFuel) {
+      bestFuel = fuel;
+      bestAlt = candidate;
+    }
+  }
+  return bestAlt;
+}
+
 /** Compute the per-leg numbers (distance, time, fuel, course,
  *  altitude, terrain penalty) for one interactive-mode leg. Mirrors
  *  the math in `routing.buildGraph` but is callable for a single
@@ -81,12 +169,10 @@ export function buildInteractiveLeg(
     variation_deg !== null
       ? magneticCourseDeg(true_course_deg, variation_deg)
       : true_course_deg;
-  // "Auto" altitude: round the pilot's target to a hemispheric-legal
-  // level, then bump it up if terrain on this leg requires more
-  // clearance. The bump uses the standard 2,000 ft buffer so a leg
-  // crossing the Rockies doesn't quietly cruise at 6,500 ft when
-  // the great-circle path tops 12,000 ft. The pilot can still
-  // override with an explicit `overrideAltFt`.
+  // "Auto" altitude: pick the cheapest legal hemispheric level for
+  // this leg that's at or above (a) the pilot's target altitude
+  // and (b) the terrain floor for the leg's great-circle path. The
+  // pilot can still override with an explicit `overrideAltFt`.
   const defaultAlt = hemisphericAltitude(
     targetAltFt,
     magnetic_course_deg,
@@ -101,13 +187,21 @@ export function buildInteractiveLeg(
         dem,
       })
     : 0;
+  const fromElev = from.elevation_ft ?? 0;
+  const floorAlt = Math.max(defaultAlt, terrainFloor);
   const cruise_alt_ft =
     overrideAltFt !== null && overrideAltFt !== undefined
       ? overrideAltFt
-      : Math.max(defaultAlt, terrainFloor);
+      : cheapestCruiseAltFt({
+          aircraft,
+          from_elev_ft: fromElev,
+          floor_ft: floorAlt,
+          magnetic_course_deg,
+          flightRule,
+          distance_nm,
+        });
 
   const c = cruiseAt(aircraft, cruise_alt_ft);
-  const fromElev = from.elevation_ft ?? 0;
   const climb = climbFromTo(aircraft, fromElev, cruise_alt_ft);
   const climb_distance_nm = Math.min(climb.distance_nm, distance_nm);
   const climb_fraction =

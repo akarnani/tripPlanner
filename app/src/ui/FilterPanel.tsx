@@ -17,6 +17,12 @@ interface Props {
   /** Selected aircraft's fuel type — drives the label on the fuel
    *  toggle so the user knows what's actually being matched. */
   aircraftFuelType: FuelType;
+  /** True when the POH-driven runway check is active for the
+   *  current aircraft. When set, the manual "minimum runway length"
+   *  control is hidden — the runway check is strictly better
+   *  (aircraft- and weight-specific), so layering the manual
+   *  cutoff on top would either over-constrain or be ignored. */
+  runwayCheckActive: boolean;
 }
 
 export function FilterPanel({
@@ -26,31 +32,40 @@ export function FilterPanel({
   totalCount,
   hasApproachData,
   aircraftFuelType,
+  runwayCheckActive,
 }: Props) {
   return (
     <div className="space-y-4">
-      <div>
-        <label
-          htmlFor="min-runway-ft"
-          className="block text-xs font-medium uppercase tracking-wide text-slate-500"
-        >
-          Minimum runway length (ft)
-        </label>
-        <input
-          id="min-runway-ft"
-          type="number"
-          min={0}
-          step={500}
-          value={filters.minRunwayFt}
-          onChange={(e) =>
-            onChange({
-              ...filters,
-              minRunwayFt: Number.parseInt(e.target.value, 10) || 0,
-            })
-          }
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-        />
-      </div>
+      {!runwayCheckActive && (
+        <div>
+          <label
+            htmlFor="min-runway-ft"
+            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+          >
+            Minimum runway length (ft)
+          </label>
+          <input
+            id="min-runway-ft"
+            type="number"
+            min={0}
+            step={500}
+            value={filters.minRunwayFt}
+            onChange={(e) =>
+              onChange({
+                ...filters,
+                minRunwayFt: Number.parseInt(e.target.value, 10) || 0,
+              })
+            }
+            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+          />
+        </div>
+      )}
+      {runwayCheckActive && (
+        <p className="text-[11px] text-slate-500">
+          Manual minimum-runway filter is replaced by the POH-driven
+          runway check (above).
+        </p>
+      )}
       <div>
         <label
           htmlFor="tower-req"

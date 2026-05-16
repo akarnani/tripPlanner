@@ -65,7 +65,11 @@ export function AircraftPanel({
             id="target-altitude"
             type="number"
             min={0}
-            max={18000}
+            // Goes up to FL450 to cover any current or future
+            // turbine; below FL180 the +500 VFR convention applies,
+            // above it the value clamps to the next legal IFR
+            // thousand at planning time (see hemisphericAltitude).
+            max={45000}
             step={500}
             value={targetAltFt}
             onChange={(e) =>

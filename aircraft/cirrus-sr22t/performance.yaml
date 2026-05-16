@@ -4,6 +4,9 @@ fuel:
   type: 100LL
   density_lb_per_gal: 6.0
   usable_capacity_gal: 92
+weights:
+  max_gross_lb: 3400
+  max_landing_lb: 3400
 # All cruise rows are from the SR22T POH Section 5 "Cruise Performance"
 # table at 3200 lb, ISA standard temperature, 75% power (% of 315 HP).
 # The turbo-normalized engine can hold 75% all the way to the 25,000 ft
@@ -126,3 +129,184 @@ climb:
       time_min: 23.4
       fuel_gal: 13.7
       distance_nm: 58.7
+# Takeoff distance from SR22T POH Section 5. The POH publishes
+# tables at 3,400 lb (max gross) and 2,900 lb; both are included so
+# the engine reads the next-higher published weight tier for the
+# aircraft's actual weight rather than reading off the heaviest
+# tier alone. POH values are used verbatim — no scaling, no
+# interpolation between cells. Conditions: flaps 50%, full throttle,
+# dry/paved/level runway, zero wind.
+takeoff:
+  distance_table:
+    # ── 3,400 lb (max gross) ─────────────────────────────────────
+    - { weight_lb: 3400, pressure_alt_ft: 0,     temp_c: 0,  ground_roll_ft: 733,  total_50ft_ft: 1138 }
+    - { weight_lb: 3400, pressure_alt_ft: 0,     temp_c: 10, ground_roll_ft: 792,  total_50ft_ft: 1223 }
+    - { weight_lb: 3400, pressure_alt_ft: 0,     temp_c: 20, ground_roll_ft: 853,  total_50ft_ft: 1312 }
+    - { weight_lb: 3400, pressure_alt_ft: 0,     temp_c: 30, ground_roll_ft: 917,  total_50ft_ft: 1403 }
+    - { weight_lb: 3400, pressure_alt_ft: 0,     temp_c: 40, ground_roll_ft: 983,  total_50ft_ft: 1498 }
+    - { weight_lb: 3400, pressure_alt_ft: 1000,  temp_c: 0,  ground_roll_ft: 782,  total_50ft_ft: 1207 }
+    - { weight_lb: 3400, pressure_alt_ft: 1000,  temp_c: 10, ground_roll_ft: 845,  total_50ft_ft: 1297 }
+    - { weight_lb: 3400, pressure_alt_ft: 1000,  temp_c: 20, ground_roll_ft: 910,  total_50ft_ft: 1391 }
+    - { weight_lb: 3400, pressure_alt_ft: 1000,  temp_c: 30, ground_roll_ft: 978,  total_50ft_ft: 1488 }
+    - { weight_lb: 3400, pressure_alt_ft: 1000,  temp_c: 40, ground_roll_ft: 1049, total_50ft_ft: 1588 }
+    - { weight_lb: 3400, pressure_alt_ft: 2000,  temp_c: 0,  ground_roll_ft: 834,  total_50ft_ft: 1280 }
+    - { weight_lb: 3400, pressure_alt_ft: 2000,  temp_c: 10, ground_roll_ft: 902,  total_50ft_ft: 1376 }
+    - { weight_lb: 3400, pressure_alt_ft: 2000,  temp_c: 20, ground_roll_ft: 971,  total_50ft_ft: 1476 }
+    - { weight_lb: 3400, pressure_alt_ft: 2000,  temp_c: 30, ground_roll_ft: 1044, total_50ft_ft: 1579 }
+    - { weight_lb: 3400, pressure_alt_ft: 2000,  temp_c: 40, ground_roll_ft: 1119, total_50ft_ft: 1686 }
+    - { weight_lb: 3400, pressure_alt_ft: 3000,  temp_c: 0,  ground_roll_ft: 891,  total_50ft_ft: 1359 }
+    - { weight_lb: 3400, pressure_alt_ft: 3000,  temp_c: 10, ground_roll_ft: 963,  total_50ft_ft: 1461 }
+    - { weight_lb: 3400, pressure_alt_ft: 3000,  temp_c: 20, ground_roll_ft: 1037, total_50ft_ft: 1566 }
+    - { weight_lb: 3400, pressure_alt_ft: 3000,  temp_c: 30, ground_roll_ft: 1115, total_50ft_ft: 1676 }
+    - { weight_lb: 3400, pressure_alt_ft: 3000,  temp_c: 40, ground_roll_ft: 1195, total_50ft_ft: 1789 }
+    - { weight_lb: 3400, pressure_alt_ft: 4000,  temp_c: 0,  ground_roll_ft: 952,  total_50ft_ft: 1443 }
+    - { weight_lb: 3400, pressure_alt_ft: 4000,  temp_c: 10, ground_roll_ft: 1029, total_50ft_ft: 1551 }
+    - { weight_lb: 3400, pressure_alt_ft: 4000,  temp_c: 20, ground_roll_ft: 1108, total_50ft_ft: 1664 }
+    - { weight_lb: 3400, pressure_alt_ft: 4000,  temp_c: 30, ground_roll_ft: 1191, total_50ft_ft: 1780 }
+    - { weight_lb: 3400, pressure_alt_ft: 4000,  temp_c: 40, ground_roll_ft: 1277, total_50ft_ft: 1901 }
+    - { weight_lb: 3400, pressure_alt_ft: 5000,  temp_c: 0,  ground_roll_ft: 1018, total_50ft_ft: 1533 }
+    - { weight_lb: 3400, pressure_alt_ft: 5000,  temp_c: 10, ground_roll_ft: 1099, total_50ft_ft: 1648 }
+    - { weight_lb: 3400, pressure_alt_ft: 5000,  temp_c: 20, ground_roll_ft: 1185, total_50ft_ft: 1768 }
+    - { weight_lb: 3400, pressure_alt_ft: 5000,  temp_c: 30, ground_roll_ft: 1273, total_50ft_ft: 1892 }
+    - { weight_lb: 3400, pressure_alt_ft: 5000,  temp_c: 40, ground_roll_ft: 1365, total_50ft_ft: 2020 }
+    - { weight_lb: 3400, pressure_alt_ft: 6000,  temp_c: 0,  ground_roll_ft: 1088, total_50ft_ft: 1629 }
+    - { weight_lb: 3400, pressure_alt_ft: 6000,  temp_c: 10, ground_roll_ft: 1176, total_50ft_ft: 1752 }
+    - { weight_lb: 3400, pressure_alt_ft: 6000,  temp_c: 20, ground_roll_ft: 1267, total_50ft_ft: 1879 }
+    - { weight_lb: 3400, pressure_alt_ft: 6000,  temp_c: 30, ground_roll_ft: 1362, total_50ft_ft: 2011 }
+    - { weight_lb: 3400, pressure_alt_ft: 6000,  temp_c: 40, ground_roll_ft: 1460, total_50ft_ft: 2147 }
+    - { weight_lb: 3400, pressure_alt_ft: 7000,  temp_c: 0,  ground_roll_ft: 1164, total_50ft_ft: 1733 }
+    - { weight_lb: 3400, pressure_alt_ft: 7000,  temp_c: 10, ground_roll_ft: 1258, total_50ft_ft: 1863 }
+    - { weight_lb: 3400, pressure_alt_ft: 7000,  temp_c: 20, ground_roll_ft: 1355, total_50ft_ft: 1999 }
+    - { weight_lb: 3400, pressure_alt_ft: 7000,  temp_c: 30, ground_roll_ft: 1457, total_50ft_ft: 2139 }
+    - { weight_lb: 3400, pressure_alt_ft: 7000,  temp_c: 40, ground_roll_ft: 1562, total_50ft_ft: 2284 }
+    - { weight_lb: 3400, pressure_alt_ft: 8000,  temp_c: 0,  ground_roll_ft: 1246, total_50ft_ft: 1844 }
+    - { weight_lb: 3400, pressure_alt_ft: 8000,  temp_c: 10, ground_roll_ft: 1347, total_50ft_ft: 1983 }
+    - { weight_lb: 3400, pressure_alt_ft: 8000,  temp_c: 20, ground_roll_ft: 1451, total_50ft_ft: 2127 }
+    - { weight_lb: 3400, pressure_alt_ft: 8000,  temp_c: 30, ground_roll_ft: 1559, total_50ft_ft: 2276 }
+    - { weight_lb: 3400, pressure_alt_ft: 8000,  temp_c: 40, ground_roll_ft: 1672, total_50ft_ft: 2431 }
+    - { weight_lb: 3400, pressure_alt_ft: 9000,  temp_c: 0,  ground_roll_ft: 1335, total_50ft_ft: 1963 }
+    - { weight_lb: 3400, pressure_alt_ft: 9000,  temp_c: 10, ground_roll_ft: 1442, total_50ft_ft: 2111 }
+    - { weight_lb: 3400, pressure_alt_ft: 9000,  temp_c: 20, ground_roll_ft: 1554, total_50ft_ft: 2265 }
+    - { weight_lb: 3400, pressure_alt_ft: 9000,  temp_c: 30, ground_roll_ft: 1670, total_50ft_ft: 2424 }
+    - { weight_lb: 3400, pressure_alt_ft: 9000,  temp_c: 40, ground_roll_ft: 1791, total_50ft_ft: 2589 }
+    - { weight_lb: 3400, pressure_alt_ft: 10000, temp_c: 0,  ground_roll_ft: 1430, total_50ft_ft: 2091 }
+    - { weight_lb: 3400, pressure_alt_ft: 10000, temp_c: 10, ground_roll_ft: 1545, total_50ft_ft: 2249 }
+    - { weight_lb: 3400, pressure_alt_ft: 10000, temp_c: 20, ground_roll_ft: 1665, total_50ft_ft: 2413 }
+    - { weight_lb: 3400, pressure_alt_ft: 10000, temp_c: 30, ground_roll_ft: 1789, total_50ft_ft: 2582 }
+    - { weight_lb: 3400, pressure_alt_ft: 10000, temp_c: 40, ground_roll_ft: 1919, total_50ft_ft: 2758 }
+    # ── 2,900 lb ─────────────────────────────────────────────────
+    - { weight_lb: 2900, pressure_alt_ft: 0,     temp_c: 0,  ground_roll_ft: 485,  total_50ft_ft: 766 }
+    - { weight_lb: 2900, pressure_alt_ft: 0,     temp_c: 10, ground_roll_ft: 524,  total_50ft_ft: 823 }
+    - { weight_lb: 2900, pressure_alt_ft: 0,     temp_c: 20, ground_roll_ft: 564,  total_50ft_ft: 882 }
+    - { weight_lb: 2900, pressure_alt_ft: 0,     temp_c: 30, ground_roll_ft: 606,  total_50ft_ft: 944 }
+    - { weight_lb: 2900, pressure_alt_ft: 0,     temp_c: 40, ground_roll_ft: 650,  total_50ft_ft: 1007 }
+    - { weight_lb: 2900, pressure_alt_ft: 1000,  temp_c: 0,  ground_roll_ft: 517,  total_50ft_ft: 812 }
+    - { weight_lb: 2900, pressure_alt_ft: 1000,  temp_c: 10, ground_roll_ft: 559,  total_50ft_ft: 872 }
+    - { weight_lb: 2900, pressure_alt_ft: 1000,  temp_c: 20, ground_roll_ft: 602,  total_50ft_ft: 935 }
+    - { weight_lb: 2900, pressure_alt_ft: 1000,  temp_c: 30, ground_roll_ft: 647,  total_50ft_ft: 1000 }
+    - { weight_lb: 2900, pressure_alt_ft: 1000,  temp_c: 40, ground_roll_ft: 694,  total_50ft_ft: 1068 }
+    - { weight_lb: 2900, pressure_alt_ft: 2000,  temp_c: 0,  ground_roll_ft: 552,  total_50ft_ft: 861 }
+    - { weight_lb: 2900, pressure_alt_ft: 2000,  temp_c: 10, ground_roll_ft: 596,  total_50ft_ft: 925 }
+    - { weight_lb: 2900, pressure_alt_ft: 2000,  temp_c: 20, ground_roll_ft: 642,  total_50ft_ft: 992 }
+    - { weight_lb: 2900, pressure_alt_ft: 2000,  temp_c: 30, ground_roll_ft: 690,  total_50ft_ft: 1061 }
+    - { weight_lb: 2900, pressure_alt_ft: 2000,  temp_c: 40, ground_roll_ft: 740,  total_50ft_ft: 1133 }
+    - { weight_lb: 2900, pressure_alt_ft: 3000,  temp_c: 0,  ground_roll_ft: 589,  total_50ft_ft: 914 }
+    - { weight_lb: 2900, pressure_alt_ft: 3000,  temp_c: 10, ground_roll_ft: 637,  total_50ft_ft: 982 }
+    - { weight_lb: 2900, pressure_alt_ft: 3000,  temp_c: 20, ground_roll_ft: 686,  total_50ft_ft: 1053 }
+    - { weight_lb: 2900, pressure_alt_ft: 3000,  temp_c: 30, ground_roll_ft: 737,  total_50ft_ft: 1126 }
+    - { weight_lb: 2900, pressure_alt_ft: 3000,  temp_c: 40, ground_roll_ft: 791,  total_50ft_ft: 1202 }
+    - { weight_lb: 2900, pressure_alt_ft: 4000,  temp_c: 0,  ground_roll_ft: 630,  total_50ft_ft: 970 }
+    - { weight_lb: 2900, pressure_alt_ft: 4000,  temp_c: 10, ground_roll_ft: 680,  total_50ft_ft: 1043 }
+    - { weight_lb: 2900, pressure_alt_ft: 4000,  temp_c: 20, ground_roll_ft: 733,  total_50ft_ft: 1118 }
+    - { weight_lb: 2900, pressure_alt_ft: 4000,  temp_c: 30, ground_roll_ft: 788,  total_50ft_ft: 1196 }
+    - { weight_lb: 2900, pressure_alt_ft: 4000,  temp_c: 40, ground_roll_ft: 845,  total_50ft_ft: 1277 }
+    - { weight_lb: 2900, pressure_alt_ft: 5000,  temp_c: 0,  ground_roll_ft: 673,  total_50ft_ft: 1030 }
+    - { weight_lb: 2900, pressure_alt_ft: 5000,  temp_c: 10, ground_roll_ft: 727,  total_50ft_ft: 1108 }
+    - { weight_lb: 2900, pressure_alt_ft: 5000,  temp_c: 20, ground_roll_ft: 783,  total_50ft_ft: 1188 }
+    - { weight_lb: 2900, pressure_alt_ft: 5000,  temp_c: 30, ground_roll_ft: 842,  total_50ft_ft: 1271 }
+    - { weight_lb: 2900, pressure_alt_ft: 5000,  temp_c: 40, ground_roll_ft: 903,  total_50ft_ft: 1357 }
+    - { weight_lb: 2900, pressure_alt_ft: 6000,  temp_c: 0,  ground_roll_ft: 720,  total_50ft_ft: 1095 }
+    - { weight_lb: 2900, pressure_alt_ft: 6000,  temp_c: 10, ground_roll_ft: 778,  total_50ft_ft: 1177 }
+    - { weight_lb: 2900, pressure_alt_ft: 6000,  temp_c: 20, ground_roll_ft: 838,  total_50ft_ft: 1262 }
+    - { weight_lb: 2900, pressure_alt_ft: 6000,  temp_c: 30, ground_roll_ft: 900,  total_50ft_ft: 1351 }
+    - { weight_lb: 2900, pressure_alt_ft: 6000,  temp_c: 40, ground_roll_ft: 965,  total_50ft_ft: 1442 }
+    - { weight_lb: 2900, pressure_alt_ft: 7000,  temp_c: 0,  ground_roll_ft: 770,  total_50ft_ft: 1164 }
+    - { weight_lb: 2900, pressure_alt_ft: 7000,  temp_c: 10, ground_roll_ft: 832,  total_50ft_ft: 1252 }
+    - { weight_lb: 2900, pressure_alt_ft: 7000,  temp_c: 20, ground_roll_ft: 896,  total_50ft_ft: 1343 }
+    - { weight_lb: 2900, pressure_alt_ft: 7000,  temp_c: 30, ground_roll_ft: 963,  total_50ft_ft: 1437 }
+    - { weight_lb: 2900, pressure_alt_ft: 7000,  temp_c: 40, ground_roll_ft: 1033, total_50ft_ft: 1534 }
+    - { weight_lb: 2900, pressure_alt_ft: 8000,  temp_c: 0,  ground_roll_ft: 824,  total_50ft_ft: 1239 }
+    - { weight_lb: 2900, pressure_alt_ft: 8000,  temp_c: 10, ground_roll_ft: 890,  total_50ft_ft: 1332 }
+    - { weight_lb: 2900, pressure_alt_ft: 8000,  temp_c: 20, ground_roll_ft: 959,  total_50ft_ft: 1428 }
+    - { weight_lb: 2900, pressure_alt_ft: 8000,  temp_c: 30, ground_roll_ft: 1031, total_50ft_ft: 1529 }
+    - { weight_lb: 2900, pressure_alt_ft: 8000,  temp_c: 40, ground_roll_ft: 1106, total_50ft_ft: 1632 }
+    - { weight_lb: 2900, pressure_alt_ft: 9000,  temp_c: 0,  ground_roll_ft: 883,  total_50ft_ft: 1318 }
+    - { weight_lb: 2900, pressure_alt_ft: 9000,  temp_c: 10, ground_roll_ft: 954,  total_50ft_ft: 1418 }
+    - { weight_lb: 2900, pressure_alt_ft: 9000,  temp_c: 20, ground_roll_ft: 1028, total_50ft_ft: 1521 }
+    - { weight_lb: 2900, pressure_alt_ft: 9000,  temp_c: 30, ground_roll_ft: 1104, total_50ft_ft: 1627 }
+    - { weight_lb: 2900, pressure_alt_ft: 9000,  temp_c: 40, ground_roll_ft: 1184, total_50ft_ft: 1738 }
+    - { weight_lb: 2900, pressure_alt_ft: 10000, temp_c: 0,  ground_roll_ft: 946,  total_50ft_ft: 1404 }
+    - { weight_lb: 2900, pressure_alt_ft: 10000, temp_c: 10, ground_roll_ft: 1022, total_50ft_ft: 1510 }
+    - { weight_lb: 2900, pressure_alt_ft: 10000, temp_c: 20, ground_roll_ft: 1101, total_50ft_ft: 1620 }
+    - { weight_lb: 2900, pressure_alt_ft: 10000, temp_c: 30, ground_roll_ft: 1183, total_50ft_ft: 1733 }
+    - { weight_lb: 2900, pressure_alt_ft: 10000, temp_c: 40, ground_roll_ft: 1269, total_50ft_ft: 1851 }
+# Landing distance at 3,400 lb from SR22T POH Section 5, "Landing
+# Distance". Conditions: flaps 100%, power idle, dry/paved/level,
+# zero wind.
+landing:
+  distance_table:
+    - { pressure_alt_ft: 0,     temp_c: 0,  ground_roll_ft: 1082, total_50ft_ft: 2262 }
+    - { pressure_alt_ft: 0,     temp_c: 10, ground_roll_ft: 1121, total_50ft_ft: 2316 }
+    - { pressure_alt_ft: 0,     temp_c: 20, ground_roll_ft: 1161, total_50ft_ft: 2372 }
+    - { pressure_alt_ft: 0,     temp_c: 30, ground_roll_ft: 1200, total_50ft_ft: 2428 }
+    - { pressure_alt_ft: 0,     temp_c: 40, ground_roll_ft: 1240, total_50ft_ft: 2485 }
+    - { pressure_alt_ft: 1000,  temp_c: 0,  ground_roll_ft: 1122, total_50ft_ft: 2317 }
+    - { pressure_alt_ft: 1000,  temp_c: 10, ground_roll_ft: 1163, total_50ft_ft: 2374 }
+    - { pressure_alt_ft: 1000,  temp_c: 20, ground_roll_ft: 1204, total_50ft_ft: 2433 }
+    - { pressure_alt_ft: 1000,  temp_c: 30, ground_roll_ft: 1245, total_50ft_ft: 2492 }
+    - { pressure_alt_ft: 1000,  temp_c: 40, ground_roll_ft: 1286, total_50ft_ft: 2551 }
+    - { pressure_alt_ft: 2000,  temp_c: 0,  ground_roll_ft: 1163, total_50ft_ft: 2375 }
+    - { pressure_alt_ft: 2000,  temp_c: 10, ground_roll_ft: 1206, total_50ft_ft: 2436 }
+    - { pressure_alt_ft: 2000,  temp_c: 20, ground_roll_ft: 1248, total_50ft_ft: 2497 }
+    - { pressure_alt_ft: 2000,  temp_c: 30, ground_roll_ft: 1291, total_50ft_ft: 2559 }
+    - { pressure_alt_ft: 2000,  temp_c: 40, ground_roll_ft: 1334, total_50ft_ft: 2621 }
+    - { pressure_alt_ft: 3000,  temp_c: 0,  ground_roll_ft: 1207, total_50ft_ft: 2437 }
+    - { pressure_alt_ft: 3000,  temp_c: 10, ground_roll_ft: 1251, total_50ft_ft: 2501 }
+    - { pressure_alt_ft: 3000,  temp_c: 20, ground_roll_ft: 1295, total_50ft_ft: 2565 }
+    - { pressure_alt_ft: 3000,  temp_c: 30, ground_roll_ft: 1339, total_50ft_ft: 2630 }
+    - { pressure_alt_ft: 3000,  temp_c: 40, ground_roll_ft: 1384, total_50ft_ft: 2696 }
+    - { pressure_alt_ft: 4000,  temp_c: 0,  ground_roll_ft: 1252, total_50ft_ft: 2503 }
+    - { pressure_alt_ft: 4000,  temp_c: 10, ground_roll_ft: 1298, total_50ft_ft: 2569 }
+    - { pressure_alt_ft: 4000,  temp_c: 20, ground_roll_ft: 1344, total_50ft_ft: 2637 }
+    - { pressure_alt_ft: 4000,  temp_c: 30, ground_roll_ft: 1390, total_50ft_ft: 2705 }
+    - { pressure_alt_ft: 4000,  temp_c: 40, ground_roll_ft: 1436, total_50ft_ft: 2774 }
+    - { pressure_alt_ft: 5000,  temp_c: 0,  ground_roll_ft: 1300, total_50ft_ft: 2572 }
+    - { pressure_alt_ft: 5000,  temp_c: 10, ground_roll_ft: 1348, total_50ft_ft: 2642 }
+    - { pressure_alt_ft: 5000,  temp_c: 20, ground_roll_ft: 1395, total_50ft_ft: 2713 }
+    - { pressure_alt_ft: 5000,  temp_c: 30, ground_roll_ft: 1443, total_50ft_ft: 2785 }
+    - { pressure_alt_ft: 5000,  temp_c: 40, ground_roll_ft: 1490, total_50ft_ft: 2857 }
+    - { pressure_alt_ft: 6000,  temp_c: 0,  ground_roll_ft: 1350, total_50ft_ft: 2645 }
+    - { pressure_alt_ft: 6000,  temp_c: 10, ground_roll_ft: 1399, total_50ft_ft: 2719 }
+    - { pressure_alt_ft: 6000,  temp_c: 20, ground_roll_ft: 1449, total_50ft_ft: 2794 }
+    - { pressure_alt_ft: 6000,  temp_c: 30, ground_roll_ft: 1498, total_50ft_ft: 2869 }
+    - { pressure_alt_ft: 6000,  temp_c: 40, ground_roll_ft: 1547, total_50ft_ft: 2945 }
+    - { pressure_alt_ft: 7000,  temp_c: 0,  ground_roll_ft: 1402, total_50ft_ft: 2723 }
+    - { pressure_alt_ft: 7000,  temp_c: 10, ground_roll_ft: 1453, total_50ft_ft: 2800 }
+    - { pressure_alt_ft: 7000,  temp_c: 20, ground_roll_ft: 1504, total_50ft_ft: 2879 }
+    - { pressure_alt_ft: 7000,  temp_c: 30, ground_roll_ft: 1556, total_50ft_ft: 2958 }
+    - { pressure_alt_ft: 7000,  temp_c: 40, ground_roll_ft: 1607, total_50ft_ft: 3038 }
+    - { pressure_alt_ft: 8000,  temp_c: 0,  ground_roll_ft: 1456, total_50ft_ft: 2805 }
+    - { pressure_alt_ft: 8000,  temp_c: 10, ground_roll_ft: 1509, total_50ft_ft: 2887 }
+    - { pressure_alt_ft: 8000,  temp_c: 20, ground_roll_ft: 1563, total_50ft_ft: 2969 }
+    - { pressure_alt_ft: 8000,  temp_c: 30, ground_roll_ft: 1616, total_50ft_ft: 3052 }
+    - { pressure_alt_ft: 8000,  temp_c: 40, ground_roll_ft: 1669, total_50ft_ft: 3136 }
+    - { pressure_alt_ft: 9000,  temp_c: 0,  ground_roll_ft: 1513, total_50ft_ft: 2892 }
+    - { pressure_alt_ft: 9000,  temp_c: 10, ground_roll_ft: 1569, total_50ft_ft: 2978 }
+    - { pressure_alt_ft: 9000,  temp_c: 20, ground_roll_ft: 1624, total_50ft_ft: 3064 }
+    - { pressure_alt_ft: 9000,  temp_c: 30, ground_roll_ft: 1679, total_50ft_ft: 3152 }
+    - { pressure_alt_ft: 9000,  temp_c: 40, ground_roll_ft: 1735, total_50ft_ft: 3240 }
+    - { pressure_alt_ft: 10000, temp_c: 0,  ground_roll_ft: 1573, total_50ft_ft: 2984 }
+    - { pressure_alt_ft: 10000, temp_c: 10, ground_roll_ft: 1630, total_50ft_ft: 3074 }
+    - { pressure_alt_ft: 10000, temp_c: 20, ground_roll_ft: 1688, total_50ft_ft: 3165 }
+    - { pressure_alt_ft: 10000, temp_c: 30, ground_roll_ft: 1746, total_50ft_ft: 3257 }
+    - { pressure_alt_ft: 10000, temp_c: 40, ground_roll_ft: 1803, total_50ft_ft: 3350 }

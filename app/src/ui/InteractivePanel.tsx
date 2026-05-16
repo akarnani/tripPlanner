@@ -35,17 +35,26 @@ interface Props {
   /** True when the destination falls inside the solid (safe) ring,
    *  meaning the trip can finish on the current tank. */
   destInRange: boolean;
+  /** Highest altitude the selected aircraft's POH cruise table
+   *  publishes. Caps the per-leg altitude dropdown so the pilot
+   *  can't pick a level the engine has no data for. */
+  cruiseCeilingFt: number;
   onRemoveStop: (stopIndex: number) => void;
   onChangeLegAltitude: (legIndex: number, altFt: number | null) => void;
   onExit: () => void;
 }
 
-/** Cruise altitude options offered in the per-leg dropdown. Covers
- *  the typical GA range; pilots flying outside this range can type
- *  values directly. */
+/** Cruise altitude options offered in the per-leg dropdown. Below
+ *  FL180 the typical VFR/IFR+500 levels; from FL180 up — Class A
+ *  airspace, no +500 convention — every 1,000 ft to FL310, which
+ *  covers the highest published cruise altitude across all current
+ *  aircraft (SF50 to 28,000 ft / FL280). The dropdown is a
+ *  convenience: the engine accepts any altitude the pilot picks. */
 const ALT_OPTIONS = [
   3500, 4500, 5500, 6500, 7500, 8500, 9500, 10500, 11500, 12500, 13500, 14500,
   15500, 16500, 17500,
+  18000, 19000, 20000, 21000, 22000, 23000, 24000, 25000, 26000, 27000, 28000,
+  29000, 30000, 31000,
 ];
 
 function fmtNm(nm: number): string {
@@ -68,6 +77,7 @@ export function InteractivePanel({
   rangeSolidNm,
   rangeDashedNm,
   destInRange,
+  cruiseCeilingFt,
   onRemoveStop,
   onChangeLegAltitude,
   onExit,
@@ -110,6 +120,7 @@ export function InteractivePanel({
             defaultAltFt={legs[i]?.cruise_alt_ft}
             feasible={legFeasibility[i] ?? true}
             refuels={stopRefuels[i] ?? true}
+            cruiseCeilingFt={cruiseCeilingFt}
             onAltitudeChange={(alt) => onChangeLegAltitude(i, alt)}
             onRemove={() => onRemoveStop(i)}
           />
@@ -129,6 +140,7 @@ export function InteractivePanel({
           }
           defaultAltFt={legs[stops.length]?.cruise_alt_ft}
           feasible={legFeasibility[stops.length] ?? true}
+          cruiseCeilingFt={cruiseCeilingFt}
           onAltitudeChange={(alt) => onChangeLegAltitude(stops.length, alt)}
           onRemove={undefined}
           isDestination
@@ -198,6 +210,10 @@ interface LegAndStopProps {
    *  the pilot knows the next leg's range is reduced. The destination
    *  doesn't pass this prop; only intermediate stops do. */
   refuels?: boolean;
+  /** Highest published cruise altitude in the aircraft's POH —
+   *  options above this are hidden so the pilot can't pick a level
+   *  the engine has no data for. */
+  cruiseCeilingFt: number;
   onAltitudeChange: (altFt: number | null) => void;
   onRemove?: () => void;
   isDestination?: boolean;
@@ -212,15 +228,19 @@ function LegAndStop({
   defaultAltFt,
   feasible,
   refuels,
+  cruiseCeilingFt,
   onAltitudeChange,
   onRemove,
   isDestination,
   destInRange,
 }: LegAndStopProps) {
-  // Build the dropdown options. Include the current selection and
-  // the default if either isn't in the canonical list.
-  const seen = new Set(ALT_OPTIONS);
-  const opts = [...ALT_OPTIONS];
+  // Build the dropdown options. Filter the canonical list to
+  // altitudes the aircraft's POH actually covers, then merge in
+  // the current selection / default so they remain selectable
+  // even if outside the canonical set.
+  const allowed = ALT_OPTIONS.filter((a) => a <= cruiseCeilingFt);
+  const seen = new Set(allowed);
+  const opts = [...allowed];
   if (altFt !== null && !seen.has(altFt)) {
     opts.push(altFt);
     seen.add(altFt);
