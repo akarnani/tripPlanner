@@ -73,10 +73,8 @@ export function ExcludedAirports({
 
   return (
     <div>
-      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
-        Excluded stops
-      </p>
-      <div className="flex gap-1">
+      <p className="field-label mb-1.5">Excluded stops</p>
+      <div className="flex gap-2">
         <input
           type="text"
           value={draft}
@@ -91,26 +89,28 @@ export function ExcludedAirports({
             }
           }}
           placeholder="KICAO or KSEA KGEG KBOI"
-          className="w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs uppercase"
+          className="input input-mono flex-1 text-xs"
         />
         <button
           type="button"
           onClick={submit}
-          className="shrink-0 rounded border border-slate-300 bg-white px-2 py-1 text-xs hover:bg-slate-100"
+          className="btn-secondary shrink-0 px-3 text-xs"
         >
           Add
         </button>
       </div>
-      {error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}
+      {error && (
+        <p className="mt-1.5 text-[11px] text-rose-600">{error}</p>
+      )}
       {excludedIds.size > 0 && (
-        <ul className="mt-2 flex flex-wrap gap-1">
+        <ul className="mt-2.5 flex flex-wrap gap-1.5">
           {[...excludedIds].sort().map((id) => (
             <li key={id}>
               <button
                 type="button"
                 title={`Allow ${labelFor(id)} as a stop again`}
                 onClick={() => onInclude(id)}
-                className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 font-mono text-[11px] text-red-700 hover:bg-red-100"
+                className="chip-danger transition"
               >
                 {labelFor(id)} <span aria-hidden="true">×</span>
               </button>

@@ -10,3 +10,105 @@ body,
   height: 100%;
   margin: 0;
 }
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
+  }
+}
+
+@layer components {
+  /* Card surface — every section in the sidebar / right rail uses this. */
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-card;
+  }
+  .card-body {
+    @apply p-4;
+  }
+
+  /* Section headings. Slightly larger and tighter than the previous
+     uppercase micro-titles — modern apps lean on weight + size rather
+     than tracking. */
+  .section-title {
+    @apply text-[13px] font-semibold tracking-tight text-slate-900;
+  }
+  .section-subtitle {
+    @apply mt-0.5 text-[11px] text-slate-500;
+  }
+
+  /* Field labels. */
+  .field-label {
+    @apply block text-[11px] font-medium uppercase tracking-wide text-slate-500;
+  }
+
+  /* Inputs / selects. Single rule so every form control on the page
+     has consistent radius, ring, and focus state. */
+  .input,
+  .select {
+    @apply block w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900
+           shadow-sm transition
+           placeholder:text-slate-400
+           focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/30
+           disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400;
+  }
+  .input-mono {
+    @apply font-mono uppercase tracking-wide;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium
+           transition active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60 disabled:active:translate-y-0;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 text-white shadow-sm hover:bg-brand-700
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40
+           disabled:bg-slate-300 disabled:text-white;
+  }
+  .btn-secondary {
+    @apply btn border border-slate-300 bg-white text-slate-700 shadow-sm hover:bg-slate-50
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/30;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-900 shadow-none;
+  }
+  .btn-warning {
+    @apply btn bg-amber-500 text-white shadow-sm hover:bg-amber-600
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40;
+  }
+
+  /* Segmented control (the VFR/IFR style toggle) */
+  .seg {
+    @apply inline-flex overflow-hidden rounded-lg border border-slate-300 bg-slate-100 p-0.5;
+  }
+  .seg-btn {
+    @apply rounded-md px-3 py-1 text-xs font-semibold text-slate-600 transition
+           hover:text-slate-900
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .seg-btn-active {
+    @apply bg-white text-slate-900 shadow-sm;
+  }
+
+  /* Chips (used in pinned/excluded lists) */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px];
+  }
+  .chip-danger {
+    @apply chip border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100;
+  }
+
+  /* Inline icon button used to close / remove chips and rows. */
+  .icon-btn {
+    @apply rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700;
+  }
+  .icon-btn-danger {
+    @apply hover:bg-rose-50 hover:text-rose-600;
+  }
+
+  /* Checkbox tweak — brand accent when checked. */
+  input[type="checkbox"] {
+    accent-color: theme("colors.brand.600");
+  }
+}

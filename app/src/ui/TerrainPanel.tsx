@@ -20,53 +20,78 @@ export function TerrainPanel({
   if (!analysis) return null;
   const needsReplan = analysis.replanTargetFt > targetAltFt;
   const corridor = terminalWarnings ?? [];
+  const allClear = analysis.warnings.length === 0 && corridor.length === 0;
   return (
-    <div className="space-y-2 border-t border-slate-200 bg-amber-50/60 p-3">
+    <div
+      className={
+        "space-y-2 border-t border-slate-200 p-4 " +
+        (allClear ? "bg-emerald-50/50" : "bg-amber-50/60")
+      }
+    >
       <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold text-slate-900">Terrain</h3>
-        <span className="text-xs text-slate-600">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+          <span
+            className={
+              "inline-block h-2 w-2 rounded-full " +
+              (allClear ? "bg-emerald-500" : "bg-amber-500")
+            }
+            aria-hidden="true"
+          />
+          Terrain
+        </h3>
+        <span className="text-[11px] text-slate-600">
           Suggested target:{" "}
-          <strong className="text-slate-900">
+          <span className="font-mono font-semibold text-slate-900">
             {analysis.replanTargetFt.toLocaleString()} ft
-          </strong>
+          </span>
         </span>
       </div>
-      {analysis.warnings.length === 0 ? (
+      {allClear ? (
         <p className="text-xs text-slate-600">
           All legs clear terrain and obstacles by ≥ 2,000 ft.
         </p>
       ) : (
-        <ul className="space-y-1 text-xs text-slate-700">
-          {analysis.warnings.map((w, i) => (
-            <li key={i} className="rounded bg-amber-100 px-2 py-1">
-              <strong>
-                {w.fromIdent} → {w.toIdent}
-              </strong>{" "}
-              at {w.cruise_alt_ft.toLocaleString()} ft has{" "}
-              {w.clearance_ft.toFixed(0)} ft over{" "}
-              <em>{w.worst.source_label}</em> ({w.worst.elevation_ft.toLocaleString()} ft MSL).
-            </li>
-          ))}
-        </ul>
-      )}
-      {corridor.length > 0 && (
-        <ul className="space-y-1 text-xs text-slate-700">
-          {corridor.map((w, i) => (
-            <li key={i} className="rounded bg-amber-100 px-2 py-1">
-              <strong>{w.ident}</strong>{" "}
-              {w.kind === "departure" ? "departure" : "arrival"}: terrain{" "}
-              {Math.round(w.shortfall_ft).toLocaleString()} ft above the
-              standard {w.kind === "departure" ? "climb" : "1,000/3 nm descent"}{" "}
-              profile.
-            </li>
-          ))}
-        </ul>
+        <>
+          {analysis.warnings.length > 0 && (
+            <ul className="space-y-1.5 text-xs text-slate-700">
+              {analysis.warnings.map((w, i) => (
+                <li
+                  key={i}
+                  className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5"
+                >
+                  <strong className="font-mono">
+                    {w.fromIdent} → {w.toIdent}
+                  </strong>{" "}
+                  at {w.cruise_alt_ft.toLocaleString()} ft has{" "}
+                  {w.clearance_ft.toFixed(0)} ft over{" "}
+                  <em>{w.worst.source_label}</em> ({w.worst.elevation_ft.toLocaleString()} ft MSL).
+                </li>
+              ))}
+            </ul>
+          )}
+          {corridor.length > 0 && (
+            <ul className="space-y-1.5 text-xs text-slate-700">
+              {corridor.map((w, i) => (
+                <li
+                  key={i}
+                  className="rounded-md border border-amber-200 bg-white/70 px-2 py-1.5"
+                >
+                  <strong className="font-mono">{w.ident}</strong>{" "}
+                  {w.kind === "departure" ? "departure" : "arrival"}: terrain{" "}
+                  {Math.round(w.shortfall_ft).toLocaleString()} ft above the
+                  standard {w.kind === "departure" ? "climb" : "1,000/3 nm descent"}{" "}
+                  profile.
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
       {needsReplan && (
         <button
           type="button"
           onClick={onReplanAtMinSafe}
-          className="w-full rounded bg-amber-600 px-2 py-1 text-xs font-semibold text-white hover:bg-amber-700"
+          className="btn-warning w-full"
         >
           Replan with {analysis.replanTargetFt.toLocaleString()} ft target
         </button>

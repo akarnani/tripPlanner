@@ -87,23 +87,22 @@ export function InteractivePanel({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-slate-700">
-          Interactive build
+          Click airports on the map
         </span>
         <button
           type="button"
           onClick={onExit}
-          className="text-[11px] text-slate-500 underline hover:text-slate-700"
+          className="text-[11px] font-medium text-brand-600 hover:text-brand-800"
         >
           Switch to auto plan
         </button>
       </div>
-      <p className="text-[11px] text-slate-500">
-        Click any airport on the map to add it as the next stop. Each
-        stop is assumed to be a refuel stop (next tank full). The
-        rings show your range from the current departure point — solid
-        is with reserves, dashed is everything in the tank.
+      <p className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[11px] leading-relaxed text-slate-600">
+        Each click adds the next stop and assumes a refuel. The rings show
+        your range from the current departure point — solid is with
+        reserves, dashed is everything in the tank.
       </p>
-      <div className="rounded border border-slate-200 bg-white">
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <RouteRow
           label="From"
           ident={originIdent}
@@ -147,15 +146,23 @@ export function InteractivePanel({
           destInRange={destInRange}
         />
       </div>
-      <div className="rounded border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-700">
-        <div>
-          <span className="text-slate-500">To destination from here:</span>{" "}
-          <span className="font-medium">{fmtNm(distanceToDestNm)}</span>
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-[11px] text-slate-700">
+        <div className="flex items-baseline justify-between">
+          <span className="text-slate-500">To destination from here</span>
+          <span className="font-mono text-xs font-semibold text-slate-900">
+            {fmtNm(distanceToDestNm)}
+          </span>
         </div>
-        <div>
-          <span className="text-slate-500">Range from here:</span>{" "}
-          <span className="font-medium">{fmtNm(rangeSolidNm)}</span> with
-          reserve · <span>{fmtNm(rangeDashedNm)}</span> total
+        <div className="mt-1 flex items-baseline justify-between">
+          <span className="text-slate-500">Range from here</span>
+          <span className="font-mono text-xs">
+            <span className="font-semibold text-slate-900">
+              {fmtNm(rangeSolidNm)}
+            </span>
+            <span className="text-slate-400"> with reserve · </span>
+            <span>{fmtNm(rangeDashedNm)}</span>
+            <span className="text-slate-400"> total</span>
+          </span>
         </div>
       </div>
     </div>
@@ -171,14 +178,16 @@ interface RouteRowProps {
 
 function RouteRow({ label, ident, isStart, onRemove }: RouteRowProps) {
   return (
-    <div className="flex items-center gap-2 px-2 py-1.5">
+    <div className="flex items-center gap-2 px-2.5 py-2">
       <span
         className={
-          "inline-block h-2 w-2 rounded-full " +
-          (isStart ? "bg-slate-700" : "bg-orange-500")
+          "inline-block h-2 w-2 rounded-full ring-2 " +
+          (isStart
+            ? "bg-slate-700 ring-slate-200"
+            : "bg-orange-500 ring-orange-100")
         }
       />
-      <span className="text-[10px] uppercase tracking-wide text-slate-500">
+      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
         {label}
       </span>
       <span className="font-mono text-xs font-semibold text-slate-900">
@@ -189,7 +198,7 @@ function RouteRow({ label, ident, isStart, onRemove }: RouteRowProps) {
           type="button"
           aria-label="Remove stop"
           onClick={onRemove}
-          className="ml-auto text-xs text-slate-400 hover:text-red-600"
+          className="icon-btn icon-btn-danger ml-auto"
         >
           ×
         </button>
@@ -253,14 +262,14 @@ function LegAndStop({
   return (
     <>
       {leg && (
-        <div className="border-t border-slate-100 px-2 py-1.5 text-[11px] text-slate-600">
+        <div className="border-t border-slate-100 bg-slate-50/50 px-2.5 py-1.5 text-[11px] text-slate-600">
           <div className="flex items-center gap-2">
             <span className="text-slate-400">↓</span>
-            <span>{fmtNm(leg.distance_nm)}</span>
-            <span className="text-slate-400">·</span>
-            <span>{leg.time_hr.toFixed(1)} hr</span>
-            <span className="text-slate-400">·</span>
-            <span>{leg.fuel_gal.toFixed(1)} gal</span>
+            <span className="font-mono">{fmtNm(leg.distance_nm)}</span>
+            <span className="text-slate-300">·</span>
+            <span className="font-mono">{leg.time_hr.toFixed(1)} hr</span>
+            <span className="text-slate-300">·</span>
+            <span className="font-mono">{leg.fuel_gal.toFixed(1)} gal</span>
             <select
               value={altFt ?? ""}
               onChange={(e) => {
@@ -268,7 +277,7 @@ function LegAndStop({
                 onAltitudeChange(v === "" ? null : Number.parseInt(v, 10));
               }}
               className={
-                "ml-auto rounded border px-1 py-0.5 text-[11px] font-mono " +
+                "ml-auto rounded-md border px-1.5 py-0.5 text-[11px] font-mono transition focus:outline-none focus:ring-2 focus:ring-brand-500/30 " +
                 (isOverride
                   ? "border-orange-300 bg-orange-50 text-orange-900"
                   : "border-slate-300 bg-white text-slate-700")
@@ -288,33 +297,35 @@ function LegAndStop({
             </select>
           </div>
           {!feasible && (
-            <div className="mt-1 text-xs text-red-600">
+            <div className="mt-1 rounded bg-rose-50 px-1.5 py-0.5 text-[11px] text-rose-700">
               ⚠ Burns through reserve at this altitude / starting fuel.
             </div>
           )}
         </div>
       )}
-      <div className="flex items-center gap-2 border-t border-slate-100 px-2 py-1.5">
+      <div className="flex items-center gap-2 border-t border-slate-100 px-2.5 py-2">
         <span
           className={
-            "inline-block h-2 w-2 rounded-full " +
-            (isDestination ? "bg-slate-700" : "bg-orange-500")
+            "inline-block h-2 w-2 rounded-full ring-2 " +
+            (isDestination
+              ? "bg-slate-700 ring-slate-200"
+              : "bg-orange-500 ring-orange-100")
           }
         />
-        <span className="text-[10px] uppercase tracking-wide text-slate-500">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
           {isDestination ? "To" : "Stop"}
         </span>
         <span className="font-mono text-xs font-semibold text-slate-900">
           {stopIdent}
         </span>
         {isDestination && destInRange && (
-          <span className="text-[10px] font-medium text-green-700">
-            in range ✓
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+            ✓ in range
           </span>
         )}
         {!isDestination && refuels === false && (
           <span
-            className="text-[10px] font-medium text-amber-700"
+            className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800"
             title="Airport does not stock the aircraft's fuel type. The next leg departs on whatever fuel remains."
           >
             no fuel · pass-through
@@ -325,7 +336,7 @@ function LegAndStop({
             type="button"
             aria-label={`Remove stop ${stopIdent}`}
             onClick={onRemove}
-            className="ml-auto text-xs text-slate-400 hover:text-red-600"
+            className="icon-btn icon-btn-danger ml-auto"
           >
             ×
           </button>

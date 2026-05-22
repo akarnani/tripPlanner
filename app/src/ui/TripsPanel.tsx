@@ -30,7 +30,7 @@ export function TripsPanel({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="flex gap-2">
         <input
           type="text"
@@ -40,43 +40,46 @@ export function TripsPanel({
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
           }}
-          className="flex-1 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+          className="input flex-1"
         />
         <button
           type="button"
           onClick={submit}
-          className="rounded bg-slate-900 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-800"
+          className="btn-primary px-3 text-xs"
         >
           Save
         </button>
       </div>
       {trips.length === 0 ? (
-        <p className="text-[11px] text-slate-500">
+        <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-[11px] text-slate-500">
           No saved trips yet. Save the current trip to revisit later.
         </p>
       ) : (
-        <ul className="divide-y divide-slate-200 rounded border border-slate-200 bg-white">
+        <ul className="divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white">
           {visible.map((t) => (
             <li
               key={t.name}
-              className="flex items-center gap-2 px-2 py-1 text-xs"
+              className="group flex items-center gap-2 px-2.5 py-1.5 text-xs transition hover:bg-slate-50"
             >
               <button
                 type="button"
                 onClick={() => onLoad(t)}
-                className="flex-1 truncate text-left text-slate-800 hover:underline"
+                className="flex flex-1 items-baseline gap-2 truncate text-left"
                 title={`${t.origin} → ${t.destination}, saved ${formatDate(t.savedAt)}`}
               >
-                <span className="font-medium">{t.name}</span>{" "}
-                <span className="text-slate-500">
-                  · {t.origin} → {t.destination}
+                <span className="truncate font-medium text-slate-900 group-hover:text-brand-700">
+                  {t.name}
+                </span>
+                <span className="shrink-0 font-mono text-[10px] text-slate-500">
+                  {t.origin} → {t.destination}
                 </span>
               </button>
               <button
                 type="button"
                 title={`Delete ${t.name}`}
                 onClick={() => onDelete(t.name)}
-                className="rounded px-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                className="icon-btn icon-btn-danger opacity-0 group-hover:opacity-100"
+                aria-label={`Delete ${t.name}`}
               >
                 ×
               </button>
@@ -88,7 +91,7 @@ export function TripsPanel({
         <button
           type="button"
           onClick={() => setShowAll((v) => !v)}
-          className="text-[11px] text-slate-500 hover:underline"
+          className="text-[11px] font-medium text-brand-600 hover:text-brand-800"
         >
           {showAll ? "Show fewer" : `Show all ${trips.length}`}
         </button>

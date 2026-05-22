@@ -26,16 +26,17 @@ export function AircraftPanel({
   onStartingFuelChange,
   capacityGal,
 }: Props) {
+  const fuelPct = capacityGal > 0
+    ? Math.min(100, Math.max(0, (startingFuelGal / capacityGal) * 100))
+    : 0;
   return (
     <div className="space-y-4">
       <div>
-        <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-          Aircraft
-        </label>
+        <label className="field-label">Aircraft</label>
         <select
           value={selectedSlug}
           onChange={(e) => onSelect(e.target.value)}
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+          className="select mt-1"
         >
           {aircraft.map((a) => (
             <option key={a.slug} value={a.slug}>
@@ -46,19 +47,10 @@ export function AircraftPanel({
       </div>
       <div>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-          {/* Labels in row 1, inputs in row 2 so the two columns'
-              inputs share a y-position even when "Target altitude
-              (ft)" wraps and "Reserve (min)" doesn't. */}
-          <label
-            htmlFor="target-altitude"
-            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
-          >
+          <label htmlFor="target-altitude" className="field-label">
             Target altitude (ft)
           </label>
-          <label
-            htmlFor="reserve-min"
-            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
-          >
+          <label htmlFor="reserve-min" className="field-label">
             Reserve (min)
           </label>
           <input
@@ -75,7 +67,7 @@ export function AircraftPanel({
             onChange={(e) =>
               onTargetAltChange(Number.parseInt(e.target.value, 10) || 0)
             }
-            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            className="input"
           />
           <input
             id="reserve-min"
@@ -86,21 +78,23 @@ export function AircraftPanel({
             onChange={(e) =>
               onReserveChange(Number.parseInt(e.target.value, 10) || 0)
             }
-            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            className="input"
           />
         </div>
-        <p className="mt-1 text-[11px] text-slate-500">
+        <p className="mt-1.5 text-[11px] text-slate-500">
           Each leg flies the next legal hemispheric altitude at or above
           target altitude for its course.
         </p>
       </div>
       <div>
-        <label
-          htmlFor="starting-fuel"
-          className="block text-xs font-medium uppercase tracking-wide text-slate-500"
-        >
-          Starting fuel (gal)
-        </label>
+        <div className="flex items-baseline justify-between">
+          <label htmlFor="starting-fuel" className="field-label">
+            Starting fuel (gal)
+          </label>
+          <span className="text-[11px] tabular-nums text-slate-500">
+            {startingFuelGal.toFixed(1)} / {capacityGal} gal
+          </span>
+        </div>
         <input
           id="starting-fuel"
           type="number"
@@ -111,9 +105,18 @@ export function AircraftPanel({
           onChange={(e) =>
             onStartingFuelChange(Number.parseFloat(e.target.value) || 0)
           }
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+          className="input mt-1"
         />
-        <p className="mt-1 text-[11px] text-slate-500">
+        <div
+          className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100"
+          aria-hidden="true"
+        >
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-brand-500 to-brand-600 transition-[width]"
+            style={{ width: `${fuelPct}%` }}
+          />
+        </div>
+        <p className="mt-1.5 text-[11px] text-slate-500">
           Fuel onboard at departure. Capped at {capacityGal} gal (full
           tanks). Only the first leg uses this; refuel stops imply a
           top-off.

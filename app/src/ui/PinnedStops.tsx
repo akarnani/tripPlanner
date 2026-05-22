@@ -98,10 +98,8 @@ export function PinnedStops({
 
   return (
     <div>
-      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
-        Required stops (via)
-      </p>
-      <div className="flex gap-1">
+      <p className="field-label mb-1.5">Required stops (via)</p>
+      <div className="flex gap-2">
         <input
           type="text"
           value={draft}
@@ -116,19 +114,21 @@ export function PinnedStops({
             }
           }}
           placeholder="KICAO or KSEA KGEG KBOI"
-          className="w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs uppercase"
+          className="input input-mono flex-1 text-xs"
         />
         <button
           type="button"
           onClick={submit}
-          className="shrink-0 rounded border border-slate-300 bg-white px-2 py-1 text-xs hover:bg-slate-100"
+          className="btn-secondary shrink-0 px-3 text-xs"
         >
           Add
         </button>
       </div>
-      {error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}
+      {error && (
+        <p className="mt-1.5 text-[11px] text-rose-600">{error}</p>
+      )}
       {pinnedIds.length > 0 && (
-        <ol className="mt-2 space-y-1">
+        <ol className="mt-2.5 space-y-1.5">
           {pinnedIds.map((id, i) => {
             const a = byId.get(id);
             const hasFuel = a
@@ -156,11 +156,11 @@ export function PinnedStops({
                   setDragOverIndex(null);
                 }}
                 className={
-                  "flex items-center gap-1 rounded border bg-white px-2 py-1 text-xs transition-colors " +
+                  "flex items-center gap-1.5 rounded-lg border bg-white px-2 py-1.5 text-xs shadow-sm transition " +
                   (isDropTarget
-                    ? "border-orange-400 ring-1 ring-orange-200"
+                    ? "border-orange-400 ring-2 ring-orange-200"
                     : "border-slate-200") +
-                  (isDragging ? " opacity-50" : "")
+                  (isDragging ? " opacity-50" : " hover:border-slate-300")
                 }
               >
                 <span
@@ -198,12 +198,16 @@ export function PinnedStops({
                     <circle cx="11" cy="13" r="1.2" />
                   </svg>
                 </span>
-                <span className="w-4 text-right text-slate-400">{i + 1}.</span>
-                <span className="font-mono">{labelFor(id)}</span>
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand-100 text-[10px] font-semibold text-brand-700">
+                  {i + 1}
+                </span>
+                <span className="font-mono font-medium text-slate-900">
+                  {labelFor(id)}
+                </span>
                 {!hasFuel && (
                   <span
                     title={`Doesn't stock ${aircraftFuelType} — treated as a pass-through, fuel state carries through`}
-                    className="rounded bg-amber-100 px-1 text-[10px] font-medium uppercase tracking-wide text-amber-800"
+                    className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800"
                   >
                     no fuel
                   </span>
@@ -213,7 +217,8 @@ export function PinnedStops({
                   type="button"
                   onClick={() => onRemove(id)}
                   title={`Unpin ${labelFor(id)}`}
-                  className="rounded px-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                  className="icon-btn icon-btn-danger"
+                  aria-label={`Unpin ${labelFor(id)}`}
                 >
                   ×
                 </button>

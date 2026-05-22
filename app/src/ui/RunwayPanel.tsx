@@ -18,9 +18,18 @@ export function RunwayPanel({
   aircraftModel,
 }: Props) {
   const disabled = !aircraftHasData;
+  const active = settings.enabled && !disabled;
   return (
     <div className="space-y-3">
-      <label className="flex items-center gap-2 text-xs text-slate-700">
+      <label
+        className={
+          "flex items-start gap-2 rounded-lg border p-2.5 text-xs transition " +
+          (active
+            ? "border-brand-200 bg-brand-50/60 text-slate-800"
+            : "border-slate-200 bg-slate-50 text-slate-700") +
+          (disabled ? " opacity-60" : "")
+        }
+      >
         <input
           type="checkbox"
           checked={settings.enabled && !disabled}
@@ -28,29 +37,32 @@ export function RunwayPanel({
           onChange={(e) =>
             onChange({ ...settings, enabled: e.target.checked })
           }
-          className="h-3.5 w-3.5"
+          className="mt-0.5 h-3.5 w-3.5"
         />
-        Check runway lengths against POH
+        <span>
+          Check runway lengths against POH
+          <span className="mt-0.5 block text-[11px] font-normal text-slate-500">
+            Uses POH takeoff & landing distance tables, rounded up to the
+            next-higher published cell.
+          </span>
+        </span>
       </label>
       {!aircraftHasData && (
-        <p className="text-[11px] text-amber-700">
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
           The {aircraftModel} performance file has no takeoff/landing
           tables — runway check is unavailable.
         </p>
       )}
       <div
         className={
-          "space-y-2 " + (settings.enabled && !disabled ? "" : "opacity-50")
+          "space-y-3 " + (active ? "" : "pointer-events-none opacity-50")
         }
       >
         <div>
-          <label
-            htmlFor="runway-buffer"
-            className="block text-[11px] uppercase tracking-wide text-slate-500"
-          >
+          <label htmlFor="runway-buffer" className="field-label">
             Buffer
           </label>
-          <div className="mt-1 flex items-center gap-2 text-xs">
+          <div className="mt-1 flex items-center gap-2 text-xs text-slate-700">
             <input
               id="runway-buffer"
               type="number"
@@ -58,23 +70,21 @@ export function RunwayPanel({
               max={5000}
               step={100}
               value={settings.buffer_ft}
-              disabled={!settings.enabled || disabled}
+              disabled={!active}
               onChange={(e) =>
                 onChange({
                   ...settings,
                   buffer_ft: Number.parseInt(e.target.value, 10) || 0,
                 })
               }
-              className="w-20 rounded border border-slate-300 bg-white px-2 py-1 disabled:bg-slate-100"
+              className="input w-24"
             />
             <span className="text-slate-500">ft beyond POH required</span>
           </div>
         </div>
         <div>
-          <span className="block text-[11px] uppercase tracking-wide text-slate-500">
-            Weight assumption
-          </span>
-          <div className="mt-1 inline-flex overflow-hidden rounded border border-slate-300">
+          <span className="field-label">Weight assumption</span>
+          <div className="seg mt-1">
             {(
               [
                 { id: "estimated", label: "Estimated" },
@@ -84,20 +94,18 @@ export function RunwayPanel({
               <button
                 key={opt.id}
                 type="button"
-                disabled={!settings.enabled || disabled}
+                disabled={!active}
                 onClick={() => onChange({ ...settings, weight: opt.id })}
                 className={
-                  "px-3 py-1 text-xs font-medium disabled:bg-slate-100 disabled:text-slate-400 " +
-                  (settings.weight === opt.id
-                    ? "bg-slate-900 text-white"
-                    : "bg-white text-slate-700 hover:bg-slate-100")
+                  "seg-btn " +
+                  (settings.weight === opt.id ? "seg-btn-active" : "")
                 }
               >
                 {opt.label}
               </button>
             ))}
           </div>
-          <p className="mt-1 text-[11px] text-slate-500">
+          <p className="mt-1.5 text-[11px] text-slate-500">
             Estimated uses the route's computed weight and reads the
             next-higher POH weight tier — never an average, never a
             scaled number. When the POH only publishes one weight
@@ -105,13 +113,10 @@ export function RunwayPanel({
           </p>
         </div>
         <div>
-          <label
-            htmlFor="runway-isa"
-            className="block text-[11px] uppercase tracking-wide text-slate-500"
-          >
+          <label htmlFor="runway-isa" className="field-label">
             Assumed temperature
           </label>
-          <div className="mt-1 flex items-center gap-2 text-xs">
+          <div className="mt-1 flex items-center gap-2 text-xs text-slate-700">
             <span className="text-slate-500">ISA +</span>
             <input
               id="runway-isa"
@@ -120,14 +125,14 @@ export function RunwayPanel({
               max={50}
               step={5}
               value={settings.isa_delta_c}
-              disabled={!settings.enabled || disabled}
+              disabled={!active}
               onChange={(e) =>
                 onChange({
                   ...settings,
                   isa_delta_c: Number.parseInt(e.target.value, 10) || 0,
                 })
               }
-              className="w-16 rounded border border-slate-300 bg-white px-2 py-1 disabled:bg-slate-100"
+              className="input w-20"
             />
             <span className="text-slate-500">°C</span>
           </div>

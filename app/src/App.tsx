@@ -943,204 +943,279 @@ export function App() {
   }
 
   return (
-    <div className="flex h-full w-full">
-      <aside className="w-80 shrink-0 space-y-5 overflow-y-auto border-r border-slate-200 bg-slate-50 p-4">
-        <header>
-          <h1 className="text-lg font-semibold text-slate-900">Trip Planner</h1>
-          <p className="mt-1 text-xs text-slate-600">
-            GA route planning with fuel stops, terrain warnings, and approach
-            filters.
+    <div className="flex h-full w-full flex-col">
+      <header className="z-10 flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white/95 px-5 backdrop-blur">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-card">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            className="h-4 w-4"
+            aria-hidden="true"
+          >
+            <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 1 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1L15 22v-1.5L13 19v-5.5l8 2.5z" />
+          </svg>
+        </div>
+        <div className="flex-1">
+          <h1 className="text-[15px] font-semibold tracking-tight text-slate-900">
+            Trip Planner
+          </h1>
+          <p className="text-[11px] text-slate-500">
+            GA route planning · fuel stops · terrain · approaches
           </p>
-        </header>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Saved trips
-          </h2>
-          <TripsPanel
-            trips={trips}
-            defaultName={`${origin} → ${destination}`}
-            onSave={handleSaveTrip}
-            onLoad={handleLoadTrip}
-            onDelete={handleDeleteTrip}
-          />
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">Trip</h2>
-          {planningMode === "auto" ? (
-            <>
-              <TripPanel
-                origin={origin}
-                destination={destination}
-                onOriginChange={setOrigin}
-                onDestinationChange={setDestination}
-                flightRule={flightRule}
-                onFlightRuleChange={setFlightRule}
-                capLegTime={capLegTime}
-                onCapLegTimeChange={setCapLegTime}
-                maxLegHr={maxLegHr}
-                onMaxLegHrChange={setMaxLegHr}
-                onPlan={handlePlan}
-                isPlanning={isPlanning}
-                dataReady={dataReady}
-                error={error}
-              />
-              <button
-                type="button"
-                onClick={handleEnterInteractive}
-                disabled={!dataReady || !originAirport || !destinationAirport}
-                className="mt-2 w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                Build interactively →
-              </button>
-              <div className="mt-3">
-                <PinnedStops
-                  pinnedIds={pinnedStopIds}
-                  airports={datasets.airports}
-                  aircraftFuelType={selectedAircraft.fuel.type}
-                  originIdent={origin}
-                  destinationIdent={destination}
-                  onAdd={handleAddPins}
-                  onRemove={handleRemovePin}
-                  onReorder={handleReorderPins}
-                />
-              </div>
-              <div className="mt-3">
-                <ExcludedAirports
-                  excludedIds={excludedIds}
-                  airports={datasets.airports}
-                  originIdent={origin}
-                  destinationIdent={destination}
-                  onExclude={handleExcludeStops}
-                  onInclude={handleIncludeStop}
-                />
-              </div>
-            </>
-          ) : (
-            <InteractivePanel
-              originIdent={originAirport?.icao ?? originAirport?.lid ?? origin}
-              destinationIdent={
-                destinationAirport?.icao ?? destinationAirport?.lid ?? destination
+        </div>
+        <div className="hidden items-center gap-3 text-[11px] text-slate-500 sm:flex">
+          <span
+            className={
+              "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 " +
+              (dataReady
+                ? "bg-emerald-50 text-emerald-700"
+                : "bg-amber-50 text-amber-700")
+            }
+          >
+            <span
+              className={
+                "h-1.5 w-1.5 rounded-full " +
+                (dataReady ? "bg-emerald-500" : "animate-pulse bg-amber-500")
               }
-              stops={interactiveStopAirports}
-              route={currentRoute}
-              legAltitudes={legAltitudes}
-              legFeasibility={interactiveBuild?.feasibility ?? []}
-              stopRefuels={interactiveBuild?.stopRefuels ?? []}
-              distanceToDestNm={interactiveDistanceToDest}
-              rangeSolidNm={interactiveRings?.solid_nm ?? 0}
-              rangeDashedNm={interactiveRings?.dashed_nm ?? 0}
-              destInRange={
-                (interactiveRings?.solid_nm ?? 0) >= interactiveDistanceToDest
-              }
-              cruiseCeilingFt={
-                selectedAircraft.cruise[selectedAircraft.cruise.length - 1]
-                  ?.altitude_ft ?? 0
-              }
-              onRemoveStop={handleRemoveInteractiveStop}
-              onChangeLegAltitude={handleChangeLegAltitude}
-              onExit={handleExitInteractive}
+              aria-hidden="true"
             />
-          )}
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Aircraft &amp; cruise
-          </h2>
-          <AircraftPanel
-            aircraft={allAircraft}
-            selectedSlug={selectedAircraft.slug}
-            onSelect={setAircraftSlug}
-            targetAltFt={targetAltFt}
-            onTargetAltChange={setTargetAltFt}
-            reserveMin={reserveMin}
-            onReserveChange={setReserveMin}
-            startingFuelGal={startingFuelGal}
-            onStartingFuelChange={setStartingFuelGal}
-            capacityGal={selectedAircraft.fuel.usable_capacity_gal}
-          />
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Runway check
-          </h2>
-          <RunwayPanel
-            settings={runwaySettings}
-            onChange={setRunwaySettings}
-            aircraftHasData={aircraftSupportsRunwayCheck(selectedAircraft)}
-            aircraftModel={selectedAircraft.model}
-          />
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Airport filters
-          </h2>
-          <FilterPanel
-            filters={filters}
-            onChange={setFilters}
-            matchCount={matches.length}
-            totalCount={datasets.airports.length}
-            hasApproachData={datasets.hasApproachData}
-            aircraftFuelType={selectedAircraft.fuel.type}
-            runwayCheckActive={runwayCheckActive}
-          />
-        </section>
-      </aside>
-      <main className="relative flex-1">
-        <MapView
-          airports={matches}
-          route={currentRoute}
-          onMoveStop={planningMode === "auto" ? handleMoveStop : undefined}
-          terminalWarnings={terminalWarnings}
-          interactive={
-            planningMode === "interactive" &&
-            interactiveDeparture &&
-            destinationAirport &&
-            interactiveRings
-              ? {
-                  center: interactiveDeparture,
-                  destination: destinationAirport,
-                  rangeSolidNm: interactiveRings.solid_nm,
-                  rangeDashedNm: interactiveRings.dashed_nm,
-                  onAirportClick: handleAddInteractiveStop,
-                  onAirportHoverHtml: interactiveHoverHtml,
+            {dataReady ? "Airport database ready" : "Loading airports…"}
+          </span>
+          <span
+            className={
+              "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 " +
+              (demReady
+                ? "bg-emerald-50 text-emerald-700"
+                : "bg-slate-100 text-slate-500")
+            }
+          >
+            <span
+              className={
+                "h-1.5 w-1.5 rounded-full " +
+                (demReady ? "bg-emerald-500" : "bg-slate-400")
+              }
+              aria-hidden="true"
+            />
+            {demReady ? "Terrain ready" : "Terrain loading…"}
+          </span>
+        </div>
+      </header>
+      <div className="flex min-h-0 flex-1">
+        <aside className="w-[340px] shrink-0 space-y-4 overflow-y-auto border-r border-slate-200 bg-slate-50 p-4">
+          <section className="card card-body">
+            <h2 className="section-title">Saved trips</h2>
+            <p className="section-subtitle mb-3">
+              Stored locally — save the current setup to revisit later.
+            </p>
+            <TripsPanel
+              trips={trips}
+              defaultName={`${origin} → ${destination}`}
+              onSave={handleSaveTrip}
+              onLoad={handleLoadTrip}
+              onDelete={handleDeleteTrip}
+            />
+          </section>
+          <section className="card card-body">
+            <div className="mb-3 flex items-baseline justify-between">
+              <div>
+                <h2 className="section-title">Trip</h2>
+                <p className="section-subtitle">
+                  {planningMode === "auto"
+                    ? "Pick origin & destination; the planner chooses stops."
+                    : "Hand-pick stops on the map."}
+                </p>
+              </div>
+              <span
+                className={
+                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide " +
+                  (planningMode === "auto"
+                    ? "border-brand-200 bg-brand-50 text-brand-700"
+                    : "border-orange-200 bg-orange-50 text-orange-700")
                 }
-              : undefined
-          }
-        />
-      </main>
-      {(routes.length > 0 || (planningMode === "interactive" && currentRoute)) && (
-        <aside className="flex w-80 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
-          <div className="flex-1 overflow-y-auto">
-            <LegTable
-              routes={planningMode === "interactive" && currentRoute ? [currentRoute] : routes}
-              selected={planningMode === "interactive" ? 0 : selectedRoute}
-              onSelect={planningMode === "interactive" ? () => {} : setSelectedRoute}
-              onExcludeStop={
-                planningMode === "interactive"
-                  ? () => {}
-                  : (id) => handleExcludeStops([id])
-              }
-              onReplaceStop={
-                planningMode === "interactive" ? () => {} : handleReplaceStop
-              }
+              >
+                {planningMode === "auto" ? "Auto" : "Interactive"}
+              </span>
+            </div>
+            {planningMode === "auto" ? (
+              <>
+                <TripPanel
+                  origin={origin}
+                  destination={destination}
+                  onOriginChange={setOrigin}
+                  onDestinationChange={setDestination}
+                  flightRule={flightRule}
+                  onFlightRuleChange={setFlightRule}
+                  capLegTime={capLegTime}
+                  onCapLegTimeChange={setCapLegTime}
+                  maxLegHr={maxLegHr}
+                  onMaxLegHrChange={setMaxLegHr}
+                  onPlan={handlePlan}
+                  isPlanning={isPlanning}
+                  dataReady={dataReady}
+                  error={error}
+                />
+                <button
+                  type="button"
+                  onClick={handleEnterInteractive}
+                  disabled={!dataReady || !originAirport || !destinationAirport}
+                  className="btn-secondary mt-3 w-full text-xs"
+                >
+                  Build interactively →
+                </button>
+                <div className="mt-4">
+                  <PinnedStops
+                    pinnedIds={pinnedStopIds}
+                    airports={datasets.airports}
+                    aircraftFuelType={selectedAircraft.fuel.type}
+                    originIdent={origin}
+                    destinationIdent={destination}
+                    onAdd={handleAddPins}
+                    onRemove={handleRemovePin}
+                    onReorder={handleReorderPins}
+                  />
+                </div>
+                <div className="mt-4">
+                  <ExcludedAirports
+                    excludedIds={excludedIds}
+                    airports={datasets.airports}
+                    originIdent={origin}
+                    destinationIdent={destination}
+                    onExclude={handleExcludeStops}
+                    onInclude={handleIncludeStop}
+                  />
+                </div>
+              </>
+            ) : (
+              <InteractivePanel
+                originIdent={originAirport?.icao ?? originAirport?.lid ?? origin}
+                destinationIdent={
+                  destinationAirport?.icao ?? destinationAirport?.lid ?? destination
+                }
+                stops={interactiveStopAirports}
+                route={currentRoute}
+                legAltitudes={legAltitudes}
+                legFeasibility={interactiveBuild?.feasibility ?? []}
+                stopRefuels={interactiveBuild?.stopRefuels ?? []}
+                distanceToDestNm={interactiveDistanceToDest}
+                rangeSolidNm={interactiveRings?.solid_nm ?? 0}
+                rangeDashedNm={interactiveRings?.dashed_nm ?? 0}
+                destInRange={
+                  (interactiveRings?.solid_nm ?? 0) >= interactiveDistanceToDest
+                }
+                cruiseCeilingFt={
+                  selectedAircraft.cruise[selectedAircraft.cruise.length - 1]
+                    ?.altitude_ft ?? 0
+                }
+                onRemoveStop={handleRemoveInteractiveStop}
+                onChangeLegAltitude={handleChangeLegAltitude}
+                onExit={handleExitInteractive}
+              />
+            )}
+          </section>
+          <section className="card card-body">
+            <h2 className="section-title">Aircraft &amp; cruise</h2>
+            <p className="section-subtitle mb-3">
+              POH-driven cruise, climb, and fuel-flow tables.
+            </p>
+            <AircraftPanel
+              aircraft={allAircraft}
+              selectedSlug={selectedAircraft.slug}
+              onSelect={setAircraftSlug}
+              targetAltFt={targetAltFt}
+              onTargetAltChange={setTargetAltFt}
+              reserveMin={reserveMin}
+              onReserveChange={setReserveMin}
+              startingFuelGal={startingFuelGal}
+              onStartingFuelChange={setStartingFuelGal}
+              capacityGal={selectedAircraft.fuel.usable_capacity_gal}
             />
-          </div>
-          <TerrainPanel
-            analysis={terrain}
-            targetAltFt={targetAltFt}
-            onReplanAtMinSafe={handleReplanAtMinSafe}
-            terminalWarnings={terminalWarnings}
-          />
-          <RunwayWarnings warnings={runwayWarnings} />
-          {currentRoute && (
-            <ExportPanel
-              route={currentRoute}
-              aircraft={selectedAircraft}
-              terrain={terrain}
+          </section>
+          <section className="card card-body">
+            <h2 className="section-title">Runway check</h2>
+            <p className="section-subtitle mb-3">
+              Cross-checks runway lengths against POH takeoff/landing distance.
+            </p>
+            <RunwayPanel
+              settings={runwaySettings}
+              onChange={setRunwaySettings}
+              aircraftHasData={aircraftSupportsRunwayCheck(selectedAircraft)}
+              aircraftModel={selectedAircraft.model}
             />
-          )}
+          </section>
+          <section className="card card-body">
+            <h2 className="section-title">Airport filters</h2>
+            <p className="section-subtitle mb-3">
+              Filter the candidate set for fuel stops.
+            </p>
+            <FilterPanel
+              filters={filters}
+              onChange={setFilters}
+              matchCount={matches.length}
+              totalCount={datasets.airports.length}
+              hasApproachData={datasets.hasApproachData}
+              aircraftFuelType={selectedAircraft.fuel.type}
+              runwayCheckActive={runwayCheckActive}
+            />
+          </section>
         </aside>
-      )}
+        <main className="relative flex-1">
+          <MapView
+            airports={matches}
+            route={currentRoute}
+            onMoveStop={planningMode === "auto" ? handleMoveStop : undefined}
+            terminalWarnings={terminalWarnings}
+            interactive={
+              planningMode === "interactive" &&
+              interactiveDeparture &&
+              destinationAirport &&
+              interactiveRings
+                ? {
+                    center: interactiveDeparture,
+                    destination: destinationAirport,
+                    rangeSolidNm: interactiveRings.solid_nm,
+                    rangeDashedNm: interactiveRings.dashed_nm,
+                    onAirportClick: handleAddInteractiveStop,
+                    onAirportHoverHtml: interactiveHoverHtml,
+                  }
+                : undefined
+            }
+          />
+        </main>
+        {(routes.length > 0 || (planningMode === "interactive" && currentRoute)) && (
+          <aside className="flex w-[360px] shrink-0 flex-col border-l border-slate-200 bg-slate-50">
+            <div className="flex-1 overflow-y-auto">
+              <LegTable
+                routes={planningMode === "interactive" && currentRoute ? [currentRoute] : routes}
+                selected={planningMode === "interactive" ? 0 : selectedRoute}
+                onSelect={planningMode === "interactive" ? () => {} : setSelectedRoute}
+                onExcludeStop={
+                  planningMode === "interactive"
+                    ? () => {}
+                    : (id) => handleExcludeStops([id])
+                }
+                onReplaceStop={
+                  planningMode === "interactive" ? () => {} : handleReplaceStop
+                }
+              />
+            </div>
+            <TerrainPanel
+              analysis={terrain}
+              targetAltFt={targetAltFt}
+              onReplanAtMinSafe={handleReplanAtMinSafe}
+              terminalWarnings={terminalWarnings}
+            />
+            <RunwayWarnings warnings={runwayWarnings} />
+            {currentRoute && (
+              <ExportPanel
+                route={currentRoute}
+                aircraft={selectedAircraft}
+                terrain={terrain}
+              />
+            )}
+          </aside>
+        )}
+      </div>
     </div>
   );
 }
