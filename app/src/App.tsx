@@ -108,6 +108,15 @@ export function App() {
   const [maxLegHr, setMaxLegHr] = useState(2);
   const [routes, setRoutes] = useState<PlannedRoute[]>([]);
   const [selectedRoute, setSelectedRoute] = useState(0);
+  // Per-leg cruise altitude overrides for the auto-plan flow, keyed by
+  // "{fromAirportId}->{toAirportId}". A pair-key survives most replans
+  // (e.g. tweaking starting fuel doesn't shift any stops, so the
+  // override stays attached to the same leg). When stops do shift —
+  // a brand-new leg appears — there's no matching key and we just
+  // fall back to the auto-picked altitude, no stale data.
+  const [legAltOverrides, setLegAltOverrides] = useState<
+    Record<string, number>
+  >({});
   const [error, setError] = useState<string | null>(null);
   const [excludedIds, setExcludedIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -719,10 +728,90 @@ export function App() {
     pinnedStopIds,
   ]);
 
+  // The planner picks stops using `targetAltFt` for every leg; if the
+  // pilot wants a specific leg flown at a different altitude, we re-
+  // synthesize that route through buildInteractiveRoute with their
+  // per-leg overrides. Stops stay the same — only the altitudes (and
+  // therefore the leg time / fuel) shift. The planner's costFnId /
+  // ordering is preserved so the tab labels still make sense.
+  const displayedRoutes = useMemo(() => {
+    if (routes.length === 0) return routes;
+    return routes.map((route) => {
+      if (route.legs.length === 0) return route;
+      const sequence = [
+        route.legs[0].fromAirport,
+        ...route.legs.map((l) => l.toAirport),
+      ];
+      const legAltitudes = route.legs.map(
+        (l) => legAltOverrides[legAltKey(l.fromAirport.id, l.toAirport.id)] ?? null,
+      );
+      // If no override applies, skip the rebuild — the planner-computed
+      // leg metrics are already correct.
+      if (legAltitudes.every((a) => a == null)) return route;
+      try {
+        const rebuilt = buildInteractiveRoute({
+          sequence,
+          aircraft: selectedAircraft,
+          targetAltFt,
+          flightRule,
+          reserveHr: reserveMin / 60,
+          startingFuelGal,
+          legAltitudes,
+          variation: variationFn,
+          dem: demReady ? demSampler : undefined,
+        });
+        return {
+          ...rebuilt.route,
+          // Keep the planner's identity so the tab labels and route
+          // ordering don't suddenly look like interactive routes.
+          costFnId: route.costFnId,
+          cost: route.cost,
+        };
+      } catch {
+        return route;
+      }
+    });
+  }, [
+    routes,
+    legAltOverrides,
+    selectedAircraft,
+    targetAltFt,
+    flightRule,
+    reserveMin,
+    startingFuelGal,
+    demReady,
+  ]);
+
+  function legAltKey(fromId: string, toId: string): string {
+    return `${fromId}->${toId}`;
+  }
+  function handleChangeAutoLegAltitude(
+    leg: { fromAirport: { id: string }; toAirport: { id: string } },
+    altFt: number | null,
+  ) {
+    const key = legAltKey(leg.fromAirport.id, leg.toAirport.id);
+    setLegAltOverrides((prev) => {
+      if (altFt === null) {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      if (prev[key] === altFt) return prev;
+      return { ...prev, [key]: altFt };
+    });
+  }
+  function isAutoLegAltOverridden(leg: {
+    fromAirport: { id: string };
+    toAirport: { id: string };
+  }): boolean {
+    return legAltKey(leg.fromAirport.id, leg.toAirport.id) in legAltOverrides;
+  }
+
   const currentRoute =
     planningMode === "interactive"
       ? (interactiveBuild?.route ?? null)
-      : (routes[selectedRoute] ?? null);
+      : (displayedRoutes[selectedRoute] ?? null);
   const routeObstacles = useMemo(
     () => obstaclesNearRoute(datasets.obstacles, currentRoute),
     [currentRoute, datasets.obstacles],
@@ -1375,7 +1464,11 @@ export function App() {
             />
             <div className="flex-1 overflow-y-auto">
               <LegTable
-                routes={planningMode === "interactive" && currentRoute ? [currentRoute] : routes}
+                routes={
+                  planningMode === "interactive" && currentRoute
+                    ? [currentRoute]
+                    : displayedRoutes
+                }
                 selected={planningMode === "interactive" ? 0 : selectedRoute}
                 onSelect={planningMode === "interactive" ? () => {} : setSelectedRoute}
                 onExcludeStop={
@@ -1385,6 +1478,18 @@ export function App() {
                 }
                 onReplaceStop={
                   planningMode === "interactive" ? () => {} : handleReplaceStop
+                }
+                onChangeLegAltitude={
+                  planningMode === "auto"
+                    ? handleChangeAutoLegAltitude
+                    : undefined
+                }
+                isLegAltOverridden={
+                  planningMode === "auto" ? isAutoLegAltOverridden : undefined
+                }
+                cruiseCeilingFt={
+                  selectedAircraft.cruise[selectedAircraft.cruise.length - 1]
+                    ?.altitude_ft ?? undefined
                 }
               />
             </div>

@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { PlannedRoute } from "@/engine/plan";
+import type { Leg, PlannedRoute } from "@/engine/plan";
 import { costFnById } from "@/engine/costFns";
+import { CRUISE_ALT_OPTIONS } from "./altitudeOptions";
 
 interface Props {
   routes: PlannedRoute[];
@@ -14,6 +15,19 @@ interface Props {
    *  user input. Implementations should resolve the ident, exclude the
    *  old stop, pin the new airport, and re-plan. */
   onReplaceStop: (oldAirportId: string, newIdent: string) => void;
+  /** When provided, the Alt column becomes a select. The handler
+   *  receives the leg and the chosen altitude (or null to revert to
+   *  the auto/hemispheric-chosen value). Omit for interactive mode
+   *  (which owns its own per-leg altitude UI in the sidebar). */
+  onChangeLegAltitude?: (leg: Leg, altFt: number | null) => void;
+  /** Returns true when the parent considers this leg's altitude an
+   *  explicit user override (vs. auto-chosen). Used to highlight the
+   *  cell. Only consulted when `onChangeLegAltitude` is provided. */
+  isLegAltOverridden?: (leg: Leg) => boolean;
+  /** Cap for the altitude select — the aircraft's published cruise
+   *  ceiling. Options above this are hidden so the pilot can't pick a
+   *  level the engine has no POH data for. */
+  cruiseCeilingFt?: number;
 }
 
 export function LegTable({
@@ -22,6 +36,9 @@ export function LegTable({
   onSelect,
   onExcludeStop,
   onReplaceStop,
+  onChangeLegAltitude,
+  isLegAltOverridden,
+  cruiseCeilingFt,
 }: Props) {
   if (routes.length === 0) return null;
   return (
@@ -57,6 +74,9 @@ export function LegTable({
         route={routes[selected]}
         onExcludeStop={onExcludeStop}
         onReplaceStop={onReplaceStop}
+        onChangeLegAltitude={onChangeLegAltitude}
+        isLegAltOverridden={isLegAltOverridden}
+        cruiseCeilingFt={cruiseCeilingFt}
       />
     </div>
   );
@@ -66,9 +86,19 @@ interface RouteDetailProps {
   route: PlannedRoute;
   onExcludeStop: (airportId: string, ident: string) => void;
   onReplaceStop: (oldAirportId: string, newIdent: string) => void;
+  onChangeLegAltitude?: (leg: Leg, altFt: number | null) => void;
+  isLegAltOverridden?: (leg: Leg) => boolean;
+  cruiseCeilingFt?: number;
 }
 
-function RouteDetail({ route, onExcludeStop, onReplaceStop }: RouteDetailProps) {
+function RouteDetail({
+  route,
+  onExcludeStop,
+  onReplaceStop,
+  onChangeLegAltitude,
+  isLegAltOverridden,
+  cruiseCeilingFt,
+}: RouteDetailProps) {
   // Index of the leg whose "Change to…" input is open, or null.
   const [editingLegIdx, setEditingLegIdx] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
@@ -137,8 +167,13 @@ function RouteDetail({ route, onExcludeStop, onReplaceStop }: RouteDetailProps) 
                       </span>
                     )}
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-                    {leg.cruise_alt_ft.toLocaleString()}
+                  <td className="px-1 py-1 text-right font-mono tabular-nums">
+                    <AltCell
+                      leg={leg}
+                      onChangeLegAltitude={onChangeLegAltitude}
+                      isLegAltOverridden={isLegAltOverridden}
+                      cruiseCeilingFt={cruiseCeilingFt}
+                    />
                   </td>
                   <td
                     className="px-2 py-1.5 text-right font-mono tabular-nums"
@@ -194,6 +229,76 @@ function RouteDetail({ route, onExcludeStop, onReplaceStop }: RouteDetailProps) 
         </table>
       </div>
     </div>
+  );
+}
+
+interface AltCellProps {
+  leg: Leg;
+  onChangeLegAltitude?: (leg: Leg, altFt: number | null) => void;
+  isLegAltOverridden?: (leg: Leg) => boolean;
+  cruiseCeilingFt?: number;
+}
+
+/** Alt cell: a styled select when the parent supplies a handler; a
+ *  plain number otherwise (interactive mode owns its own altitude UI
+ *  in the sidebar and doesn't want a duplicate here). */
+function AltCell({
+  leg,
+  onChangeLegAltitude,
+  isLegAltOverridden,
+  cruiseCeilingFt,
+}: AltCellProps) {
+  if (!onChangeLegAltitude) {
+    return (
+      <span className="px-2 py-1.5">{leg.cruise_alt_ft.toLocaleString()}</span>
+    );
+  }
+  // Merge canonical options with whatever altitude the route currently
+  // flies — even if the auto-picked level isn't in the standard list
+  // (e.g. a published cruise row at 12,500 in IFR), it has to be
+  // selectable so the dropdown can show "currently flying X".
+  const ceiling = cruiseCeilingFt ?? Number.POSITIVE_INFINITY;
+  const seen = new Set<number>();
+  const opts: number[] = [];
+  for (const a of CRUISE_ALT_OPTIONS) {
+    if (a > ceiling) continue;
+    if (!seen.has(a)) {
+      opts.push(a);
+      seen.add(a);
+    }
+  }
+  if (!seen.has(leg.cruise_alt_ft)) {
+    opts.push(leg.cruise_alt_ft);
+  }
+  opts.sort((a, b) => a - b);
+  const overridden = isLegAltOverridden?.(leg) ?? false;
+  return (
+    <select
+      value={leg.cruise_alt_ft}
+      onChange={(e) => {
+        const raw = e.target.value;
+        onChangeLegAltitude(leg, raw === "auto" ? null : Number.parseInt(raw, 10));
+      }}
+      aria-label={`Cruise altitude for ${leg.fromAirport.icao ?? leg.fromAirport.lid} → ${leg.toAirport.icao ?? leg.toAirport.lid}`}
+      title={
+        overridden
+          ? "Custom altitude; pick 'auto' to revert to the hemispheric-cheapest level"
+          : "Auto-picked — pick a specific altitude to override"
+      }
+      className={
+        "w-full rounded-md border px-1.5 py-0.5 text-right text-xs font-mono tabular-nums transition focus:outline-none focus:ring-2 focus:ring-brand-500/30 " +
+        (overridden
+          ? "border-orange-300 bg-orange-50 text-orange-900"
+          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300")
+      }
+    >
+      <option value="auto">auto</option>
+      {opts.map((alt) => (
+        <option key={alt} value={alt}>
+          {alt.toLocaleString()}
+        </option>
+      ))}
+    </select>
   );
 }
 

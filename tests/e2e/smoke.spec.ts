@@ -118,15 +118,15 @@ test.describe("trip planner smoke", () => {
     await expect(firstLegCell).toContainText("KSEA");
 
     // Eastbound, VFR target 6500 → first-leg altitude lands on
-    // odd-thousand + 500.
-    const firstAltCell = page
+    // odd-thousand + 500. The Alt cell is now a <select> whose value
+    // is the bare altitude in feet ("6500", not "6,500").
+    const firstAltSelect = page
       .locator("table tbody tr")
       .first()
-      .locator("td")
-      .nth(1);
-    await expect(firstAltCell).toHaveText(/^\d+,?\d*$/);
-    const altText = (await firstAltCell.textContent()) ?? "";
-    expect(altText.replace(/,/g, "")).toMatch(/500$/);
+      .locator("select")
+      .first();
+    await expect(firstAltSelect).toHaveValue(/\d+/);
+    expect(await firstAltSelect.inputValue()).toMatch(/500$/);
   });
 
   test("flipping VFR → IFR drops the +500 from every leg altitude", async ({
@@ -134,9 +134,9 @@ test.describe("trip planner smoke", () => {
   }) => {
     await fillRoute(page, "KSEA", "KBOI");
     const firstAlt = () =>
-      page.locator("table tbody tr").first().locator("td").nth(1);
-    const vfrAlt = (await firstAlt().textContent()) ?? "";
-    expect(vfrAlt.replace(/,/g, "")).toMatch(/500$/);
+      page.locator("table tbody tr").first().locator("select").first();
+    const vfrAlt = await firstAlt().inputValue();
+    expect(vfrAlt).toMatch(/500$/);
 
     // Flip to IFR — auto-replan fires after the debounce, so just wait
     // for the first-leg altitude to change. fillRoute left Trip
@@ -144,9 +144,9 @@ test.describe("trip planner smoke", () => {
     // now; openSection is a no-op if already open.
     await openSection(page, "Trip");
     await page.getByRole("button", { name: "IFR" }).click();
-    await expect(firstAlt()).not.toHaveText(vfrAlt, { timeout: 30_000 });
-    const ifrAlt = (await firstAlt().textContent()) ?? "";
-    expect(ifrAlt.replace(/,/g, "")).toMatch(/000$/);
+    await expect(firstAlt()).not.toHaveValue(vfrAlt, { timeout: 30_000 });
+    const ifrAlt = await firstAlt().inputValue();
+    expect(ifrAlt).toMatch(/000$/);
   });
 
   test("flight rule pill updates the helper text", async ({ page }) => {
@@ -230,13 +230,13 @@ test.describe("trip planner smoke", () => {
     // updates accordingly.
     await fillRoute(page, "KSEA", "KBOI");
     const firstAlt = () =>
-      page.locator("table tbody tr").first().locator("td").nth(1);
-    const before = (await firstAlt().textContent()) ?? "";
+      page.locator("table tbody tr").first().locator("select").first();
+    const before = await firstAlt().inputValue();
 
     await page
       .getByRole("button", { name: "10,500", exact: true })
       .click();
-    await expect(firstAlt()).not.toHaveText(before, { timeout: 30_000 });
+    await expect(firstAlt()).not.toHaveValue(before, { timeout: 30_000 });
   });
 
   test("GPX export downloads a non-empty file", async ({ page }) => {
@@ -304,6 +304,35 @@ test.describe("trip planner smoke", () => {
       timeout: 5_000,
     });
     await expect(aircraftBtn).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("per-leg altitude select overrides the auto-picked level", async ({
+    page,
+  }) => {
+    // The LegTable's Alt cell is a <select> in auto mode. Picking a
+    // specific altitude overrides whatever the planner / hemispheric
+    // rule chose for that leg without re-running the optimizer.
+    await fillRoute(page, "KSEA", "KBOI");
+    const firstAltSelect = page
+      .locator("table tbody tr")
+      .first()
+      .locator("select")
+      .first();
+    const before = await firstAltSelect.inputValue();
+    // Pick an altitude that is guaranteed to differ from the default
+    // (10,500 is in CRUISE_ALT_OPTIONS and is unlikely to coincide
+    // with the auto-picked level for KSEA → first-stop).
+    const target = before === "10500" ? "8500" : "10500";
+    await firstAltSelect.selectOption(target);
+    await expect(firstAltSelect).toHaveValue(target);
+    // The override should also tint the select orange — the class
+    // signal is part of the public contract with the user (it tells
+    // them the cell is now custom).
+    await expect(firstAltSelect).toHaveClass(/bg-orange-50/);
+    // Reverting via "auto" should drop the override and return to the
+    // planner-picked value.
+    await firstAltSelect.selectOption("auto");
+    await expect(firstAltSelect).not.toHaveClass(/bg-orange-50/);
   });
 
   test("wizard auto-advance pauses while a field stays focused", async ({

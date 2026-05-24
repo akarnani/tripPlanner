@@ -1,6 +1,7 @@
 import type { Airport } from "@/data/loaders";
 import type { PlannedRoute } from "@/engine/plan";
 import type { LegAltitudeOverride } from "@/engine/interactive";
+import { CRUISE_ALT_OPTIONS, fmtFt } from "./altitudeOptions";
 
 interface Props {
   /** Origin airport identifier (display purposes). */
@@ -44,25 +45,8 @@ interface Props {
   onExit: () => void;
 }
 
-/** Cruise altitude options offered in the per-leg dropdown. Below
- *  FL180 the typical VFR/IFR+500 levels; from FL180 up — Class A
- *  airspace, no +500 convention — every 1,000 ft to FL310, which
- *  covers the highest published cruise altitude across all current
- *  aircraft (SF50 to 28,000 ft / FL280). The dropdown is a
- *  convenience: the engine accepts any altitude the pilot picks. */
-const ALT_OPTIONS = [
-  3500, 4500, 5500, 6500, 7500, 8500, 9500, 10500, 11500, 12500, 13500, 14500,
-  15500, 16500, 17500,
-  18000, 19000, 20000, 21000, 22000, 23000, 24000, 25000, 26000, 27000, 28000,
-  29000, 30000, 31000,
-];
-
 function fmtNm(nm: number): string {
   return `${Math.round(nm).toLocaleString()} nm`;
-}
-
-function fmtFt(ft: number): string {
-  return `${Math.round(ft).toLocaleString()} ft`;
 }
 
 export function InteractivePanel({
@@ -247,7 +231,7 @@ function LegAndStop({
   // altitudes the aircraft's POH actually covers, then merge in
   // the current selection / default so they remain selectable
   // even if outside the canonical set.
-  const allowed = ALT_OPTIONS.filter((a) => a <= cruiseCeilingFt);
+  const allowed = CRUISE_ALT_OPTIONS.filter((a) => a <= cruiseCeilingFt);
   const seen = new Set(allowed);
   const opts = [...allowed];
   if (altFt !== null && !seen.has(altFt)) {
