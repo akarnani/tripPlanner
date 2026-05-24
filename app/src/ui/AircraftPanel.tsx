@@ -4,8 +4,6 @@ interface Props {
   aircraft: readonly Aircraft[];
   selectedSlug: string;
   onSelect: (slug: string) => void;
-  targetAltFt: number;
-  onTargetAltChange: (alt: number) => void;
   reserveMin: number;
   onReserveChange: (min: number) => void;
   startingFuelGal: number;
@@ -18,8 +16,6 @@ export function AircraftPanel({
   aircraft,
   selectedSlug,
   onSelect,
-  targetAltFt,
-  onTargetAltChange,
   reserveMin,
   onReserveChange,
   startingFuelGal,
@@ -46,44 +42,23 @@ export function AircraftPanel({
         </select>
       </div>
       <div>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-          <label htmlFor="target-altitude" className="field-label">
-            Target altitude (ft)
-          </label>
-          <label htmlFor="reserve-min" className="field-label">
-            Reserve (min)
-          </label>
-          <input
-            id="target-altitude"
-            type="number"
-            min={0}
-            // Goes up to FL450 to cover any current or future
-            // turbine; below FL180 the +500 VFR convention applies,
-            // above it the value clamps to the next legal IFR
-            // thousand at planning time (see hemisphericAltitude).
-            max={45000}
-            step={500}
-            value={targetAltFt}
-            onChange={(e) =>
-              onTargetAltChange(Number.parseInt(e.target.value, 10) || 0)
-            }
-            className="input"
-          />
-          <input
-            id="reserve-min"
-            type="number"
-            min={0}
-            step={5}
-            value={reserveMin}
-            onChange={(e) =>
-              onReserveChange(Number.parseInt(e.target.value, 10) || 0)
-            }
-            className="input"
-          />
-        </div>
+        <label htmlFor="reserve-min" className="field-label">
+          Reserve (min)
+        </label>
+        <input
+          id="reserve-min"
+          type="number"
+          min={0}
+          step={5}
+          value={reserveMin}
+          onChange={(e) =>
+            onReserveChange(Number.parseInt(e.target.value, 10) || 0)
+          }
+          className="input mt-1"
+        />
         <p className="mt-1.5 text-[11px] text-slate-500">
-          Each leg flies the next legal hemispheric altitude at or above
-          target altitude for its course.
+          Time-on-board fuel reserve above the planned route — added to
+          every leg's minimum-fuel check.
         </p>
       </div>
       <div>
@@ -122,6 +97,10 @@ export function AircraftPanel({
           top-off.
         </p>
       </div>
+      <p className="rounded-md border border-brand-100 bg-brand-50 px-2.5 py-2 text-[11px] text-brand-800">
+        Cruise altitude moved to the results pane — adjust it once you see
+        the route, since stop choice often dictates the right level.
+      </p>
     </div>
   );
 }

@@ -11,11 +11,10 @@ interface Props {
   onCapLegTimeChange: (b: boolean) => void;
   maxLegHr: number;
   onMaxLegHrChange: (h: number) => void;
-  onPlan: () => void;
-  /** When true, the Plan button shows a spinner and is disabled. */
-  isPlanning: boolean;
-  /** When true, the Plan button is disabled with a "loading…" label. */
-  dataReady: boolean;
+  /** Surfaced planner errors ("no route found — try relaxing
+   *  constraints", etc). Shown below the inputs because every change
+   *  triggers a fresh auto-replan and the user needs to see the result
+   *  in context. */
   error: string | null;
 }
 
@@ -30,17 +29,8 @@ export function TripPanel({
   onCapLegTimeChange,
   maxLegHr,
   onMaxLegHrChange,
-  onPlan,
-  isPlanning,
-  dataReady,
   error,
 }: Props) {
-  const buttonLabel = !dataReady
-    ? "Loading airport database…"
-    : isPlanning
-      ? "Planning…"
-      : "Plan trip";
-  const buttonDisabled = !dataReady || isPlanning;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
@@ -118,28 +108,9 @@ export function TripPanel({
           <span>hours</span>
         </label>
       </div>
-      <button
-        type="button"
-        data-testid="plan-trip"
-        data-state={
-          !dataReady ? "loading" : isPlanning ? "planning" : "idle"
-        }
-        onClick={onPlan}
-        disabled={buttonDisabled}
-        className="btn-primary w-full"
-      >
-        {(isPlanning || !dataReady) && (
-          <span
-            aria-hidden="true"
-            data-testid="plan-trip-spinner"
-            className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent"
-          />
-        )}
-        {buttonLabel}
-      </button>
       <p className="text-[11px] text-slate-500">
-        Each plan returns one route per objective (fewest stops, shortest
-        time). Duplicates are dropped.
+        The planner runs whenever a setting changes. Routes appear in the
+        results pane on the right.
       </p>
       {error && (
         <p className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">

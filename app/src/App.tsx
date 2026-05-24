@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import { flushSync } from "react-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   airportByIdent,
   EMPTY_DATASETS,
@@ -70,6 +69,7 @@ import { InteractivePanel } from "./ui/InteractivePanel";
 import { PinnedStops } from "./ui/PinnedStops";
 import { RunwayPanel } from "./ui/RunwayPanel";
 import { RunwayWarnings } from "./ui/RunwayWarnings";
+import { CruisePanel } from "./ui/CruisePanel";
 import { SidebarSection } from "./ui/SidebarSection";
 import { TripsPanel } from "./ui/TripsPanel";
 import {
@@ -84,13 +84,10 @@ const magGrid = new MagneticVariationGrid(magneticGridUrl);
 const variationFn = (p: { lat: number; lon: number }) =>
   magGrid.variationDeg(p);
 
-const MIN_SPINNER_MS = 600;
-
 export function App() {
   const [datasets, setDatasets] = useState<Datasets>(EMPTY_DATASETS);
   const [dataReady, setDataReady] = useState(false);
   const [demReady, setDemReady] = useState(false);
-  const [isPlanning, setIsPlanning] = useState(false);
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [aircraftSlug, setAircraftSlug] = useState(allAircraft[0]?.slug ?? "");
@@ -125,9 +122,47 @@ export function App() {
     | "filters"
     | null;
   const [expandedSection, setExpandedSection] = useState<WizardStep>("aircraft");
+  // Auto-advance: when the user touches a step's controls, schedule a
+  // debounced jump to the next step. Manual toggles cancel the pending
+  // advance so we never yank a section closed under the user's pointer.
+  const advanceTimer = useRef<number | null>(null);
+  function cancelAdvance() {
+    if (advanceTimer.current !== null) {
+      window.clearTimeout(advanceTimer.current);
+      advanceTimer.current = null;
+    }
+  }
+  function scheduleAdvance(
+    fromStep: Exclude<WizardStep, null>,
+    toStep: WizardStep,
+    ms = 1500,
+  ) {
+    cancelAdvance();
+    advanceTimer.current = window.setTimeout(() => {
+      // Re-check that the user hasn't navigated elsewhere since the
+      // schedule landed — we only auto-advance from the step that
+      // originally requested it.
+      setExpandedSection((prev) => (prev === fromStep ? toStep : prev));
+      advanceTimer.current = null;
+    }, ms);
+  }
   function toggleSection(id: Exclude<WizardStep, null>) {
+    cancelAdvance();
     setExpandedSection((prev) => (prev === id ? null : id));
   }
+  useEffect(() => () => cancelAdvance(), []);
+
+  // "Touched" flags drive auto-advance — a step only advances after the
+  // user has actually interacted with one of its controls since
+  // entering, so simply opening a section doesn't auto-close it.
+  const [aircraftTouched, setAircraftTouched] = useState(false);
+  const [tripTouched, setTripTouched] = useState(false);
+  useEffect(() => {
+    // Reset on every section change so re-entering a step gives the
+    // user another grace period before the wizard fires.
+    if (expandedSection === "aircraft") setAircraftTouched(false);
+    if (expandedSection === "trip") setTripTouched(false);
+  }, [expandedSection]);
 
   // Interactive-build state. Only consulted when planningMode is
   // "interactive"; the auto-plan flow above is fully independent so
@@ -240,6 +275,37 @@ export function App() {
     () => airportByIdent(datasets.airports, destination),
     [datasets.airports, destination],
   );
+
+  // Wizard auto-advance effects. Aircraft advances on any touched
+  // change after a brief debounce; Trip advances once both endpoints
+  // resolve to valid airports (so typing "K" doesn't fire a half-second
+  // later). Each schedule cancels the previous one, so rapid input
+  // doesn't lurch.
+  useEffect(() => {
+    if (expandedSection !== "aircraft") return;
+    if (!aircraftTouched) return;
+    scheduleAdvance("aircraft", "trip");
+  }, [
+    expandedSection,
+    aircraftTouched,
+    aircraftSlug,
+    reserveMin,
+    startingFuelGal,
+  ]);
+  useEffect(() => {
+    if (expandedSection !== "trip") return;
+    if (!tripTouched) return;
+    if (!originAirport || !destinationAirport) {
+      cancelAdvance();
+      return;
+    }
+    scheduleAdvance("trip", "runway");
+  }, [
+    expandedSection,
+    tripTouched,
+    originAirport,
+    destinationAirport,
+  ]);
 
   const interactiveStopAirports = useMemo(() => {
     const out = [];
@@ -571,46 +637,42 @@ export function App() {
     }
   }
 
-  function runWithSpinner(
-    targetFt: number,
-    overrides: PlanOverrides = {},
-  ) {
-    if (isPlanning) return;
-    // flushSync forces React to commit the spinner-on render before
-    // we yield. Without it, React 18 can defer the commit past our
-    // requestAnimationFrame callbacks and runPlan() below blocks the
-    // main thread for tens of seconds with the button still rendered
-    // in its idle state.
-    flushSync(() => setIsPlanning(true));
-    const startedAt = performance.now();
-    // After flushSync, the DOM has the spinner. Double-RAF ensures the
-    // browser actually paints it before runPlan blocks. Tailwind's
-    // animate-spin uses transform, which runs on the compositor and
-    // keeps spinning while the main thread is busy.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        try {
-          runPlan(targetFt, overrides);
-        } finally {
-          // Always schedule the back-to-idle transition through
-          // setTimeout. If runPlan blocks past MIN_SPINNER_MS,
-          // calling setIsPlanning(false) synchronously here would
-          // commit "planning" and "idle" in the same uninterrupted
-          // JS task — the renderer never yields, so neither users
-          // nor Playwright observe the spinner. The 50 ms floor
-          // guarantees at least one event-loop tick of visible
-          // spinner state.
-          const elapsed = performance.now() - startedAt;
-          const remaining = Math.max(50, MIN_SPINNER_MS - elapsed);
-          setTimeout(() => setIsPlanning(false), remaining);
-        }
-      });
-    });
-  }
-
-  function handlePlan() {
-    runWithSpinner(targetAltFt);
-  }
+  // Auto-replan: any plan-affecting state change kicks off a debounced
+  // replan. Planning is fast enough now that the explicit Plan button
+  // is no longer the primary trigger — settings just feel live. Skipped
+  // in interactive mode (that pipeline computes incrementally) and
+  // until both endpoints resolve to known airports.
+  //
+  // We deliberately read state through a ref-trampoline so the deps
+  // array stays minimal and we don't fire on transient renders.
+  const runPlanRef = useRef(runPlan);
+  runPlanRef.current = runPlan;
+  useEffect(() => {
+    if (!dataReady) return;
+    if (planningMode !== "auto") return;
+    const o = airportByIdent(datasets.airports, origin);
+    const d = airportByIdent(datasets.airports, destination);
+    if (!o || !d) return;
+    const t = window.setTimeout(() => runPlanRef.current(targetAltFt), 300);
+    return () => window.clearTimeout(t);
+  }, [
+    dataReady,
+    planningMode,
+    datasets.airports,
+    origin,
+    destination,
+    aircraftSlug,
+    targetAltFt,
+    reserveMin,
+    startingFuelGal,
+    flightRule,
+    capLegTime,
+    maxLegHr,
+    filters,
+    runwaySettings,
+    excludedIds,
+    pinnedStopIds,
+  ]);
 
   const currentRoute =
     planningMode === "interactive"
@@ -722,12 +784,9 @@ export function App() {
 
   function handleReplanAtMinSafe() {
     if (!terrain) return;
-    const newAlt = terrain.replanTargetFt;
-    setTargetAltFt(newAlt);
-    // Plan synchronously with the new altitude — setTargetAltFt only
-    // takes effect on the next render, so handlePlan()'s closure would
-    // otherwise see the stale value and replan at the old altitude.
-    runWithSpinner(newAlt);
+    // The auto-replan effect picks up the new altitude on the next
+    // render; no explicit plan call needed.
+    setTargetAltFt(terrain.replanTargetFt);
   }
 
   function handleExcludeStops(airportIds: string[]) {
@@ -740,17 +799,12 @@ export function App() {
     const pinnedChanged = nextPinned.length !== pinnedStopIds.length;
     setExcludedIds(nextExcluded);
     if (pinnedChanged) setPinnedStopIds(nextPinned);
-    runWithSpinner(targetAltFt, {
-      excluded: nextExcluded,
-      pinned: pinnedChanged ? nextPinned : undefined,
-    });
   }
 
   function handleIncludeStop(airportId: string) {
     const next = new Set(excludedIds);
     next.delete(airportId);
     setExcludedIds(next);
-    runWithSpinner(targetAltFt, { excluded: next });
   }
 
   function handleAddPins(airportIds: string[]) {
@@ -773,21 +827,15 @@ export function App() {
     }
     setPinnedStopIds(next);
     if (excludedChanged) setExcludedIds(nextExcluded);
-    runWithSpinner(targetAltFt, {
-      pinned: next,
-      excluded: excludedChanged ? nextExcluded : undefined,
-    });
   }
 
   function handleRemovePin(airportId: string) {
     const next = pinnedStopIds.filter((id) => id !== airportId);
     setPinnedStopIds(next);
-    runWithSpinner(targetAltFt, { pinned: next });
   }
 
   function handleReorderPins(nextPinned: string[]) {
     setPinnedStopIds(nextPinned);
-    runWithSpinner(targetAltFt, { pinned: nextPinned });
   }
 
   function handleReplaceStop(oldAirportId: string, newIdent: string) {
@@ -855,10 +903,6 @@ export function App() {
 
     setExcludedIds(nextExcluded);
     setPinnedStopIds(nextPinned);
-    runWithSpinner(targetAltFt, {
-      excluded: nextExcluded,
-      pinned: nextPinned,
-    });
   }
 
   /** Map-drag snap radius: airports farther than this from the drop
@@ -871,7 +915,6 @@ export function App() {
     oldAirportId: string,
     dropLngLat: { lat: number; lon: number },
   ): boolean {
-    if (isPlanning) return false;
     // Search the filter-eligible set so a drop snaps to an airport
     // that's actually visible on the map. Origin/destination get
     // merged in for completeness but are skipped: dropping a stop
@@ -1040,23 +1083,33 @@ export function App() {
           </SidebarSection>
           <SidebarSection
             number={1}
-            title="Aircraft & cruise"
-            summary={`${selectedAircraft.make} ${selectedAircraft.model} · ${targetAltFt.toLocaleString()} ft · ${reserveMin} min reserve · ${startingFuelGal.toFixed(0)}/${selectedAircraft.fuel.usable_capacity_gal} gal`}
+            title="Aircraft"
+            summary={`${selectedAircraft.make} ${selectedAircraft.model} · ${reserveMin} min reserve · ${startingFuelGal.toFixed(0)}/${selectedAircraft.fuel.usable_capacity_gal} gal`}
             expanded={expandedSection === "aircraft"}
             onToggle={() => toggleSection("aircraft")}
-            onContinue={() => setExpandedSection("trip")}
+            onContinue={() => {
+              cancelAdvance();
+              setExpandedSection("trip");
+            }}
             continueLabel="Continue to trip →"
           >
             <AircraftPanel
               aircraft={allAircraft}
               selectedSlug={selectedAircraft.slug}
-              onSelect={setAircraftSlug}
-              targetAltFt={targetAltFt}
-              onTargetAltChange={setTargetAltFt}
+              onSelect={(s) => {
+                setAircraftSlug(s);
+                setAircraftTouched(true);
+              }}
               reserveMin={reserveMin}
-              onReserveChange={setReserveMin}
+              onReserveChange={(n) => {
+                setReserveMin(n);
+                setAircraftTouched(true);
+              }}
               startingFuelGal={startingFuelGal}
-              onStartingFuelChange={setStartingFuelGal}
+              onStartingFuelChange={(n) => {
+                setStartingFuelGal(n);
+                setAircraftTouched(true);
+              }}
               capacityGal={selectedAircraft.fuel.usable_capacity_gal}
             />
           </SidebarSection>
@@ -1089,7 +1142,10 @@ export function App() {
             }
             expanded={expandedSection === "trip"}
             onToggle={() => toggleSection("trip")}
-            onContinue={() => setExpandedSection("runway")}
+            onContinue={() => {
+              cancelAdvance();
+              setExpandedSection("runway");
+            }}
             continueLabel="Continue to runway check →"
           >
             {planningMode === "auto" ? (
@@ -1097,17 +1153,29 @@ export function App() {
                 <TripPanel
                   origin={origin}
                   destination={destination}
-                  onOriginChange={setOrigin}
-                  onDestinationChange={setDestination}
+                  onOriginChange={(v) => {
+                    setOrigin(v);
+                    setTripTouched(true);
+                  }}
+                  onDestinationChange={(v) => {
+                    setDestination(v);
+                    setTripTouched(true);
+                  }}
                   flightRule={flightRule}
-                  onFlightRuleChange={setFlightRule}
+                  onFlightRuleChange={(r) => {
+                    setFlightRule(r);
+                    setTripTouched(true);
+                  }}
                   capLegTime={capLegTime}
-                  onCapLegTimeChange={setCapLegTime}
+                  onCapLegTimeChange={(b) => {
+                    setCapLegTime(b);
+                    setTripTouched(true);
+                  }}
                   maxLegHr={maxLegHr}
-                  onMaxLegHrChange={setMaxLegHr}
-                  onPlan={handlePlan}
-                  isPlanning={isPlanning}
-                  dataReady={dataReady}
+                  onMaxLegHrChange={(h) => {
+                    setMaxLegHr(h);
+                    setTripTouched(true);
+                  }}
                   error={error}
                 />
                 <button
@@ -1177,7 +1245,10 @@ export function App() {
             )}
             expanded={expandedSection === "runway"}
             onToggle={() => toggleSection("runway")}
-            onContinue={() => setExpandedSection("filters")}
+            onContinue={() => {
+              cancelAdvance();
+              setExpandedSection("filters");
+            }}
             continueLabel="Continue to filters →"
           >
             <RunwayPanel
@@ -1230,6 +1301,11 @@ export function App() {
         </main>
         {(routes.length > 0 || (planningMode === "interactive" && currentRoute)) && (
           <aside className="flex w-[360px] shrink-0 flex-col border-l border-slate-200 bg-slate-50">
+            <CruisePanel
+              targetAltFt={targetAltFt}
+              onChange={setTargetAltFt}
+              flightRule={flightRule}
+            />
             <div className="flex-1 overflow-y-auto">
               <LegTable
                 routes={planningMode === "interactive" && currentRoute ? [currentRoute] : routes}
