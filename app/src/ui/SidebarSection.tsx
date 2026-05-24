@@ -1,4 +1,13 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+
+interface NextAction {
+  /** Short label for the next step — rendered inside the Next button
+   *  ("Next: Trip →"). Omit to show a bare "Next →". */
+  label?: string;
+  /** Fires the manual advance. Implementations typically cancel any
+   *  pending auto-advance and switch the expanded section. */
+  onAdvance: () => void;
+}
 
 interface Props {
   /** Optional step number rendered as a circular badge. Omit for
@@ -12,30 +21,51 @@ interface Props {
   summary?: ReactNode;
   expanded: boolean;
   onToggle: () => void;
-  /** Optional footer "Continue →" action. Implementations typically
-   *  pass a handler that collapses this section and expands the next
-   *  one in the wizard. */
-  onContinue?: () => void;
-  continueLabel?: string;
+  /** Footer "Next" action — shown only on numbered wizard steps. The
+   *  terminal step (Filters) omits this so the footer disappears. */
+  next?: NextAction;
+  /** Absolute timestamp (Date.now() basis) of the pending auto-
+   *  advance, when one is scheduled for this section. The footer
+   *  renders a live countdown badge that ticks down to zero, then the
+   *  parent's effect fires the advance. Null when no auto-advance is
+   *  pending. */
+  countdownDeadline?: number | null;
   children: ReactNode;
+}
+
+/** Live ms-remaining counter that re-renders ~10x per second while a
+ *  deadline is in the future. Returns null when no deadline is set so
+ *  consumers can skip rendering the countdown UI entirely. */
+function useCountdown(deadline: number | null | undefined): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (deadline == null) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(id);
+  }, [deadline]);
+  if (deadline == null) return null;
+  return Math.max(0, deadline - now);
 }
 
 /** Collapsible card used to build the sidebar accordion. Highlights
  *  the active step with a brand-blue ring and step badge, smoothly
- *  scrolls into view when it expands, and exposes an optional
- *  "Continue →" footer for wizard advancement. */
+ *  scrolls into view when it expands, and exposes a footer "Next"
+ *  button (with a live countdown chip when auto-advance is pending)
+ *  for wizard progression. */
 export function SidebarSection({
   number,
   title,
   summary,
   expanded,
   onToggle,
-  onContinue,
-  continueLabel = "Continue →",
+  next,
+  countdownDeadline,
   children,
 }: Props) {
   const ref = useRef<HTMLElement>(null);
   const wasExpanded = useRef(expanded);
+  const remainingMs = useCountdown(expanded ? countdownDeadline : null);
 
   useEffect(() => {
     // Only scroll on a false→true transition so a manual collapse
@@ -113,15 +143,38 @@ export function SidebarSection({
       {expanded && (
         <div className="border-t border-slate-100 p-4">
           {children}
-          {onContinue && (
-            <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">
+          {next && (
+            <div className="mt-4 flex items-center gap-2 border-t border-slate-100 pt-3">
               <button
                 type="button"
-                onClick={onContinue}
-                className="inline-flex items-center gap-1 text-[12px] font-medium text-brand-600 transition hover:text-brand-800"
+                onClick={next.onAdvance}
+                className="btn-primary text-xs"
               >
-                {continueLabel}
+                {next.label ? `Next: ${next.label} →` : "Next →"}
               </button>
+              <span className="flex-1" />
+              {remainingMs !== null && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] tabular-nums text-slate-600"
+                  title="Auto-advancing — any interaction in this section resets the timer"
+                  aria-live="polite"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 16 16"
+                    fill="currentColor"
+                    className="h-3 w-3 text-slate-400"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM7.25 4.5a.75.75 0 011.5 0V8l2.4 1.6a.75.75 0 01-.83 1.25l-2.73-1.82A.75.75 0 017.25 8.5V4.5z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  advancing in {(remainingMs / 1000).toFixed(1)}s
+                </span>
+              )}
             </div>
           )}
         </div>

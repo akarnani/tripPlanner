@@ -96,8 +96,13 @@ export function App() {
   const [startingFuelGal, setStartingFuelGal] = useState<number>(
     allAircraft[0]?.fuel.usable_capacity_gal ?? 0,
   );
-  const [origin, setOrigin] = useState("KSEA");
-  const [destination, setDestination] = useState("KBOI");
+  // Origin / destination start empty so the placeholder hints the
+  // format without committing the wizard to a route. With prefilled
+  // defaults, the first keystroke would mark Trip "touched" while the
+  // KSEA→KBOI pair was still technically valid, surprising the user
+  // with an auto-advance.
+  const [origin, setOrigin] = useState("");
+  const [destination, setDestination] = useState("");
   const [flightRule, setFlightRule] = useState<FlightRule>("VFR");
   const [capLegTime, setCapLegTime] = useState(false);
   const [maxLegHr, setMaxLegHr] = useState(2);
@@ -122,35 +127,44 @@ export function App() {
     | "filters"
     | null;
   const [expandedSection, setExpandedSection] = useState<WizardStep>("aircraft");
-  // Auto-advance: when the user touches a step's controls, schedule a
-  // debounced jump to the next step. Manual toggles cancel the pending
-  // advance so we never yank a section closed under the user's pointer.
-  const advanceTimer = useRef<number | null>(null);
+  // Auto-advance is state-driven (rather than timer-ref-driven) so the
+  // SidebarSection can render a live "advancing in N.Ns" countdown.
+  // Each pendingAdvance carries a fromStep (the user must still be on
+  // it when the deadline fires — otherwise the advance is silently
+  // dropped), a toStep, and an absolute deadline timestamp.
+  interface PendingAdvance {
+    fromStep: Exclude<WizardStep, null>;
+    toStep: WizardStep;
+    deadline: number;
+  }
+  const [pendingAdvance, setPendingAdvance] = useState<PendingAdvance | null>(
+    null,
+  );
   function cancelAdvance() {
-    if (advanceTimer.current !== null) {
-      window.clearTimeout(advanceTimer.current);
-      advanceTimer.current = null;
-    }
+    setPendingAdvance(null);
   }
   function scheduleAdvance(
     fromStep: Exclude<WizardStep, null>,
     toStep: WizardStep,
     ms = 1500,
   ) {
-    cancelAdvance();
-    advanceTimer.current = window.setTimeout(() => {
-      // Re-check that the user hasn't navigated elsewhere since the
-      // schedule landed — we only auto-advance from the step that
-      // originally requested it.
-      setExpandedSection((prev) => (prev === fromStep ? toStep : prev));
-      advanceTimer.current = null;
-    }, ms);
+    setPendingAdvance({ fromStep, toStep, deadline: Date.now() + ms });
   }
+  useEffect(() => {
+    if (!pendingAdvance) return;
+    const remaining = Math.max(0, pendingAdvance.deadline - Date.now());
+    const id = window.setTimeout(() => {
+      setExpandedSection((prev) =>
+        prev === pendingAdvance.fromStep ? pendingAdvance.toStep : prev,
+      );
+      setPendingAdvance(null);
+    }, remaining);
+    return () => window.clearTimeout(id);
+  }, [pendingAdvance]);
   function toggleSection(id: Exclude<WizardStep, null>) {
     cancelAdvance();
     setExpandedSection((prev) => (prev === id ? null : id));
   }
-  useEffect(() => () => cancelAdvance(), []);
 
   // "Touched" flags drive auto-advance — a step only advances after the
   // user has actually interacted with one of its controls since
@@ -1075,7 +1089,11 @@ export function App() {
           >
             <TripsPanel
               trips={trips}
-              defaultName={`${origin} → ${destination}`}
+              defaultName={
+                origin && destination
+                  ? `${origin} → ${destination}`
+                  : "Untitled trip"
+              }
               onSave={handleSaveTrip}
               onLoad={handleLoadTrip}
               onDelete={handleDeleteTrip}
@@ -1087,11 +1105,18 @@ export function App() {
             summary={`${selectedAircraft.make} ${selectedAircraft.model} · ${reserveMin} min reserve · ${startingFuelGal.toFixed(0)}/${selectedAircraft.fuel.usable_capacity_gal} gal`}
             expanded={expandedSection === "aircraft"}
             onToggle={() => toggleSection("aircraft")}
-            onContinue={() => {
-              cancelAdvance();
-              setExpandedSection("trip");
+            next={{
+              label: "Trip",
+              onAdvance: () => {
+                cancelAdvance();
+                setExpandedSection("trip");
+              },
             }}
-            continueLabel="Continue to trip →"
+            countdownDeadline={
+              pendingAdvance?.fromStep === "aircraft"
+                ? pendingAdvance.deadline
+                : null
+            }
           >
             <AircraftPanel
               aircraft={allAircraft}
@@ -1142,11 +1167,18 @@ export function App() {
             }
             expanded={expandedSection === "trip"}
             onToggle={() => toggleSection("trip")}
-            onContinue={() => {
-              cancelAdvance();
-              setExpandedSection("runway");
+            next={{
+              label: "Runway check",
+              onAdvance: () => {
+                cancelAdvance();
+                setExpandedSection("runway");
+              },
             }}
-            continueLabel="Continue to runway check →"
+            countdownDeadline={
+              pendingAdvance?.fromStep === "trip"
+                ? pendingAdvance.deadline
+                : null
+            }
           >
             {planningMode === "auto" ? (
               <>
@@ -1245,11 +1277,13 @@ export function App() {
             )}
             expanded={expandedSection === "runway"}
             onToggle={() => toggleSection("runway")}
-            onContinue={() => {
-              cancelAdvance();
-              setExpandedSection("filters");
+            next={{
+              label: "Filters",
+              onAdvance: () => {
+                cancelAdvance();
+                setExpandedSection("filters");
+              },
             }}
-            continueLabel="Continue to filters →"
           >
             <RunwayPanel
               settings={runwaySettings}

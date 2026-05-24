@@ -41,6 +41,33 @@ async function openSection(page: Page, name: string): Promise<void> {
   const button = page.getByRole("button", { name, exact: true });
   const expanded = await button.getAttribute("aria-expanded");
   if (expanded !== "true") await button.click();
+  // Wait for the expanded transition to actually settle — otherwise a
+  // follow-up locator can resolve to an element that React unmounts
+  // mid-click while the accordion shifts.
+  await expect(button).toHaveAttribute("aria-expanded", "true");
+}
+
+/** Fill the Trip step's From / To inputs and wait for the auto-replan
+ *  effect to render the leg table. Most tests start from an empty
+ *  origin/destination (the app no longer prefills KSEA/KBOI so a
+ *  single keystroke doesn't surprise-advance the wizard). */
+async function fillRoute(
+  page: Page,
+  from: string,
+  to: string,
+): Promise<void> {
+  await openSection(page, "Trip");
+  await page.getByLabel("From", { exact: true }).fill(from);
+  await page.getByLabel("To", { exact: true }).fill(to);
+  await waitForRoute(page);
+  // Filling both inputs marks Trip "touched" and schedules a wizard
+  // auto-advance (~1.5s). Wait for it to fire — otherwise the timer
+  // can collapse Trip mid-click on subsequent interactions and detach
+  // DOM under Playwright. Tests that need to interact with Trip
+  // afterwards should call openSection(page, "Trip") explicitly.
+  await expect(
+    page.getByRole("button", { name: "Trip", exact: true }),
+  ).toHaveAttribute("aria-expanded", "false", { timeout: 5_000 });
 }
 
 test.describe("trip planner smoke", () => {
@@ -54,8 +81,12 @@ test.describe("trip planner smoke", () => {
 
   test("renders the planning UI with default values", async ({ page }) => {
     await openSection(page, "Trip");
-    await expect(page.getByLabel("From", { exact: true })).toHaveValue("KSEA");
-    await expect(page.getByLabel("To", { exact: true })).toHaveValue("KBOI");
+    // Origin / destination start empty — the app intentionally doesn't
+    // prefill them because the first keystroke would otherwise mark the
+    // step touched while the (now stale) defaults were still valid and
+    // surprise-advance the wizard.
+    await expect(page.getByLabel("From", { exact: true })).toHaveValue("");
+    await expect(page.getByLabel("To", { exact: true })).toHaveValue("");
     // The VFR / IFR toggle is a segmented control; the active segment
     // gets the seg-btn-active class (white background, dark text).
     await expect(page.getByRole("button", { name: "VFR" })).toHaveClass(
@@ -63,12 +94,12 @@ test.describe("trip planner smoke", () => {
     );
   });
 
-  test("auto-replans on load and renders a leg table with per-leg altitude + course", async ({
+  test("auto-replans on settings change and renders a leg table with per-leg altitude + course", async ({
     page,
   }) => {
-    // No Plan button anymore — the auto-replan effect fires soon after
-    // dataReady with the default KSEA → KBOI route.
-    await waitForRoute(page);
+    // No Plan button anymore — auto-replan fires after the user fills
+    // a valid origin/destination pair.
+    await fillRoute(page, "KSEA", "KBOI");
 
     await expect(page.getByRole("columnheader", { name: "Alt" })).toBeVisible();
     await expect(page.getByRole("columnheader", { name: "MC" })).toBeVisible();
@@ -96,14 +127,16 @@ test.describe("trip planner smoke", () => {
   test("flipping VFR → IFR drops the +500 from every leg altitude", async ({
     page,
   }) => {
-    await waitForRoute(page);
+    await fillRoute(page, "KSEA", "KBOI");
     const firstAlt = () =>
       page.locator("table tbody tr").first().locator("td").nth(1);
     const vfrAlt = (await firstAlt().textContent()) ?? "";
     expect(vfrAlt.replace(/,/g, "")).toMatch(/500$/);
 
     // Flip to IFR — auto-replan fires after the debounce, so just wait
-    // for the first-leg altitude to change.
+    // for the first-leg altitude to change. fillRoute left Trip
+    // expanded, but the touched-flag advance may have collapsed it by
+    // now; openSection is a no-op if already open.
     await openSection(page, "Trip");
     await page.getByRole("button", { name: "IFR" }).click();
     await expect(firstAlt()).not.toHaveText(vfrAlt, { timeout: 30_000 });
@@ -165,7 +198,7 @@ test.describe("trip planner smoke", () => {
   test("min-safe replan bumps the target altitude when terrain dictates", async ({
     page,
   }) => {
-    await waitForRoute(page);
+    await fillRoute(page, "KSEA", "KBOI");
 
     // Target altitude now lives in the right-rail CruisePanel rather
     // than the Aircraft step — it's already visible alongside the route.
@@ -190,7 +223,7 @@ test.describe("trip planner smoke", () => {
     // common VFR altitudes. Clicking a different chip flips the target
     // altitude state, the auto-replan fires, and the first-leg alt
     // updates accordingly.
-    await waitForRoute(page);
+    await fillRoute(page, "KSEA", "KBOI");
     const firstAlt = () =>
       page.locator("table tbody tr").first().locator("td").nth(1);
     const before = (await firstAlt().textContent()) ?? "";
@@ -202,7 +235,7 @@ test.describe("trip planner smoke", () => {
   });
 
   test("GPX export downloads a non-empty file", async ({ page }) => {
-    await waitForRoute(page);
+    await fillRoute(page, "KSEA", "KBOI");
 
     const downloadPromise = page.waitForEvent("download");
     await page.getByRole("button", { name: "GPX" }).click();
@@ -220,6 +253,9 @@ test.describe("trip planner smoke", () => {
   test("interactive mode swaps the trip panel and shows range info", async ({
     page,
   }) => {
+    // The Build interactively button is gated on resolved origin /
+    // destination — fill the route first.
+    await fillRoute(page, "KSEA", "KBOI");
     await openSection(page, "Trip");
     // Entering interactive mode hides the auto-plan controls and
     // brings up the InteractivePanel with the stop chain and range
