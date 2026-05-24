@@ -58,7 +58,12 @@ async function fillRoute(
 ): Promise<void> {
   await openSection(page, "Trip");
   await page.getByLabel("From", { exact: true }).fill(from);
-  await page.getByLabel("To", { exact: true }).fill(to);
+  const toInput = page.getByLabel("To", { exact: true });
+  await toInput.fill(to);
+  // Playwright leaves focus on the filled input; the wizard pauses
+  // auto-advance while focus is inside the section, so we explicitly
+  // blur to release the pause.
+  await toInput.blur();
   await waitForRoute(page);
   // Filling both inputs marks Trip "touched" and schedules a wizard
   // auto-advance (~1.5s). Wait for it to fire — otherwise the timer
@@ -290,10 +295,48 @@ test.describe("trip planner smoke", () => {
     await expect(aircraftBtn).toHaveAttribute("aria-expanded", "true");
     await expect(tripBtn).toHaveAttribute("aria-expanded", "false");
 
-    await page.getByLabel("Reserve (min)").fill("60");
+    const reserve = page.getByLabel("Reserve (min)");
+    await reserve.fill("60");
+    // Blur so the focus-pause doesn't keep the timer suppressed; the
+    // wizard should then advance within its ~1.5 s grace period.
+    await reserve.blur();
     await expect(tripBtn).toHaveAttribute("aria-expanded", "true", {
       timeout: 5_000,
     });
     await expect(aircraftBtn).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("wizard auto-advance pauses while a field stays focused", async ({
+    page,
+  }) => {
+    // The wizard should never yank a section closed under the cursor
+    // mid-edit. We type into Trip's From input and keep focus there
+    // past the normal 1.5 s deadline; Trip must stay expanded. Once we
+    // blur, the advance fires.
+    await openSection(page, "Trip");
+    const tripBtn = page.getByRole("button", { name: "Trip", exact: true });
+    const runwayBtn = page.getByRole("button", {
+      name: "Runway check",
+      exact: true,
+    });
+
+    const from = page.getByLabel("From", { exact: true });
+    const to = page.getByLabel("To", { exact: true });
+    await from.fill("KSEA");
+    await to.fill("KBOI");
+    // Focus is on To. Both endpoints are valid — without focus pause,
+    // the wizard would advance ~1.5 s after the last keystroke. Wait
+    // 2.5 s and assert Trip is still open.
+    await page.waitForTimeout(2500);
+    await expect(tripBtn).toHaveAttribute("aria-expanded", "true");
+    await expect(runwayBtn).toHaveAttribute("aria-expanded", "false");
+
+    // Blur — the focus-pause lifts, the scheduling effect re-runs,
+    // and the wizard advances within its grace period.
+    await to.blur();
+    await expect(runwayBtn).toHaveAttribute("aria-expanded", "true", {
+      timeout: 5_000,
+    });
+    await expect(tripBtn).toHaveAttribute("aria-expanded", "false");
   });
 });

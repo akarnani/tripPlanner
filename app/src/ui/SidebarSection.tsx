@@ -30,6 +30,13 @@ interface Props {
    *  parent's effect fires the advance. Null when no auto-advance is
    *  pending. */
   countdownDeadline?: number | null;
+  /** Fired when focus enters or leaves the expanded content. The
+   *  parent uses this to pause auto-advance while the user is mid-
+   *  edit — yanking a section closed under the cursor would lose the
+   *  keystroke they were about to type. React's synthetic focus/blur
+   *  bubble (unlike the native events), so a single pair of handlers
+   *  on the content wrapper catches every descendant. */
+  onFocusedChange?: (focused: boolean) => void;
   children: ReactNode;
 }
 
@@ -61,6 +68,7 @@ export function SidebarSection({
   onToggle,
   next,
   countdownDeadline,
+  onFocusedChange,
   children,
 }: Props) {
   const ref = useRef<HTMLElement>(null);
@@ -141,7 +149,21 @@ export function SidebarSection({
         </svg>
       </button>
       {expanded && (
-        <div className="border-t border-slate-100 p-4">
+        <div
+          className="border-t border-slate-100 p-4"
+          onFocus={() => onFocusedChange?.(true)}
+          onBlur={(e) => {
+            // onBlur fires whenever focus leaves any descendant, even
+            // if it moves to a sibling input within the same section.
+            // Only emit "unfocused" when relatedTarget (the element
+            // about to receive focus) is genuinely outside us.
+            if (
+              !e.currentTarget.contains(e.relatedTarget as Node | null)
+            ) {
+              onFocusedChange?.(false);
+            }
+          }}
+        >
           {children}
           {next && (
             <div className="mt-4 flex items-center gap-2 border-t border-slate-100 pt-3">

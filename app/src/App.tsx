@@ -178,6 +178,24 @@ export function App() {
     if (expandedSection === "trip") setTripTouched(false);
   }, [expandedSection]);
 
+  // Track which step (if any) has DOM focus inside its content.
+  // While the active step is focused, we pause auto-advance — yanking
+  // a section closed mid-keystroke is bad UX. SidebarSection emits
+  // focus/blur via capture handlers; each section's onFocusedChange
+  // sets or clears focusedSection identified by its own step id.
+  const [focusedSection, setFocusedSection] = useState<WizardStep>(null);
+  function makeFocusHandler(step: Exclude<WizardStep, null>) {
+    return (focused: boolean) => {
+      setFocusedSection((prev) => {
+        if (focused) return step;
+        // Only clear if we're the section currently being tracked —
+        // a stale blur event after another section took focus must
+        // not wipe the new value.
+        return prev === step ? null : prev;
+      });
+    };
+  }
+
   // Interactive-build state. Only consulted when planningMode is
   // "interactive"; the auto-plan flow above is fully independent so
   // toggling between modes never throws away the other mode's work.
@@ -298,6 +316,13 @@ export function App() {
   useEffect(() => {
     if (expandedSection !== "aircraft") return;
     if (!aircraftTouched) return;
+    // Pause while the user is mid-edit inside this step. Blurring out
+    // re-runs the effect (focusedSection is a dep) and schedules a
+    // fresh advance with a full 1.5 s grace period.
+    if (focusedSection === "aircraft") {
+      cancelAdvance();
+      return;
+    }
     scheduleAdvance("aircraft", "trip");
   }, [
     expandedSection,
@@ -305,11 +330,16 @@ export function App() {
     aircraftSlug,
     reserveMin,
     startingFuelGal,
+    focusedSection,
   ]);
   useEffect(() => {
     if (expandedSection !== "trip") return;
     if (!tripTouched) return;
     if (!originAirport || !destinationAirport) {
+      cancelAdvance();
+      return;
+    }
+    if (focusedSection === "trip") {
       cancelAdvance();
       return;
     }
@@ -319,6 +349,7 @@ export function App() {
     tripTouched,
     originAirport,
     destinationAirport,
+    focusedSection,
   ]);
 
   const interactiveStopAirports = useMemo(() => {
@@ -1117,6 +1148,7 @@ export function App() {
                 ? pendingAdvance.deadline
                 : null
             }
+            onFocusedChange={makeFocusHandler("aircraft")}
           >
             <AircraftPanel
               aircraft={allAircraft}
@@ -1179,6 +1211,7 @@ export function App() {
                 ? pendingAdvance.deadline
                 : null
             }
+            onFocusedChange={makeFocusHandler("trip")}
           >
             {planningMode === "auto" ? (
               <>
