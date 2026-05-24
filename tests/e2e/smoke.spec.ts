@@ -1,21 +1,38 @@
 import { test, expect, type Page } from "@playwright/test";
 
-/** The Plan button shows "Loading airport database…" while datasets
- *  load via fetch. Wait for the button to become the enabled "Plan
- *  trip" before each test so they aren't racing the dataset load. */
+/** The top header shows a "Loading airports…" pill that flips to
+ *  "Airport database ready" once the dataset load resolves. Used by
+ *  beforeEach to keep tests from racing the load — and it works
+ *  regardless of which sidebar section is expanded, unlike the
+ *  Plan-trip button (which only renders when Trip is expanded). */
 async function waitForDataReady(page: Page): Promise<void> {
-  await expect(page.getByTestId("plan-trip")).toHaveAttribute(
-    "data-state",
-    "idle",
-    { timeout: 30_000 },
-  );
+  await expect(page.getByText("Airport database ready")).toBeVisible({
+    timeout: 30_000,
+  });
 }
 
 async function parseMatchCount(page: Page): Promise<number> {
-  const counter = page.getByText(/of [\d,]+ airports match\./);
-  const t = (await counter.textContent()) ?? "";
-  const m = t.match(/^([\d,]+) of/);
+  // The match counter sits inside the Filters section and reads e.g.
+  // "1,234 / 5,678". The label "Matching airports" sits above the
+  // numeric line — anchor on it so we don't accidentally match a
+  // similar-shaped string elsewhere.
+  const label = page.getByText("Matching airports");
+  const numericLine = label.locator("xpath=following-sibling::*[1]");
+  const t = (await numericLine.textContent()) ?? "";
+  const m = t.match(/([\d,]+)\s*\/\s*([\d,]+)/);
   return m ? Number(m[1].replace(/,/g, "")) : 0;
+}
+
+/** Click a sidebar section header to expand it. The wizard accordion
+ *  collapses every section by default except "Aircraft & cruise", so
+ *  tests that need to reach controls inside the other sections must
+ *  open them first. Idempotent: if the section is already expanded
+ *  we no-op. SidebarSection sets aria-label to the section title so
+ *  this match is unambiguous. */
+async function openSection(page: Page, name: string): Promise<void> {
+  const button = page.getByRole("button", { name, exact: true });
+  const expanded = await button.getAttribute("aria-expanded");
+  if (expanded !== "true") await button.click();
 }
 
 test.describe("trip planner smoke", () => {
@@ -28,16 +45,20 @@ test.describe("trip planner smoke", () => {
   });
 
   test("renders the planning UI with default values", async ({ page }) => {
+    await openSection(page, "Trip");
     await expect(page.getByLabel("From", { exact: true })).toHaveValue("KSEA");
     await expect(page.getByLabel("To", { exact: true })).toHaveValue("KBOI");
+    // The VFR / IFR toggle is a segmented control; the active segment
+    // gets the seg-btn-active class (white background, dark text).
     await expect(page.getByRole("button", { name: "VFR" })).toHaveClass(
-      /bg-slate-900/,
+      /seg-btn-active/,
     );
   });
 
   test("Plan button shows a spinner state while computing", async ({
     page,
   }) => {
+    await openSection(page, "Trip");
     // The Plan button exposes a data-state attribute that's "idle"
     // before the click, "planning" during compute (≥ MIN_SPINNER_MS),
     // and "loading" while datasets are loading.
@@ -105,6 +126,7 @@ test.describe("trip planner smoke", () => {
   test("plans KSEA→KBOI and renders a leg table with per-leg altitude + course", async ({
     page,
   }) => {
+    await openSection(page, "Trip");
     await page.getByTestId("plan-trip").click();
 
     const legHeader = page.getByRole("button", {
@@ -138,6 +160,7 @@ test.describe("trip planner smoke", () => {
   test("flipping VFR → IFR drops the +500 from every leg altitude", async ({
     page,
   }) => {
+    await openSection(page, "Trip");
     await page.getByTestId("plan-trip").click();
     await expect(
       page.getByRole("button", { name: /Total time · \d+ stop/ }).first(),
@@ -161,6 +184,7 @@ test.describe("trip planner smoke", () => {
   });
 
   test("flight rule pill updates the helper text", async ({ page }) => {
+    await openSection(page, "Trip");
     await expect(
       page.getByText("Cruise altitudes round to odd-/even-thousands + 500."),
     ).toBeVisible();
@@ -173,6 +197,7 @@ test.describe("trip planner smoke", () => {
   test("min-runway filter changes the airport match count", async ({
     page,
   }) => {
+    await openSection(page, "Airport filters");
     const before = await parseMatchCount(page);
     await page.getByLabel("Minimum runway length (ft)").fill("8000");
     await expect.poll(() => parseMatchCount(page)).not.toBe(before);
@@ -181,6 +206,7 @@ test.describe("trip planner smoke", () => {
   test("Precision approach filter restricts the match count below 'no filter'", async ({
     page,
   }) => {
+    await openSection(page, "Airport filters");
     const select = page.getByLabel("Approach");
     if (!(await select.isEnabled())) test.skip();
 
@@ -211,11 +237,15 @@ test.describe("trip planner smoke", () => {
   test("min-safe replan bumps the target altitude when terrain dictates", async ({
     page,
   }) => {
+    await openSection(page, "Trip");
     await page.getByTestId("plan-trip").click();
     await expect(
       page.getByRole("button", { name: /Total time · \d+ stop/ }).first(),
     ).toBeVisible({ timeout: 30_000 });
 
+    // Opening Trip auto-collapsed Aircraft; re-open it to read the
+    // target-altitude input.
+    await openSection(page, "Aircraft & cruise");
     const targetInput = page.getByLabel("Target altitude (ft)");
     const before = Number((await targetInput.inputValue()) ?? "0");
 
@@ -231,6 +261,7 @@ test.describe("trip planner smoke", () => {
   });
 
   test("GPX export downloads a non-empty file", async ({ page }) => {
+    await openSection(page, "Trip");
     await page.getByTestId("plan-trip").click();
     await expect(
       page.getByRole("button", { name: /Total time · \d+ stop/ }).first(),
@@ -252,6 +283,7 @@ test.describe("trip planner smoke", () => {
   test("interactive mode swaps the trip panel and shows range info", async ({
     page,
   }) => {
+    await openSection(page, "Trip");
     // Entering interactive mode hides the auto-plan controls and
     // brings up the InteractivePanel with the stop chain and range
     // numbers. With no stops yet, the origin → destination leg is
@@ -265,7 +297,7 @@ test.describe("trip planner smoke", () => {
       page.getByRole("button", { name: /Interactive build · \d+ stop/ }),
     ).toBeVisible({ timeout: 5_000 });
     // Range numbers are populated (any value over zero).
-    await expect(page.getByText(/Range from here:/)).toBeVisible();
+    await expect(page.getByText(/Range from here/)).toBeVisible();
     // Returning to auto mode brings the Plan button back.
     await page.getByRole("button", { name: "Switch to auto plan" }).click();
     await expect(page.getByTestId("plan-trip")).toBeVisible();

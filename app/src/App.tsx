@@ -70,6 +70,7 @@ import { InteractivePanel } from "./ui/InteractivePanel";
 import { PinnedStops } from "./ui/PinnedStops";
 import { RunwayPanel } from "./ui/RunwayPanel";
 import { RunwayWarnings } from "./ui/RunwayWarnings";
+import { SidebarSection } from "./ui/SidebarSection";
 import { TripsPanel } from "./ui/TripsPanel";
 import {
   deleteTrip,
@@ -111,6 +112,22 @@ export function App() {
   );
   const [pinnedStopIds, setPinnedStopIds] = useState<readonly string[]>([]);
   const [trips, setTrips] = useState<SavedTrip[]>(() => listTrips());
+
+  // Wizard accordion: exactly one sidebar section is expanded at a
+  // time. Starts on "aircraft" — the natural first step (drives fuel,
+  // range, runway check). Clicking a section header toggles it;
+  // clicking "Continue →" inside a section advances to the next.
+  type WizardStep =
+    | "trips"
+    | "aircraft"
+    | "trip"
+    | "runway"
+    | "filters"
+    | null;
+  const [expandedSection, setExpandedSection] = useState<WizardStep>("aircraft");
+  function toggleSection(id: Exclude<WizardStep, null>) {
+    setExpandedSection((prev) => (prev === id ? null : id));
+  }
 
   // Interactive-build state. Only consulted when planningMode is
   // "interactive"; the auto-plan flow above is fully independent so
@@ -1002,12 +1019,17 @@ export function App() {
         </div>
       </header>
       <div className="flex min-h-0 flex-1">
-        <aside className="w-[340px] shrink-0 space-y-4 overflow-y-auto border-r border-slate-200 bg-slate-50 p-4">
-          <section className="card card-body">
-            <h2 className="section-title">Saved trips</h2>
-            <p className="section-subtitle mb-3">
-              Stored locally — save the current setup to revisit later.
-            </p>
+        <aside className="w-[340px] shrink-0 space-y-3 overflow-y-auto border-r border-slate-200 bg-slate-50 p-4">
+          <SidebarSection
+            title="Saved trips"
+            summary={
+              trips.length === 0
+                ? "Save the current trip to revisit later"
+                : `${trips.length} saved · click to load or save`
+            }
+            expanded={expandedSection === "trips"}
+            onToggle={() => toggleSection("trips")}
+          >
             <TripsPanel
               trips={trips}
               defaultName={`${origin} → ${destination}`}
@@ -1015,28 +1037,61 @@ export function App() {
               onLoad={handleLoadTrip}
               onDelete={handleDeleteTrip}
             />
-          </section>
-          <section className="card card-body">
-            <div className="mb-3 flex items-baseline justify-between">
-              <div>
-                <h2 className="section-title">Trip</h2>
-                <p className="section-subtitle">
-                  {planningMode === "auto"
-                    ? "Pick origin & destination; the planner chooses stops."
-                    : "Hand-pick stops on the map."}
-                </p>
-              </div>
-              <span
-                className={
-                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide " +
-                  (planningMode === "auto"
-                    ? "border-brand-200 bg-brand-50 text-brand-700"
-                    : "border-orange-200 bg-orange-50 text-orange-700")
-                }
-              >
-                {planningMode === "auto" ? "Auto" : "Interactive"}
+          </SidebarSection>
+          <SidebarSection
+            number={1}
+            title="Aircraft & cruise"
+            summary={`${selectedAircraft.make} ${selectedAircraft.model} · ${targetAltFt.toLocaleString()} ft · ${reserveMin} min reserve · ${startingFuelGal.toFixed(0)}/${selectedAircraft.fuel.usable_capacity_gal} gal`}
+            expanded={expandedSection === "aircraft"}
+            onToggle={() => toggleSection("aircraft")}
+            onContinue={() => setExpandedSection("trip")}
+            continueLabel="Continue to trip →"
+          >
+            <AircraftPanel
+              aircraft={allAircraft}
+              selectedSlug={selectedAircraft.slug}
+              onSelect={setAircraftSlug}
+              targetAltFt={targetAltFt}
+              onTargetAltChange={setTargetAltFt}
+              reserveMin={reserveMin}
+              onReserveChange={setReserveMin}
+              startingFuelGal={startingFuelGal}
+              onStartingFuelChange={setStartingFuelGal}
+              capacityGal={selectedAircraft.fuel.usable_capacity_gal}
+            />
+          </SidebarSection>
+          <SidebarSection
+            number={2}
+            title="Trip"
+            summary={
+              <span className="flex items-baseline gap-1.5">
+                <span className="font-mono font-medium text-slate-700">
+                  {origin}
+                </span>
+                <span className="text-slate-400">→</span>
+                <span className="font-mono font-medium text-slate-700">
+                  {destination}
+                </span>
+                <span className="text-slate-400">·</span>
+                <span>{flightRule}</span>
+                {planningMode === "interactive" && (
+                  <span className="rounded-full bg-orange-100 px-1.5 text-[10px] font-semibold uppercase text-orange-700">
+                    interactive
+                  </span>
+                )}
+                {capLegTime && (
+                  <>
+                    <span className="text-slate-400">·</span>
+                    <span>cap {maxLegHr}h</span>
+                  </>
+                )}
               </span>
-            </div>
+            }
+            expanded={expandedSection === "trip"}
+            onToggle={() => toggleSection("trip")}
+            onContinue={() => setExpandedSection("runway")}
+            continueLabel="Continue to runway check →"
+          >
             {planningMode === "auto" ? (
               <>
                 <TripPanel
@@ -1112,42 +1167,33 @@ export function App() {
                 onExit={handleExitInteractive}
               />
             )}
-          </section>
-          <section className="card card-body">
-            <h2 className="section-title">Aircraft &amp; cruise</h2>
-            <p className="section-subtitle mb-3">
-              POH-driven cruise, climb, and fuel-flow tables.
-            </p>
-            <AircraftPanel
-              aircraft={allAircraft}
-              selectedSlug={selectedAircraft.slug}
-              onSelect={setAircraftSlug}
-              targetAltFt={targetAltFt}
-              onTargetAltChange={setTargetAltFt}
-              reserveMin={reserveMin}
-              onReserveChange={setReserveMin}
-              startingFuelGal={startingFuelGal}
-              onStartingFuelChange={setStartingFuelGal}
-              capacityGal={selectedAircraft.fuel.usable_capacity_gal}
-            />
-          </section>
-          <section className="card card-body">
-            <h2 className="section-title">Runway check</h2>
-            <p className="section-subtitle mb-3">
-              Cross-checks runway lengths against POH takeoff/landing distance.
-            </p>
+          </SidebarSection>
+          <SidebarSection
+            number={3}
+            title="Runway check"
+            summary={runwayCheckSummary(
+              runwaySettings,
+              aircraftSupportsRunwayCheck(selectedAircraft),
+            )}
+            expanded={expandedSection === "runway"}
+            onToggle={() => toggleSection("runway")}
+            onContinue={() => setExpandedSection("filters")}
+            continueLabel="Continue to filters →"
+          >
             <RunwayPanel
               settings={runwaySettings}
               onChange={setRunwaySettings}
               aircraftHasData={aircraftSupportsRunwayCheck(selectedAircraft)}
               aircraftModel={selectedAircraft.model}
             />
-          </section>
-          <section className="card card-body">
-            <h2 className="section-title">Airport filters</h2>
-            <p className="section-subtitle mb-3">
-              Filter the candidate set for fuel stops.
-            </p>
+          </SidebarSection>
+          <SidebarSection
+            number={4}
+            title="Airport filters"
+            summary={`${matches.length.toLocaleString()} of ${datasets.airports.length.toLocaleString()} airports match`}
+            expanded={expandedSection === "filters"}
+            onToggle={() => toggleSection("filters")}
+          >
             <FilterPanel
               filters={filters}
               onChange={setFilters}
@@ -1157,7 +1203,7 @@ export function App() {
               aircraftFuelType={selectedAircraft.fuel.type}
               runwayCheckActive={runwayCheckActive}
             />
-          </section>
+          </SidebarSection>
         </aside>
         <main className="relative flex-1">
           <MapView
@@ -1218,4 +1264,17 @@ export function App() {
       </div>
     </div>
   );
+}
+
+function runwayCheckSummary(
+  settings: RunwaySettings,
+  aircraftHasData: boolean,
+): string {
+  if (!aircraftHasData) return "Not available for this aircraft";
+  if (!settings.enabled) return "Off — enable to check runway lengths";
+  const w = settings.weight === "maxGross" ? "max gross" : "estimated";
+  const isa = settings.isa_delta_c >= 0
+    ? `ISA+${settings.isa_delta_c}°C`
+    : `ISA${settings.isa_delta_c}°C`;
+  return `On · ${w} weight · +${settings.buffer_ft} ft buffer · ${isa}`;
 }

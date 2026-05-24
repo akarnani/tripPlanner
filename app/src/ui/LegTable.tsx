@@ -42,8 +42,9 @@ export function LegTable({
               }
             >
               {label}
-              <span className="ml-1 text-slate-400">
-                · {r.totals.stops} stop{r.totals.stops === 1 ? "" : "s"}
+              <span className="text-slate-400">
+                {" · "}
+                {r.totals.stops} stop{r.totals.stops === 1 ? "" : "s"}
               </span>
               {i === selected && (
                 <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-brand-600" />
