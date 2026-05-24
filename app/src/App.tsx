@@ -738,16 +738,27 @@ export function App() {
     if (routes.length === 0) return routes;
     return routes.map((route) => {
       if (route.legs.length === 0) return route;
+      // Has any leg been overridden? If not, skip the rebuild — the
+      // planner's output is already what we want to display.
+      const hasOverride = route.legs.some((l) =>
+        legAltKey(l.fromAirport.id, l.toAirport.id) in legAltOverrides,
+      );
+      if (!hasOverride) return route;
       const sequence = [
         route.legs[0].fromAirport,
         ...route.legs.map((l) => l.toAirport),
       ];
-      const legAltitudes = route.legs.map(
-        (l) => legAltOverrides[legAltKey(l.fromAirport.id, l.toAirport.id)] ?? null,
-      );
-      // If no override applies, skip the rebuild — the planner-computed
-      // leg metrics are already correct.
-      if (legAltitudes.every((a) => a == null)) return route;
+      // For non-overridden legs, pass the planner's altitude verbatim
+      // so buildInteractiveLeg doesn't replace it with the
+      // cheapest-cruise heuristic — the planner already chose this
+      // altitude when shopping the routing graph, and the pilot didn't
+      // ask for it to change. Only legs in legAltOverrides get
+      // re-anchored to the user's value.
+      const legAltitudes = route.legs.map((l) => {
+        const override =
+          legAltOverrides[legAltKey(l.fromAirport.id, l.toAirport.id)];
+        return override !== undefined ? override : l.cruise_alt_ft;
+      });
       try {
         const rebuilt = buildInteractiveRoute({
           sequence,

@@ -272,9 +272,16 @@ function AltCell({
   }
   opts.sort((a, b) => a - b);
   const overridden = isLegAltOverridden?.(leg) ?? false;
+  // Visible select value: "auto" when the leg is using the planner /
+  // hemispheric-default altitude, the numeric altitude when the pilot
+  // has overridden it. This makes the auto-vs-custom state legible at
+  // a glance instead of only when the dropdown is open. The auto
+  // option's label still includes the actual altitude in parens so
+  // you can see *what* auto picked without expanding.
+  const value = overridden ? String(leg.cruise_alt_ft) : "auto";
   return (
     <select
-      value={leg.cruise_alt_ft}
+      value={value}
       onChange={(e) => {
         const raw = e.target.value;
         onChangeLegAltitude(leg, raw === "auto" ? null : Number.parseInt(raw, 10));
@@ -282,8 +289,8 @@ function AltCell({
       aria-label={`Cruise altitude for ${leg.fromAirport.icao ?? leg.fromAirport.lid} → ${leg.toAirport.icao ?? leg.toAirport.lid}`}
       title={
         overridden
-          ? "Custom altitude; pick 'auto' to revert to the hemispheric-cheapest level"
-          : "Auto-picked — pick a specific altitude to override"
+          ? "Custom altitude; pick 'auto' to revert to the planner-picked level"
+          : "Auto — pick a specific altitude to pin this leg"
       }
       className={
         "w-full rounded-md border px-1.5 py-0.5 text-right text-xs font-mono tabular-nums transition focus:outline-none focus:ring-2 focus:ring-brand-500/30 " +
@@ -292,7 +299,9 @@ function AltCell({
           : "border-slate-200 bg-white text-slate-700 hover:border-slate-300")
       }
     >
-      <option value="auto">auto</option>
+      <option value="auto">
+        auto ({leg.cruise_alt_ft.toLocaleString()})
+      </option>
       {opts.map((alt) => (
         <option key={alt} value={alt}>
           {alt.toLocaleString()}
