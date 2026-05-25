@@ -1472,6 +1472,19 @@ export function App() {
               targetAltFt={targetAltFt}
               onChange={setTargetAltFt}
               flightRule={flightRule}
+              route={planningMode === "auto" ? currentRoute : null}
+              onChangeLegAltitude={
+                planningMode === "auto"
+                  ? handleChangeAutoLegAltitude
+                  : undefined
+              }
+              isLegAltOverridden={
+                planningMode === "auto" ? isAutoLegAltOverridden : undefined
+              }
+              cruiseCeilingFt={
+                selectedAircraft.cruise[selectedAircraft.cruise.length - 1]
+                  ?.altitude_ft ?? undefined
+              }
             />
             <div className="flex-1 overflow-y-auto">
               <LegTable
@@ -1489,18 +1502,6 @@ export function App() {
                 }
                 onReplaceStop={
                   planningMode === "interactive" ? () => {} : handleReplaceStop
-                }
-                onChangeLegAltitude={
-                  planningMode === "auto"
-                    ? handleChangeAutoLegAltitude
-                    : undefined
-                }
-                isLegAltOverridden={
-                  planningMode === "auto" ? isAutoLegAltOverridden : undefined
-                }
-                cruiseCeilingFt={
-                  selectedAircraft.cruise[selectedAircraft.cruise.length - 1]
-                    ?.altitude_ft ?? undefined
                 }
               />
             </div>

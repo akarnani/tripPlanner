@@ -51,23 +51,27 @@ async function openSection(page: Page, name: string): Promise<void> {
  *  effect to render the leg table. Most tests start from an empty
  *  origin/destination (the app no longer prefills KSEA/KBOI so a
  *  single keystroke doesn't surprise-advance the wizard). */
-/** Read the displayed first-leg cruise altitude from the LegTable.
- *  In auto mode (no override), the select value is "auto" and the
- *  actual altitude is shown in the option label as e.g. "auto (6,500)";
- *  when overridden, the value is the bare number. Returns the
- *  altitude as a string without comma separators. */
+/** Read the displayed first-leg cruise altitude from the LegTable
+ *  Alt column. Returns the altitude as a string without comma
+ *  separators (e.g. "6500") so callers can compare with regex like
+ *  /500$/ or /000$/. */
 async function firstLegAltitude(page: Page): Promise<string> {
-  const select = page
+  const cell = page
     .locator("table tbody tr")
     .first()
-    .locator("select")
+    .locator("td")
+    .nth(1);
+  const text = (await cell.textContent()) ?? "";
+  return text.replace(/,/g, "").trim();
+}
+
+/** Locator for the first leg's per-leg altitude select in the
+ *  CruisePanel. Use selectOption / inputValue against this for
+ *  override-related assertions. */
+function firstLegAltSelect(page: Page) {
+  return page
+    .getByRole("combobox", { name: /^Cruise altitude for / })
     .first();
-  const value = await select.inputValue();
-  if (value !== "auto") return value;
-  const firstOption = select.locator("option").first();
-  const text = (await firstOption.textContent()) ?? "";
-  const m = text.match(/\(([\d,]+)\)/);
-  return (m?.[1] ?? "").replace(/,/g, "");
 }
 
 async function fillRoute(
@@ -323,30 +327,25 @@ test.describe("trip planner smoke", () => {
   test("per-leg altitude select overrides the auto-picked level", async ({
     page,
   }) => {
-    // The LegTable's Alt cell is a <select> in auto mode. Un-overridden
-    // legs read "auto" as the select value, with the actual altitude
-    // shown in the option label. Picking a specific number overrides
-    // that leg's altitude without re-running the optimizer.
+    // The CruisePanel lists each leg with its own altitude dropdown.
+    // Un-overridden legs read "auto" as the select value, with the
+    // actual altitude shown in the option label. Picking a specific
+    // number overrides that leg's altitude without re-running the
+    // optimizer; the new altitude shows up in the LegTable Alt column.
     await fillRoute(page, "KSEA", "KBOI");
-    const firstAltSelect = page
-      .locator("table tbody tr")
-      .first()
-      .locator("select")
-      .first();
-    await expect(firstAltSelect).toHaveValue("auto");
-    // Pick an altitude. 10,500 and 8,500 are both in CRUISE_ALT_OPTIONS;
-    // either will register as an override.
-    await firstAltSelect.selectOption("10500");
-    await expect(firstAltSelect).toHaveValue("10500");
-    // The override should also tint the select orange — the class
-    // signal is part of the public contract with the user (it tells
-    // them the cell is now custom).
-    await expect(firstAltSelect).toHaveClass(/bg-orange-50/);
-    // Reverting via "auto" should drop the override and return to the
-    // planner-picked value.
-    await firstAltSelect.selectOption("auto");
-    await expect(firstAltSelect).toHaveValue("auto");
-    await expect(firstAltSelect).not.toHaveClass(/bg-orange-50/);
+    const select = firstLegAltSelect(page);
+    await expect(select).toHaveValue("auto");
+    await select.selectOption("10500");
+    await expect(select).toHaveValue("10500");
+    // Override tints the select orange — visible signal that the cell
+    // is now custom.
+    await expect(select).toHaveClass(/bg-orange-50/);
+    // The LegTable Alt cell should reflect the new altitude.
+    expect(await firstLegAltitude(page)).toBe("10500");
+    // Reverting via "auto" should drop the override.
+    await select.selectOption("auto");
+    await expect(select).toHaveValue("auto");
+    await expect(select).not.toHaveClass(/bg-orange-50/);
   });
 
   test("wizard auto-advance pauses while a field stays focused", async ({
