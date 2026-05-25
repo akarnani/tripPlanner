@@ -1,4 +1,5 @@
 import type { FlightRule } from "@/engine/hemispheric";
+import type { AltitudeStrategy } from "@/engine/interactive";
 import type { Leg, PlannedRoute } from "@/engine/plan";
 import { CRUISE_ALT_OPTIONS } from "./altitudeOptions";
 
@@ -6,6 +7,10 @@ interface Props {
   targetAltFt: number;
   onChange: (alt: number) => void;
   flightRule: FlightRule;
+  /** How non-overridden legs pick their altitude. See AltitudeStrategy
+   *  in engine/interactive.ts for semantics. */
+  altitudeStrategy: AltitudeStrategy;
+  onChangeAltitudeStrategy: (s: AltitudeStrategy) => void;
   /** The currently-displayed route. When present (and the override
    *  callbacks are wired), the panel lists each leg with its own
    *  altitude dropdown so the pilot can pin individual legs to a
@@ -31,6 +36,8 @@ export function CruisePanel({
   targetAltFt,
   onChange,
   flightRule,
+  altitudeStrategy,
+  onChangeAltitudeStrategy,
   route,
   onChangeLegAltitude,
   isLegAltOverridden,
@@ -98,8 +105,37 @@ export function CruisePanel({
       </div>
       {showLegOverrides && (
         <div className="border-t border-slate-100 bg-slate-50/40 px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-            Per-leg altitude
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+              Per-leg altitude
+            </div>
+            <div className="seg" role="radiogroup" aria-label="Auto altitude strategy">
+              {(
+                [
+                  { id: "lowest", label: "Lowest safe" },
+                  { id: "cheapest", label: "Most efficient" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={altitudeStrategy === opt.id}
+                  onClick={() => onChangeAltitudeStrategy(opt.id)}
+                  className={
+                    "seg-btn " +
+                    (altitudeStrategy === opt.id ? "seg-btn-active" : "")
+                  }
+                  title={
+                    opt.id === "lowest"
+                      ? "Auto picks the lowest hemispheric-legal altitude at or above the cruise target (and any terrain floor)."
+                      : "Auto picks the most fuel-efficient legal altitude from the POH cruise table — may go well above target."
+                  }
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
           <ul className="mt-2 space-y-1.5">
             {route!.legs.map((leg, i) => (

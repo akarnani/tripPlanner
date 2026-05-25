@@ -18,6 +18,17 @@ import type { Leg, PlannedRoute } from "./plan";
  *  to the hemispheric-correct rounding of the global target altitude. */
 export type LegAltitudeOverride = number | null | undefined;
 
+/** How "auto" (non-overridden) leg altitudes are chosen.
+ *  - "lowest": the lowest hemispheric-legal level at or above the
+ *    pilot's target altitude and any terrain floor, capped at the
+ *    aircraft's published cruise ceiling. Treats target as the level
+ *    the pilot wants to fly; only raises for legal / terrain reasons.
+ *  - "cheapest": scans the aircraft's published cruise table for the
+ *    most fuel-efficient legal level at or above target/terrain.
+ *    May go substantially higher than target when climb fuel pays
+ *    for itself in cruise efficiency. */
+export type AltitudeStrategy = "lowest" | "cheapest";
+
 export interface BuildInteractiveLegInput {
   from: Airport;
   to: Airport;
@@ -30,6 +41,10 @@ export interface BuildInteractiveLegInput {
    *  used regardless of the hemispheric rule — the pilot has said
    *  "this leg flies at X". */
   overrideAltFt?: LegAltitudeOverride;
+  /** How to pick the altitude when no override is set. Defaults to
+   *  "cheapest" for backward compatibility with callers that haven't
+   *  opted into the strategy choice. */
+  altitudeStrategy?: AltitudeStrategy;
   flightRule: FlightRule;
   /** Fuel onboard at takeoff for this leg, in gallons. The caller
    *  resets this to the aircraft's usable capacity at every refuel
@@ -156,6 +171,7 @@ export function buildInteractiveLeg(
     aircraft,
     targetAltFt,
     overrideAltFt,
+    altitudeStrategy = "cheapest",
     flightRule,
     startingFuelGal,
     reserveHr,
@@ -189,17 +205,29 @@ export function buildInteractiveLeg(
     : 0;
   const fromElev = from.elevation_ft ?? 0;
   const floorAlt = Math.max(defaultAlt, terrainFloor);
+  // "lowest" auto: the lowest hemispheric-legal level at or above the
+  // floor, capped at the aircraft's published cruise ceiling so we
+  // never invent a number for an altitude the POH doesn't cover.
+  const ceiling =
+    aircraft.cruise[aircraft.cruise.length - 1]?.altitude_ft ??
+    Number.POSITIVE_INFINITY;
+  const lowestSafeAlt = Math.min(
+    hemisphericAltitude(floorAlt, magnetic_course_deg, flightRule),
+    ceiling,
+  );
   const cruise_alt_ft =
     overrideAltFt !== null && overrideAltFt !== undefined
       ? overrideAltFt
-      : cheapestCruiseAltFt({
-          aircraft,
-          from_elev_ft: fromElev,
-          floor_ft: floorAlt,
-          magnetic_course_deg,
-          flightRule,
-          distance_nm,
-        });
+      : altitudeStrategy === "lowest"
+        ? lowestSafeAlt
+        : cheapestCruiseAltFt({
+            aircraft,
+            from_elev_ft: fromElev,
+            floor_ft: floorAlt,
+            magnetic_course_deg,
+            flightRule,
+            distance_nm,
+          });
 
   const c = cruiseAt(aircraft, cruise_alt_ft);
   const climb = climbFromTo(aircraft, fromElev, cruise_alt_ft);
@@ -272,6 +300,9 @@ export interface BuildInteractiveRouteInput {
    *  first stop). Missing or null entries fall back to the
    *  hemispheric-correct rounding of `targetAltFt`. */
   legAltitudes?: readonly LegAltitudeOverride[];
+  /** How non-overridden legs pick their cruise altitude. See
+   *  `AltitudeStrategy`. Defaults to "cheapest". */
+  altitudeStrategy?: AltitudeStrategy;
   variation?: VariationFn;
   dem?: DEMSampler;
 }
@@ -328,6 +359,7 @@ export function buildInteractiveRoute(
       aircraft,
       targetAltFt: input.targetAltFt,
       overrideAltFt: input.legAltitudes?.[i],
+      altitudeStrategy: input.altitudeStrategy,
       flightRule: input.flightRule,
       startingFuelGal: fuelOnboard,
       reserveHr: input.reserveHr,

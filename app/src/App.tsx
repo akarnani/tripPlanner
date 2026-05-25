@@ -18,6 +18,7 @@ import {
   buildInteractiveRoute,
   interactiveRangeRings,
   recommendLegAltitude,
+  type AltitudeStrategy,
   type LegAltitudeOverride,
 } from "@/engine/interactive";
 import { greatCircleNM } from "@/engine/geo";
@@ -117,6 +118,16 @@ export function App() {
   const [legAltOverrides, setLegAltOverrides] = useState<
     Record<string, number>
   >({});
+  // "lowest" treats the cruise target as the level the pilot wants to
+  // fly (only raising for legal / terrain reasons), which matches the
+  // planner's internal stop-selection assumption. "cheapest" scans the
+  // POH cruise table for the most fuel-efficient legal level — useful
+  // for long cross-country legs where climb fuel pays for itself.
+  // Default to "lowest" because surfacing a cruise altitude wildly
+  // different from what the pilot typed as a target is jarring.
+  const [autoAltStrategy, setAutoAltStrategy] = useState<AltitudeStrategy>(
+    "lowest",
+  );
   const [error, setError] = useState<string | null>(null);
   const [excludedIds, setExcludedIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -386,6 +397,7 @@ export function App() {
         sequence,
         aircraft: selectedAircraft,
         targetAltFt,
+        altitudeStrategy: autoAltStrategy,
         flightRule,
         reserveHr: reserveMin / 60,
         startingFuelGal,
@@ -401,6 +413,7 @@ export function App() {
     originAirport,
     destinationAirport,
     interactiveStopAirports,
+    autoAltStrategy,
     selectedAircraft,
     targetAltFt,
     flightRule,
@@ -760,6 +773,7 @@ export function App() {
           sequence,
           aircraft: selectedAircraft,
           targetAltFt,
+          altitudeStrategy: autoAltStrategy,
           flightRule,
           reserveHr: reserveMin / 60,
           startingFuelGal,
@@ -781,6 +795,7 @@ export function App() {
   }, [
     routes,
     legAltOverrides,
+    autoAltStrategy,
     selectedAircraft,
     targetAltFt,
     flightRule,
@@ -1484,6 +1499,8 @@ export function App() {
               targetAltFt={targetAltFt}
               onChange={setTargetAltFt}
               flightRule={flightRule}
+              altitudeStrategy={autoAltStrategy}
+              onChangeAltitudeStrategy={setAutoAltStrategy}
               route={planningMode === "auto" ? currentRoute : null}
               onChangeLegAltitude={
                 planningMode === "auto"

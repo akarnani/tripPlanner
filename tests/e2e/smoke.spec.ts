@@ -327,6 +327,30 @@ test.describe("trip planner smoke", () => {
     await expect(aircraftBtn).toHaveAttribute("aria-expanded", "false");
   });
 
+  test("switching auto strategy from lowest to most efficient can raise altitudes", async ({
+    page,
+  }) => {
+    // The CruisePanel exposes a seg control for "Lowest safe" vs
+    // "Most efficient". Default is "Lowest safe" — leg altitudes
+    // hug the cruise target. Flipping to "Most efficient" runs
+    // cheapestCruiseAltFt, which may pick a higher altitude when
+    // climb fuel pays for itself in cruise efficiency.
+    await fillRoute(page, "KSEA", "KBOI");
+    const lowestBtn = page.getByRole("radio", { name: "Lowest safe" });
+    const cheapestBtn = page.getByRole("radio", { name: "Most efficient" });
+    await expect(lowestBtn).toHaveAttribute("aria-checked", "true");
+
+    const lowestAlt = await firstLegAltitude(page);
+    await cheapestBtn.click();
+    await expect(cheapestBtn).toHaveAttribute("aria-checked", "true");
+    // We can't guarantee a strictly different altitude (for some
+    // aircraft/leg combos the lowest legal level *is* the cheapest),
+    // but at minimum the result must be at least the lowest — the
+    // strategy can only raise, never lower below floor.
+    const cheapestAlt = await firstLegAltitude(page);
+    expect(Number(cheapestAlt)).toBeGreaterThanOrEqual(Number(lowestAlt));
+  });
+
   test("per-leg altitude select overrides the auto-picked level", async ({
     page,
   }) => {
