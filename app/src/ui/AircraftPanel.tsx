@@ -97,10 +97,6 @@ export function AircraftPanel({
           top-off.
         </p>
       </div>
-      <p className="rounded-md border border-brand-100 bg-brand-50 px-2.5 py-2 text-[11px] text-brand-800">
-        Cruise altitude moved to the results pane — adjust it once you see
-        the route, since stop choice often dictates the right level.
-      </p>
     </div>
   );
 }

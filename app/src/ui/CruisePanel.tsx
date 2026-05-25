@@ -1,12 +1,8 @@
-import type { FlightRule } from "@/engine/hemispheric";
 import type { AltitudeStrategy } from "@/engine/interactive";
 import type { Leg, PlannedRoute } from "@/engine/plan";
 import { CRUISE_ALT_OPTIONS } from "./altitudeOptions";
 
 interface Props {
-  targetAltFt: number;
-  onChange: (alt: number) => void;
-  flightRule: FlightRule;
   /** How non-overridden legs pick their altitude. See AltitudeStrategy
    *  in engine/interactive.ts for semantics. */
   altitudeStrategy: AltitudeStrategy;
@@ -25,17 +21,20 @@ interface Props {
   cruiseCeilingFt?: number;
 }
 
-/** Compact cruise-altitude selector that lives at the top of the
- *  results rail. Hosting altitude here (rather than in the Aircraft
- *  step) lets the pilot pick a level after they can actually see the
- *  stops the planner picked — terrain and leg lengths often dictate a
- *  different cruise than what feels right ahead of time. When a route
- *  is in view, a per-leg override list appears underneath so the
- *  pilot can pin individual legs without affecting the global target. */
+/** Altitude control surface for the results rail.
+ *
+ *  The previous design had a single global "Cruise altitude" input
+ *  alongside the per-leg picker. That was confusing — the global
+ *  input *only* affected the planner's stop-selection cost model,
+ *  while the actually-flown altitudes came from the strategy + the
+ *  per-leg picker. Pilots can't easily reason about a number that
+ *  isn't the one they see in the leg table.
+ *
+ *  Now the strategy is the global knob — it controls how every "auto"
+ *  leg gets its altitude — and per-leg overrides handle the rest.
+ *  The planner uses a sensible internal default for cost shopping;
+ *  that detail stays out of the pilot's view. */
 export function CruisePanel({
-  targetAltFt,
-  onChange,
-  flightRule,
   altitudeStrategy,
   onChangeAltitudeStrategy,
   route,
@@ -43,99 +42,55 @@ export function CruisePanel({
   isLegAltOverridden,
   cruiseCeilingFt,
 }: Props) {
-  // VFR chips end in 500; IFR chips end in 000. Range covers the most
-  // common piston cruise band; the numeric input is the escape hatch
-  // for turbines / unusual altitudes.
-  const chips = flightRule === "VFR"
-    ? [4500, 6500, 8500, 10500, 12500]
-    : [4000, 6000, 8000, 10000, 12000];
   const showLegOverrides =
     !!route && route.legs.length > 0 && !!onChangeLegAltitude;
   return (
     <div className="border-b border-slate-200 bg-white">
       <div className="px-4 py-3">
         <div className="flex items-center justify-between gap-3">
-          <label
-            htmlFor="cruise-alt-ft"
-            className="text-[11px] font-medium uppercase tracking-wide text-slate-500"
-          >
-            Cruise altitude
-          </label>
-          <div className="flex items-center gap-1.5">
-            <input
-              id="cruise-alt-ft"
-              type="number"
-              min={0}
-              max={45000}
-              step={500}
-              value={targetAltFt}
-              onChange={(e) =>
-                onChange(Number.parseInt(e.target.value, 10) || 0)
-              }
-              aria-label="Target altitude (ft)"
-              className="input w-24 px-2 py-1 text-sm tabular-nums"
-            />
-            <span className="text-[11px] text-slate-500">ft</span>
+          <div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+              Auto altitude
+            </div>
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              {altitudeStrategy === "lowest"
+                ? "Each leg flies the lowest legal hemispheric altitude that clears terrain."
+                : "Each leg picks the most fuel-efficient legal altitude from the POH cruise table."}
+            </p>
           </div>
-        </div>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {chips.map((alt) => {
-            const active = alt === targetAltFt;
-            return (
+          <div className="seg shrink-0" role="radiogroup" aria-label="Auto altitude strategy">
+            {(
+              [
+                { id: "lowest", label: "Lowest safe" },
+                { id: "cheapest", label: "Most efficient" },
+              ] as const
+            ).map((opt) => (
               <button
-                key={alt}
+                key={opt.id}
                 type="button"
-                onClick={() => onChange(alt)}
+                role="radio"
+                aria-checked={altitudeStrategy === opt.id}
+                onClick={() => onChangeAltitudeStrategy(opt.id)}
                 className={
-                  "rounded-md border px-2 py-0.5 text-[11px] font-mono tabular-nums transition " +
-                  (active
-                    ? "border-brand-500 bg-brand-50 text-brand-700"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50")
+                  "seg-btn " +
+                  (altitudeStrategy === opt.id ? "seg-btn-active" : "")
+                }
+                title={
+                  opt.id === "lowest"
+                    ? "Lowest legal hemispheric altitude that clears terrain on each leg."
+                    : "Most fuel-efficient legal altitude from the POH cruise table — may climb high."
                 }
               >
-                {alt.toLocaleString()}
+                {opt.label}
               </button>
-            );
-          })}
+            ))}
+          </div>
         </div>
-        <p className="mt-1.5 text-[10px] text-slate-500">
-          Each leg snaps to the next legal hemispheric altitude at or above
-          this target for its course.
-        </p>
       </div>
       {showLegOverrides && (
         <div className="border-t border-slate-100 bg-slate-50/40 px-4 py-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-              Per-leg altitude
-            </div>
-            <div className="seg" role="radiogroup" aria-label="Auto altitude strategy">
-              {(
-                [
-                  { id: "lowest", label: "Lowest safe" },
-                  { id: "cheapest", label: "Most efficient" },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={altitudeStrategy === opt.id}
-                  onClick={() => onChangeAltitudeStrategy(opt.id)}
-                  className={
-                    "seg-btn " +
-                    (altitudeStrategy === opt.id ? "seg-btn-active" : "")
-                  }
-                  title={
-                    opt.id === "lowest"
-                      ? "Auto picks the lowest hemispheric-legal altitude at or above the cruise target (and any terrain floor)."
-                      : "Auto picks the most fuel-efficient legal altitude from the POH cruise table — may go well above target."
-                  }
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+          <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+            Per-leg altitude
           </div>
           <ul className="mt-2 space-y-1.5">
             {route!.legs.map((leg, i) => (
@@ -207,7 +162,7 @@ function LegAltRow({
         aria-label={`Cruise altitude for ${fromIdent} → ${toIdent}`}
         title={
           overridden
-            ? "Custom altitude; pick 'auto' to revert to the planner-picked level"
+            ? "Custom altitude; pick 'auto' to revert to the auto-picked level"
             : "Auto — pick a specific altitude to pin this leg"
         }
         className={

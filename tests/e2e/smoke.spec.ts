@@ -218,46 +218,25 @@ test.describe("trip planner smoke", () => {
       .toBeGreaterThan(0);
   });
 
-  test("min-safe replan bumps the target altitude when terrain dictates", async ({
+  test("terrain warning offers a per-leg 'Pin' button that fixes it", async ({
     page,
   }) => {
+    // When a leg's auto altitude doesn't clear terrain (typically when
+    // an obstacle is the limiting factor — the auto strategy already
+    // accounts for raw terrain itself), the TerrainPanel renders a
+    // "Pin this leg at X ft" button per warning. Clicking one pins
+    // that leg at min-safe via the override map; the warning for
+    // that leg clears, dropping the visible pin-button count.
     await fillRoute(page, "KSEA", "KBOI");
-
-    // Target altitude now lives in the right-rail CruisePanel rather
-    // than the Aircraft step — it's already visible alongside the route.
-    const targetInput = page.getByLabel("Target altitude (ft)");
-    const before = Number((await targetInput.inputValue()) ?? "0");
-
-    const replan = page.getByRole("button", {
-      name: /Replan with .* ft target/,
+    const pinButtons = page.getByRole("button", {
+      name: /Pin this leg at \d/,
     });
-    if (await replan.isVisible()) {
-      await replan.click();
-      await expect(targetInput).not.toHaveValue(String(before));
-      const after = Number(await targetInput.inputValue());
-      expect(after).toBeGreaterThan(before);
-    }
-  });
-
-  test("cruise-altitude quick-pick chip changes the planned route", async ({
-    page,
-  }) => {
-    // The CruisePanel exposes quick-pick chips for common VFR
-    // altitudes. Clicking one updates the target-altitude input and
-    // re-anchors the cheapest-cruise floor used by the per-leg picker.
-    // We assert on the target-altitude state (the chip's direct
-    // effect) rather than the resulting first-leg altitude — the
-    // smart "auto" pick can land on the same altitude across targets
-    // when that's the most fuel-efficient legal level for the leg.
-    await fillRoute(page, "KSEA", "KBOI");
-    const targetInput = page.getByLabel("Target altitude (ft)");
-    const before = await targetInput.inputValue();
-
-    await page
-      .getByRole("button", { name: "10,500", exact: true })
-      .click();
-    await expect(targetInput).toHaveValue("10500");
-    expect(await targetInput.inputValue()).not.toBe(before);
+    const before = await pinButtons.count();
+    if (before === 0) test.skip();
+    await pinButtons.first().click();
+    await expect
+      .poll(() => pinButtons.count(), { timeout: 30_000 })
+      .toBeLessThan(before);
   });
 
   test("GPX export downloads a non-empty file", async ({ page }) => {

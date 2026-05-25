@@ -938,27 +938,20 @@ export function App() {
     return out;
   }, [currentRoute, runwaySettings, selectedAircraft, startingFuelGal]);
 
-  function handleReplanAtMinSafe() {
-    if (!terrain) return;
-    const newTarget = terrain.replanTargetFt;
-    // Strip per-leg overrides that sit below the new safety floor.
-    // Overrides apply verbatim (no terrain floor for explicit pins),
-    // so a 4,500 ft pin on a leg that needs 8,500 ft would keep
-    // flying through terrain after the replan. The pilot explicitly
-    // asked for a min-safe replan; that intent supersedes earlier
-    // pins. Overrides above the floor are still flyable and stay.
+  /** Bulk variant of handleChangeAutoLegAltitude — sets one override
+   *  per supplied (leg, altFt) pair in a single state commit so
+   *  TerrainPanel's "Pin all" doesn't trigger a render storm. */
+  function handlePinLegs(
+    targets: readonly { leg: { fromAirport: { id: string }; toAirport: { id: string } }; altFt: number }[],
+  ) {
+    if (targets.length === 0) return;
     setLegAltOverrides((prev) => {
-      let changed = false;
-      const next: Record<string, number> = {};
-      for (const [key, alt] of Object.entries(prev)) {
-        if (alt >= newTarget) next[key] = alt;
-        else changed = true;
+      const next = { ...prev };
+      for (const t of targets) {
+        next[legAltKey(t.leg.fromAirport.id, t.leg.toAirport.id)] = t.altFt;
       }
-      return changed ? next : prev;
+      return next;
     });
-    // The auto-replan effect picks up the new target on the next
-    // render; no explicit plan call needed.
-    setTargetAltFt(newTarget);
   }
 
   function handleExcludeStops(airportIds: string[]) {
@@ -1496,9 +1489,6 @@ export function App() {
         {(routes.length > 0 || (planningMode === "interactive" && currentRoute)) && (
           <aside className="flex w-[360px] shrink-0 flex-col border-l border-slate-200 bg-slate-50">
             <CruisePanel
-              targetAltFt={targetAltFt}
-              onChange={setTargetAltFt}
-              flightRule={flightRule}
               altitudeStrategy={autoAltStrategy}
               onChangeAltitudeStrategy={setAutoAltStrategy}
               route={planningMode === "auto" ? currentRoute : null}
@@ -1536,8 +1526,13 @@ export function App() {
             </div>
             <TerrainPanel
               analysis={terrain}
-              targetAltFt={targetAltFt}
-              onReplanAtMinSafe={handleReplanAtMinSafe}
+              route={currentRoute}
+              onPinLeg={
+                planningMode === "auto"
+                  ? handleChangeAutoLegAltitude
+                  : undefined
+              }
+              onPinLegs={planningMode === "auto" ? handlePinLegs : undefined}
               terminalWarnings={terminalWarnings}
             />
             <RunwayWarnings warnings={runwayWarnings} />
