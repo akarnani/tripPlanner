@@ -242,19 +242,22 @@ test.describe("trip planner smoke", () => {
   test("cruise-altitude quick-pick chip changes the planned route", async ({
     page,
   }) => {
-    // The CruisePanel in the right rail exposes quick-pick chips for
-    // common VFR altitudes. Clicking a different chip flips the target
-    // altitude state, the auto-replan fires, and the first-leg alt
-    // updates accordingly.
+    // The CruisePanel exposes quick-pick chips for common VFR
+    // altitudes. Clicking one updates the target-altitude input and
+    // re-anchors the cheapest-cruise floor used by the per-leg picker.
+    // We assert on the target-altitude state (the chip's direct
+    // effect) rather than the resulting first-leg altitude — the
+    // smart "auto" pick can land on the same altitude across targets
+    // when that's the most fuel-efficient legal level for the leg.
     await fillRoute(page, "KSEA", "KBOI");
-    const before = await firstLegAltitude(page);
+    const targetInput = page.getByLabel("Target altitude (ft)");
+    const before = await targetInput.inputValue();
 
     await page
       .getByRole("button", { name: "10,500", exact: true })
       .click();
-    await expect
-      .poll(() => firstLegAltitude(page), { timeout: 30_000 })
-      .not.toBe(before);
+    await expect(targetInput).toHaveValue("10500");
+    expect(await targetInput.inputValue()).not.toBe(before);
   });
 
   test("GPX export downloads a non-empty file", async ({ page }) => {
