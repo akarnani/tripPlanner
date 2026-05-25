@@ -925,9 +925,25 @@ export function App() {
 
   function handleReplanAtMinSafe() {
     if (!terrain) return;
-    // The auto-replan effect picks up the new altitude on the next
+    const newTarget = terrain.replanTargetFt;
+    // Strip per-leg overrides that sit below the new safety floor.
+    // Overrides apply verbatim (no terrain floor for explicit pins),
+    // so a 4,500 ft pin on a leg that needs 8,500 ft would keep
+    // flying through terrain after the replan. The pilot explicitly
+    // asked for a min-safe replan; that intent supersedes earlier
+    // pins. Overrides above the floor are still flyable and stay.
+    setLegAltOverrides((prev) => {
+      let changed = false;
+      const next: Record<string, number> = {};
+      for (const [key, alt] of Object.entries(prev)) {
+        if (alt >= newTarget) next[key] = alt;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+    // The auto-replan effect picks up the new target on the next
     // render; no explicit plan call needed.
-    setTargetAltFt(terrain.replanTargetFt);
+    setTargetAltFt(newTarget);
   }
 
   function handleExcludeStops(airportIds: string[]) {
