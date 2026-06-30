@@ -20,6 +20,9 @@ on:
 
 permissions:
   contents: write
+  # Lets the notify job open / refresh a tracking issue when a
+  # scheduled refresh fails, so failures surface beyond the Actions tab.
+  issues: write
 
 concurrency:
   group: data-refresh
@@ -74,12 +77,25 @@ jobs:
         id: run_nasr
         continue-on-error: true
         working-directory: pipelines/swift
-        run: swift run -c release pipeline-nasr ./nasr-distribution.zip ../../data
+        run: |
+          set -euo pipefail
+          swift run -c release pipeline-nasr ./nasr-distribution.zip ../../data
+          # Guard against a "succeeded but wrote garbage" outcome — a
+          # 0-exit run that emits an empty or implausibly short file
+          # would otherwise commit nothing and look healthy forever.
+          # CONUS has ~5k public-use airports; anything under 3,000 means
+          # the FAA layout changed or the parse silently dropped records.
+          python3 "$GITHUB_WORKSPACE/.github/scripts/check_counts.py" \
+            "$GITHUB_WORKSPACE/data/airports.json:3000" \
+            "$GITHUB_WORKSPACE/data/runways.json:3000"
       - name: Commit refreshed NASR data
+        id: commit_nasr
         if: steps.run_nasr.outcome == 'success'
         run: |
           if [[ -z "$(git status --porcelain data/airports.json data/runways.json)" ]]; then
-            echo "No NASR changes."; exit 0
+            echo "No NASR changes."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -87,6 +103,7 @@ jobs:
           git commit -m "Refresh NASR airports + runways"
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin HEAD:"$GITHUB_REF_NAME"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
 
       # ---- CIFP ----
       - name: Download CIFP
@@ -132,12 +149,21 @@ jobs:
         if: steps.download_cifp.outcome == 'success'
         continue-on-error: true
         working-directory: pipelines/swift
-        run: swift run -c release pipeline-cifp ./FAACIFP18 ../../data
+        run: |
+          set -euo pipefail
+          swift run -c release pipeline-cifp ./FAACIFP18 ../../data
+          # ~5k airports carry at least one instrument approach; a parse
+          # that drops to near-zero means the CIFP format shifted.
+          python3 "$GITHUB_WORKSPACE/.github/scripts/check_counts.py" \
+            "$GITHUB_WORKSPACE/data/approaches.json:1000"
       - name: Commit refreshed CIFP data
+        id: commit_cifp
         if: steps.run_cifp.outcome == 'success'
         run: |
           if [[ -z "$(git status --porcelain data/approaches.json)" ]]; then
-            echo "No CIFP changes."; exit 0
+            echo "No CIFP changes."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -145,6 +171,7 @@ jobs:
           git commit -m "Refresh CIFP approaches"
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin HEAD:"$GITHUB_REF_NAME"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
 
       # ---- DOF ----
       - name: Download DOF
@@ -195,7 +222,14 @@ jobs:
         if: steps.download_dof.outcome == 'success'
         continue-on-error: true
         working-directory: pipelines/swift
-        run: swift run -c release pipeline-dof ./DOF.DAT ../../data
+        run: |
+          set -euo pipefail
+          swift run -c release pipeline-dof ./DOF.DAT ../../data
+          # CONUS DOF carries ~200k obstacles ≥200 ft AGL; well under
+          # 50k means the .DAT layout changed or most records were
+          # dropped. Validated before the gzip step replaces the file.
+          python3 "$GITHUB_WORKSPACE/.github/scripts/check_counts.py" \
+            "$GITHUB_WORKSPACE/data/obstacles.json:50000"
       - name: Gzip obstacles.json
         # The runtime loader fetches data/obstacles.json.gz and
         # decompresses in-browser; the committed file is the .gz so
@@ -207,10 +241,13 @@ jobs:
             gzip -9 -f data/obstacles.json
           fi
       - name: Commit refreshed DOF data
+        id: commit_dof
         if: steps.run_dof.outcome == 'success'
         run: |
           if [[ -z "$(git status --porcelain data/obstacles.json.gz)" ]]; then
-            echo "No DOF changes."; exit 0
+            echo "No DOF changes."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -218,27 +255,59 @@ jobs:
           git commit -m "Refresh DOF obstacles"
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin HEAD:"$GITHUB_REF_NAME"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
 
-      # Surface per-pipeline outcomes in the job summary, and fail
-      # the job if any individual pipeline failed (so the run shows
-      # red, even though continue-on-error muted each step on its own).
+      # Surface per-pipeline outcomes as a Markdown table on the run
+      # page (the Step Summary renders prominently, so you no longer
+      # have to grep logs to see what each pipeline did), and fail the
+      # job if any individual pipeline failed — so the run shows red,
+      # even though continue-on-error muted each step on its own.
       - name: Report per-pipeline status
         if: always()
+        env:
+          NASR_RUN: ${{ steps.run_nasr.outcome }}
+          NASR_COMMIT: ${{ steps.commit_nasr.outputs.committed }}
+          CIFP_DL: ${{ steps.download_cifp.outcome }}
+          CIFP_RUN: ${{ steps.run_cifp.outcome }}
+          CIFP_COMMIT: ${{ steps.commit_cifp.outputs.committed }}
+          DOF_DL: ${{ steps.download_dof.outcome }}
+          DOF_RUN: ${{ steps.run_dof.outcome }}
+          DOF_COMMIT: ${{ steps.commit_dof.outputs.committed }}
         run: |
-          echo "NASR run:      ${{ steps.run_nasr.outcome }}"
-          echo "CIFP download: ${{ steps.download_cifp.outcome }}"
-          echo "CIFP run:      ${{ steps.run_cifp.outcome }}"
-          echo "DOF download:  ${{ steps.download_dof.outcome }}"
-          echo "DOF run:       ${{ steps.run_dof.outcome }}"
+          # Render one row per pipeline: ✅/❌ for the run, and whether
+          # it pushed a commit ("updated") or found no upstream change.
+          fmt() { # outcome -> emoji
+            case "$1" in
+              success) echo "✅ ok" ;;
+              failure) echo "❌ failed" ;;
+              skipped|"") echo "⚪ skipped" ;;
+              *) echo "$1" ;;
+            esac
+          }
+          committed() { # committed-output -> human label
+            case "$1" in
+              true) echo "📦 committed new data" ;;
+              false) echo "— no change" ;;
+              *) echo "—" ;;
+            esac
+          }
+          {
+            echo "## Data refresh"
+            echo ""
+            echo "| Pipeline | Download | Build | Result |"
+            echo "| --- | --- | --- | --- |"
+            echo "| NASR (airports/runways) | n/a | $(fmt "$NASR_RUN") | $(committed "$NASR_COMMIT") |"
+            echo "| CIFP (approaches) | $(fmt "$CIFP_DL") | $(fmt "$CIFP_RUN") | $(committed "$CIFP_COMMIT") |"
+            echo "| DOF (obstacles) | $(fmt "$DOF_DL") | $(fmt "$DOF_RUN") | $(committed "$DOF_COMMIT") |"
+          } >> "$GITHUB_STEP_SUMMARY"
           fail=0
-          for o in \
-            "${{ steps.run_nasr.outcome }}" \
-            "${{ steps.download_cifp.outcome }}" \
-            "${{ steps.run_cifp.outcome }}" \
-            "${{ steps.download_dof.outcome }}" \
-            "${{ steps.run_dof.outcome }}"; do
+          for o in "$NASR_RUN" "$CIFP_DL" "$CIFP_RUN" "$DOF_DL" "$DOF_RUN"; do
             [[ "$o" == "failure" ]] && fail=1
           done
+          if [[ $fail -ne 0 ]]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> ⚠️ One or more pipelines failed — see the table above." >> "$GITHUB_STEP_SUMMARY"
+          fi
           exit $fail
 
   dem:
@@ -267,6 +336,67 @@ jobs:
           git commit -m "Refresh CONUS terrain DEM grid"
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin HEAD:"$GITHUB_REF_NAME"
+
+  notify:
+    # Escalate a failed refresh beyond the Actions tab: open a tracking
+    # issue (or comment on the existing open one) so the failure pings
+    # watchers and stays visible until someone fixes it. Reuses a single
+    # issue rather than spamming a new one each week.
+    needs: [pipelines, magnetic]
+    if: always() && (needs.pipelines.result == 'failure' || needs.magnetic.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const MARKER = "[data-refresh failure]";
+            const failed = [];
+            if (${{ needs.pipelines.result == 'failure' }}) failed.push("NASR / CIFP / DOF pipelines");
+            if (${{ needs.magnetic.result == 'failure' }}) failed.push("magnetic-variation grid");
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const when = new Date().toISOString().slice(0, 10);
+            const body = [
+              `A scheduled data refresh failed on **${when}**.`,
+              ``,
+              `**Failed:** ${failed.join(", ")}`,
+              ``,
+              `See the [run summary](${runUrl}) for the per-pipeline table,`,
+              `then drill into the failing step's logs. Common causes: the FAA`,
+              `rotated a download URL (pass an override via workflow_dispatch),`,
+              `or a source-format change tripped the record-count sanity check.`,
+              ``,
+              `_Posted automatically by the data-refresh workflow._`,
+            ].join("\n");
+
+            // Find an existing open issue we previously opened, by marker
+            // in the title, so failures coalesce into one thread.
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              creator: "github-actions[bot]",
+              per_page: 100,
+            });
+            const hit = existing.data.find(
+              (i) => !i.pull_request && i.title.includes(MARKER),
+            );
+
+            if (hit) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: hit.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `${MARKER} scheduled dataset refresh failing`,
+                body,
+              });
+            }
 
   magnetic:
     # WMM drifts slowly; rebuild monthly so the committed grid never
