@@ -73,7 +73,7 @@ export function ExcludedAirports({
 
   return (
     <div>
-      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">
         Excluded stops
       </p>
       <div className="flex gap-1">
@@ -91,17 +91,17 @@ export function ExcludedAirports({
             }
           }}
           placeholder="KICAO or KSEA KGEG KBOI"
-          className="w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs uppercase"
+          className="w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-xs uppercase text-ink"
         />
         <button
           type="button"
           onClick={submit}
-          className="shrink-0 rounded border border-slate-300 bg-white px-2 py-1 text-xs hover:bg-slate-100"
+          className="shrink-0 rounded border border-hairline-input bg-card px-2 py-1 text-xs text-ink hover:bg-surface"
         >
           Add
         </button>
       </div>
-      {error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}
+      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
       {excludedIds.size > 0 && (
         <ul className="mt-2 flex flex-wrap gap-1">
           {[...excludedIds].sort().map((id) => (
@@ -110,7 +110,7 @@ export function ExcludedAirports({
                 type="button"
                 title={`Allow ${labelFor(id)} as a stop again`}
                 onClick={() => onInclude(id)}
-                className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 font-mono text-[11px] text-red-700 hover:bg-red-100"
+                className="inline-flex h-6 items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] px-2 py-0.5 font-mono text-xs text-danger hover:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]"
               >
                 {labelFor(id)} <span aria-hidden="true">×</span>
               </button>

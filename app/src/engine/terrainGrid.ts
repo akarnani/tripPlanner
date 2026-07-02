@@ -41,7 +41,17 @@ export class TerrainGridDEMSampler implements DEMSampler {
 
   async load(): Promise<void> {
     if (this.grid) return;
-    if (!this.loading) this.loading = this.fetchAndDecode();
+    if (!this.loading) {
+      // Don't cache a rejected attempt: clearing `loading` on failure
+      // lets a later load() retry the fetch. Otherwise one transient
+      // network hiccup pins this instance terrain-blind for life —
+      // and a planner that awaits load() per request keeps silently
+      // getting the same stale rejection.
+      this.loading = this.fetchAndDecode().catch((e) => {
+        this.loading = null;
+        throw e;
+      });
+    }
     return this.loading;
   }
 

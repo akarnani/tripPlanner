@@ -35,7 +35,15 @@ export class MagneticVariationGrid {
 
   async load(): Promise<void> {
     if (this.grid) return;
-    if (!this.loading) this.loading = this.fetchAndDecode();
+    if (!this.loading) {
+      // Same retry-on-failure contract as TerrainGridDEMSampler.load:
+      // a rejected attempt is not cached, so callers that re-await
+      // load() per request recover from transient fetch failures.
+      this.loading = this.fetchAndDecode().catch((e) => {
+        this.loading = null;
+        throw e;
+      });
+    }
     return this.loading;
   }
 

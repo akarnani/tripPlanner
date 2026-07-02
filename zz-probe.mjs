@@ -1,0 +1,16 @@
+import { chromium } from "@playwright/test";
+const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
+const page = await browser.newPage();
+const warns = [];
+page.on("console", (m) => { if (m.type() === "warning" || m.type() === "error") warns.push(m.text()); });
+await page.goto("http://localhost:4173/");
+await page.getByTestId("plan-trip").waitFor({ state: "visible", timeout: 30000 });
+await page.waitForFunction(() => document.querySelector('[data-testid="plan-trip"]')?.getAttribute("data-state") === "idle", null, { timeout: 60000 });
+await page.getByTestId("plan-trip").click();
+await page.waitForFunction(() => document.querySelector('[data-testid="plan-trip"]')?.getAttribute("data-state") === "idle", null, { timeout: 90000 });
+const routeShown = await page.getByText(/Route issues|No route issues/).count();
+const blind = await page.getByText(/Terrain data wasn't available/).count();
+console.log("ROUTE PANEL PRESENT:", routeShown > 0);
+console.log("TERRAIN-BLIND ISSUE SHOWN:", blind > 0);
+console.log("CONSOLE WARNINGS:", JSON.stringify(warns.filter(w => /terrain|magnetic|worker|DEM/i.test(w))));
+await browser.close();

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
@@ -59,5 +59,27 @@ describe("TerrainGridDEMSampler with the committed CONUS grid", () => {
     const s = await loadSampler();
     expect(s.elevationFt({ lat: 60, lon: -150 })).toBeNull(); // Alaska
     expect(s.elevationFt({ lat: 20, lon: -90 })).toBeNull(); // Mexico
+  });
+});
+
+describe("TerrainGridDEMSampler.load retry behavior", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test("a failed load is not cached — the next load() refetches", async () => {
+    // One transient network failure must not pin the sampler
+    // terrain-blind for its whole lifetime: the plan worker awaits
+    // load() per request and relies on the retry to self-heal.
+    const fetchMock = vi.fn().mockRejectedValue(new Error("net down"));
+    vi.stubGlobal("fetch", fetchMock);
+    const s = new TerrainGridDEMSampler("https://example.test/grid.bin.gz");
+
+    await expect(s.load()).rejects.toThrow("net down");
+    expect(s.ready()).toBe(false);
+    await expect(s.load()).rejects.toThrow("net down");
+    // The second load() attempted a fresh fetch instead of returning
+    // the first attempt's cached rejection.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

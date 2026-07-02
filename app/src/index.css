@@ -1,5 +1,12 @@
 @import "maplibre-gl/dist/maplibre-gl.css";
 
+@import "@fontsource/instrument-sans/400.css";
+@import "@fontsource/instrument-sans/500.css";
+@import "@fontsource/instrument-sans/600.css";
+@import "@fontsource/instrument-sans/700.css";
+@import "@fontsource/b612-mono/400.css";
+@import "@fontsource/b612-mono/700.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -9,4 +16,54 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+
+:root {
+  color-scheme: light;
+
+  --surface: #f7f3e8;
+  --card: #fffdf6;
+  --border: #ddd5bd;
+  --border-input: #d6cdb2;
+  --ink: #2b2a26;
+  --muted: #8a8371;
+  --accent: #b83280;
+  --data: #2b6cb0;
+  --ok: #4a7a2a;
+  --caution: #a05e12;
+  --danger: #b02a2a;
+  --olive: #7a8a3a;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --surface: #12161b;
+  --card: #1a2027;
+  --border: #2a323c;
+  --border-input: #39434f;
+  --ink: #e8edf2;
+  --muted: #67737f;
+  --accent: #d357c9;
+  --data: #53d3e0;
+  --ok: #35d07f;
+  --caution: #ffb02e;
+  --danger: #ff6b5e;
+  --olive: #6b8a5e;
+}
+
+body {
+  font-family:
+    "Instrument Sans",
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    sans-serif;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }

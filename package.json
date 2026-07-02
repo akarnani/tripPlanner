@@ -13,6 +13,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@fontsource/b612-mono": "^5.2.7",
+    "@fontsource/instrument-sans": "^5.2.8",
     "@types/js-yaml": "^4.0.9",
     "js-yaml": "^4.1.1",
     "jspdf": "^4.2.1",

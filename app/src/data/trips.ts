@@ -44,6 +44,16 @@ export interface SavedTrip {
    *  field shipped; the app falls back to DEFAULT_RUNWAY_SETTINGS
    *  (check disabled, +15 °C ISA, 1,000 ft buffer, estimated weight). */
   runwaySettings?: RunwaySettings;
+  /** Snapshot of the planned route's headline numbers at save time,
+   *  for display in the saved-trips list without recomputing a plan.
+   *  Missing on trips saved before this field shipped, and on trips
+   *  saved with no route planned yet. */
+  routeSummary?: {
+    stopIdents: string[];
+    distance_nm: number;
+    time_hr: number;
+    fuel_gal: number;
+  };
   /** ISO timestamp of last save. Used for sort + display. */
   savedAt: string;
 }

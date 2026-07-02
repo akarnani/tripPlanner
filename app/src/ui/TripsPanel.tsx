@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SavedTrip } from "@/data/trips";
 
 interface Props {
@@ -11,6 +11,8 @@ interface Props {
   onDelete: (name: string) => void;
 }
 
+const SAVED_FLASH_MS = 1500;
+
 export function TripsPanel({
   trips,
   defaultName,
@@ -20,13 +22,31 @@ export function TripsPanel({
 }: Props) {
   const [name, setName] = useState("");
   const [showAll, setShowAll] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+  const flashTimer = useRef<number>();
   const visible = showAll ? trips : trips.slice(0, 5);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimer.current !== undefined) window.clearTimeout(flashTimer.current);
+    };
+  }, []);
 
   function submit() {
     const trimmed = (name || defaultName).trim();
     if (!trimmed) return;
+    const overwriting = trips.some((t) => t.name === trimmed);
+    if (
+      overwriting &&
+      !window.confirm(`A saved trip named "${trimmed}" already exists. Overwrite it?`)
+    ) {
+      return;
+    }
     onSave(trimmed);
     setName("");
+    setJustSaved(true);
+    if (flashTimer.current !== undefined) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setJustSaved(false), SAVED_FLASH_MS);
   }
 
   return (
@@ -40,43 +60,54 @@ export function TripsPanel({
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
           }}
-          className="flex-1 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+          className="flex-1 rounded border border-hairline-input bg-card px-2 py-1 text-xs text-ink"
         />
         <button
           type="button"
           onClick={submit}
-          className="rounded bg-slate-900 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-800"
+          className="rounded bg-accent px-3 py-1 text-xs font-semibold text-white hover:opacity-90"
         >
-          Save
+          {justSaved ? "Saved ✓" : "Save"}
         </button>
       </div>
       {trips.length === 0 ? (
-        <p className="text-[11px] text-slate-500">
+        <p className="text-xs text-muted">
           No saved trips yet. Save the current trip to revisit later.
         </p>
       ) : (
-        <ul className="divide-y divide-slate-200 rounded border border-slate-200 bg-white">
+        <ul className="divide-y divide-hairline rounded border border-hairline bg-card">
           {visible.map((t) => (
             <li
               key={t.name}
-              className="flex items-center gap-2 px-2 py-1 text-xs"
+              className="flex items-center gap-2 px-2 py-1.5 text-xs"
             >
               <button
                 type="button"
                 onClick={() => onLoad(t)}
-                className="flex-1 truncate text-left text-slate-800 hover:underline"
+                className="flex-1 truncate text-left text-ink hover:underline"
                 title={`${t.origin} → ${t.destination}, saved ${formatDate(t.savedAt)}`}
               >
-                <span className="font-medium">{t.name}</span>{" "}
-                <span className="text-slate-500">
-                  · {t.origin} → {t.destination}
-                </span>
+                <div>
+                  <span className="font-medium">{t.name}</span>{" "}
+                  <span className="text-muted">
+                    · {t.origin} → {t.destination}
+                  </span>
+                </div>
+                {t.routeSummary && (
+                  <div className="text-muted">
+                    {t.routeSummary.stopIdents.length} stop
+                    {t.routeSummary.stopIdents.length === 1 ? "" : "s"} ·{" "}
+                    {Math.round(t.routeSummary.distance_nm)} nm ·{" "}
+                    {t.routeSummary.time_hr.toFixed(1)} hr
+                  </div>
+                )}
               </button>
               <button
                 type="button"
                 title={`Delete ${t.name}`}
+                aria-label={`Delete ${t.name}`}
                 onClick={() => onDelete(t.name)}
-                className="rounded px-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-muted hover:bg-[color-mix(in_srgb,var(--danger)_12%,transparent)] hover:text-danger"
               >
                 ×
               </button>
@@ -88,7 +119,7 @@ export function TripsPanel({
         <button
           type="button"
           onClick={() => setShowAll((v) => !v)}
-          className="text-[11px] text-slate-500 hover:underline"
+          className="text-xs text-muted hover:underline"
         >
           {showAll ? "Show fewer" : `Show all ${trips.length}`}
         </button>
