@@ -11,11 +11,10 @@ interface Props {
   onCapLegTimeChange: (b: boolean) => void;
   maxLegHr: number;
   onMaxLegHrChange: (h: number) => void;
-  onPlan: () => void;
-  /** When true, the Plan button shows a spinner and is disabled. */
-  isPlanning: boolean;
-  /** When true, the Plan button is disabled with a "loading…" label. */
-  dataReady: boolean;
+  /** Surfaced planner errors ("no route found — try relaxing
+   *  constraints", etc). Shown below the inputs because every change
+   *  triggers a fresh auto-replan and the user needs to see the result
+   *  in context. */
   error: string | null;
 }
 
@@ -30,25 +29,13 @@ export function TripPanel({
   onCapLegTimeChange,
   maxLegHr,
   onMaxLegHrChange,
-  onPlan,
-  isPlanning,
-  dataReady,
   error,
 }: Props) {
-  const buttonLabel = !dataReady
-    ? "Loading airport database…"
-    : isPlanning
-      ? "Planning…"
-      : "Plan trip";
-  const buttonDisabled = !dataReady || isPlanning;
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label
-            htmlFor="origin"
-            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
-          >
+          <label htmlFor="origin" className="field-label">
             From
           </label>
           <input
@@ -57,14 +44,11 @@ export function TripPanel({
             value={origin}
             onChange={(e) => onOriginChange(e.target.value.toUpperCase())}
             placeholder="KSEA"
-            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-sm uppercase"
+            className="input input-mono mt-1"
           />
         </div>
         <div>
-          <label
-            htmlFor="destination"
-            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
-          >
+          <label htmlFor="destination" className="field-label">
             To
           </label>
           <input
@@ -73,38 +57,33 @@ export function TripPanel({
             value={destination}
             onChange={(e) => onDestinationChange(e.target.value.toUpperCase())}
             placeholder="KBOI"
-            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-sm uppercase"
+            className="input input-mono mt-1"
           />
         </div>
       </div>
       <div>
-        <span className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-          Flight rule
-        </span>
-        <div className="mt-1 inline-flex overflow-hidden rounded border border-slate-300">
+        <span className="field-label">Flight rule</span>
+        <div className="seg mt-1">
           {(["VFR", "IFR"] as FlightRule[]).map((r) => (
             <button
               key={r}
               type="button"
               onClick={() => onFlightRuleChange(r)}
               className={
-                "px-3 py-1 text-xs font-semibold " +
-                (flightRule === r
-                  ? "bg-slate-900 text-white"
-                  : "bg-white text-slate-700 hover:bg-slate-100")
+                "seg-btn " + (flightRule === r ? "seg-btn-active" : "")
               }
             >
               {r}
             </button>
           ))}
         </div>
-        <p className="mt-1 text-[11px] text-slate-500">
+        <p className="mt-1.5 text-[11px] text-slate-500">
           {flightRule === "VFR"
             ? "Cruise altitudes round to odd-/even-thousands + 500."
             : "Cruise altitudes round to odd/even thousands."}
         </p>
       </div>
-      <div>
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
         <label className="flex items-center gap-2 text-xs text-slate-700">
           <input
             type="checkbox"
@@ -112,7 +91,7 @@ export function TripPanel({
             onChange={(e) => onCapLegTimeChange(e.target.checked)}
             className="h-3.5 w-3.5"
           />
-          Cap each leg at
+          <span>Cap each leg at</span>
           <input
             id="max-leg-hr"
             type="number"
@@ -124,35 +103,20 @@ export function TripPanel({
             onChange={(e) =>
               onMaxLegHrChange(Number.parseFloat(e.target.value) || 2)
             }
-            className="w-14 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-sm disabled:bg-slate-100 disabled:text-slate-400"
+            className="input w-16 px-1.5 py-0.5 text-sm"
           />
-          hours
+          <span>hours</span>
         </label>
       </div>
-      <button
-        type="button"
-        data-testid="plan-trip"
-        data-state={
-          !dataReady ? "loading" : isPlanning ? "planning" : "idle"
-        }
-        onClick={onPlan}
-        disabled={buttonDisabled}
-        className="flex w-full items-center justify-center gap-2 rounded bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-400"
-      >
-        {(isPlanning || !dataReady) && (
-          <span
-            aria-hidden="true"
-            data-testid="plan-trip-spinner"
-            className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent"
-          />
-        )}
-        {buttonLabel}
-      </button>
       <p className="text-[11px] text-slate-500">
-        Each plan returns one route per objective (fewest stops, shortest
-        time). Duplicates are dropped.
+        The planner runs whenever a setting changes. Routes appear in the
+        results pane on the right.
       </p>
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && (
+        <p className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

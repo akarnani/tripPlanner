@@ -34,14 +34,15 @@ export function FilterPanel({
   aircraftFuelType,
   runwayCheckActive,
 }: Props) {
+  const pct =
+    totalCount > 0
+      ? Math.round((matchCount / totalCount) * 100)
+      : 0;
   return (
     <div className="space-y-4">
       {!runwayCheckActive && (
         <div>
-          <label
-            htmlFor="min-runway-ft"
-            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
-          >
+          <label htmlFor="min-runway-ft" className="field-label">
             Minimum runway length (ft)
           </label>
           <input
@@ -56,21 +57,18 @@ export function FilterPanel({
                 minRunwayFt: Number.parseInt(e.target.value, 10) || 0,
               })
             }
-            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            className="input mt-1"
           />
         </div>
       )}
       {runwayCheckActive && (
-        <p className="text-[11px] text-slate-500">
+        <p className="rounded-md border border-brand-100 bg-brand-50 px-2.5 py-1.5 text-[11px] text-brand-800">
           Manual minimum-runway filter is replaced by the POH-driven
-          runway check (above).
+          runway check.
         </p>
       )}
       <div>
-        <label
-          htmlFor="tower-req"
-          className="block text-xs font-medium uppercase tracking-wide text-slate-500"
-        >
+        <label htmlFor="tower-req" className="field-label">
           Control tower
         </label>
         <select
@@ -79,7 +77,7 @@ export function FilterPanel({
           onChange={(e) =>
             onChange({ ...filters, tower: e.target.value as TowerMode })
           }
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+          className="select mt-1"
         >
           <option value="any">Any</option>
           <option value="required">Towered only</option>
@@ -87,10 +85,7 @@ export function FilterPanel({
         </select>
       </div>
       <div>
-        <label
-          htmlFor="approach-req"
-          className="block text-xs font-medium uppercase tracking-wide text-slate-500"
-        >
+        <label htmlFor="approach-req" className="field-label">
           Approach
         </label>
         <select
@@ -103,7 +98,7 @@ export function FilterPanel({
               approach: e.target.value as ApproachRequirement,
             })
           }
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm disabled:bg-slate-100"
+          className="select mt-1"
         >
           <option value="off">No approach required</option>
           <option value="any">Any IAP (LOC / VOR / LDA / BC / NDB / …)</option>
@@ -111,32 +106,51 @@ export function FilterPanel({
           <option value="rnav">RNAV / GPS</option>
         </select>
         {!hasApproachData && (
-          <p className="mt-1 text-[11px] text-slate-500">
+          <p className="mt-1.5 text-[11px] text-slate-500">
             CIFP data not loaded yet — filter disabled.
           </p>
         )}
       </div>
-      <div>
-        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-800">
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+        <label className="flex cursor-pointer items-start gap-2 text-sm text-slate-800">
           <input
             type="checkbox"
             checked={filters.requireFuel}
             onChange={(e) =>
               onChange({ ...filters, requireFuel: e.target.checked })
             }
-            className="h-4 w-4 rounded border-slate-300"
+            className="mt-0.5 h-4 w-4 rounded border-slate-300"
           />
-          Airport must sell {aircraftFuelType}
+          <span>
+            Airport must sell {aircraftFuelType}
+            <span className="mt-0.5 block text-[11px] font-normal text-slate-500">
+              Origin and destination are exempt — only intermediate fuel
+              stops are constrained.
+            </span>
+          </span>
         </label>
-        <p className="mt-1 text-[11px] text-slate-500">
-          Origin and destination are exempt — only intermediate fuel
-          stops are constrained.
-        </p>
       </div>
-      <p className="text-xs text-slate-500">
-        {matchCount.toLocaleString()} of {totalCount.toLocaleString()} airports
-        match.
-      </p>
+      <div className="rounded-lg bg-slate-50 px-3 py-2">
+        <div className="flex items-baseline justify-between">
+          <span className="text-[11px] text-slate-500">Matching airports</span>
+          <span className="text-xs font-semibold tabular-nums text-slate-900">
+            {matchCount.toLocaleString()}
+            <span className="font-normal text-slate-500">
+              {" "}
+              / {totalCount.toLocaleString()}
+            </span>
+          </span>
+        </div>
+        <div
+          className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-slate-200"
+          aria-hidden="true"
+        >
+          <div
+            className="h-full rounded-full bg-brand-500 transition-[width]"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
     </div>
   );
 }

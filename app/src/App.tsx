@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import { flushSync } from "react-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   airportByIdent,
   EMPTY_DATASETS,
@@ -19,6 +18,7 @@ import {
   buildInteractiveRoute,
   interactiveRangeRings,
   recommendLegAltitude,
+  type AltitudeStrategy,
   type LegAltitudeOverride,
 } from "@/engine/interactive";
 import { greatCircleNM } from "@/engine/geo";
@@ -70,6 +70,8 @@ import { InteractivePanel } from "./ui/InteractivePanel";
 import { PinnedStops } from "./ui/PinnedStops";
 import { RunwayPanel } from "./ui/RunwayPanel";
 import { RunwayWarnings } from "./ui/RunwayWarnings";
+import { CruisePanel } from "./ui/CruisePanel";
+import { SidebarSection } from "./ui/SidebarSection";
 import { TripsPanel } from "./ui/TripsPanel";
 import {
   deleteTrip,
@@ -83,13 +85,10 @@ const magGrid = new MagneticVariationGrid(magneticGridUrl);
 const variationFn = (p: { lat: number; lon: number }) =>
   magGrid.variationDeg(p);
 
-const MIN_SPINNER_MS = 600;
-
 export function App() {
   const [datasets, setDatasets] = useState<Datasets>(EMPTY_DATASETS);
   const [dataReady, setDataReady] = useState(false);
   const [demReady, setDemReady] = useState(false);
-  const [isPlanning, setIsPlanning] = useState(false);
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [aircraftSlug, setAircraftSlug] = useState(allAircraft[0]?.slug ?? "");
@@ -98,19 +97,124 @@ export function App() {
   const [startingFuelGal, setStartingFuelGal] = useState<number>(
     allAircraft[0]?.fuel.usable_capacity_gal ?? 0,
   );
-  const [origin, setOrigin] = useState("KSEA");
-  const [destination, setDestination] = useState("KBOI");
+  // Origin / destination start empty so the placeholder hints the
+  // format without committing the wizard to a route. With prefilled
+  // defaults, the first keystroke would mark Trip "touched" while the
+  // KSEA→KBOI pair was still technically valid, surprising the user
+  // with an auto-advance.
+  const [origin, setOrigin] = useState("");
+  const [destination, setDestination] = useState("");
   const [flightRule, setFlightRule] = useState<FlightRule>("VFR");
   const [capLegTime, setCapLegTime] = useState(false);
   const [maxLegHr, setMaxLegHr] = useState(2);
   const [routes, setRoutes] = useState<PlannedRoute[]>([]);
   const [selectedRoute, setSelectedRoute] = useState(0);
+  // Per-leg cruise altitude overrides for the auto-plan flow, keyed by
+  // "{fromAirportId}->{toAirportId}". A pair-key survives most replans
+  // (e.g. tweaking starting fuel doesn't shift any stops, so the
+  // override stays attached to the same leg). When stops do shift —
+  // a brand-new leg appears — there's no matching key and we just
+  // fall back to the auto-picked altitude, no stale data.
+  const [legAltOverrides, setLegAltOverrides] = useState<
+    Record<string, number>
+  >({});
+  // "lowest" treats the cruise target as the level the pilot wants to
+  // fly (only raising for legal / terrain reasons), which matches the
+  // planner's internal stop-selection assumption. "cheapest" scans the
+  // POH cruise table for the most fuel-efficient legal level — useful
+  // for long cross-country legs where climb fuel pays for itself.
+  // Default to "lowest" because surfacing a cruise altitude wildly
+  // different from what the pilot typed as a target is jarring.
+  const [autoAltStrategy, setAutoAltStrategy] = useState<AltitudeStrategy>(
+    "lowest",
+  );
   const [error, setError] = useState<string | null>(null);
   const [excludedIds, setExcludedIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
   const [pinnedStopIds, setPinnedStopIds] = useState<readonly string[]>([]);
   const [trips, setTrips] = useState<SavedTrip[]>(() => listTrips());
+
+  // Wizard accordion: exactly one sidebar section is expanded at a
+  // time. Starts on "aircraft" — the natural first step (drives fuel,
+  // range, runway check). Clicking a section header toggles it;
+  // clicking "Continue →" inside a section advances to the next.
+  type WizardStep =
+    | "trips"
+    | "aircraft"
+    | "trip"
+    | "runway"
+    | "filters"
+    | null;
+  const [expandedSection, setExpandedSection] = useState<WizardStep>("aircraft");
+  // Auto-advance is state-driven (rather than timer-ref-driven) so the
+  // SidebarSection can render a live "advancing in N.Ns" countdown.
+  // Each pendingAdvance carries a fromStep (the user must still be on
+  // it when the deadline fires — otherwise the advance is silently
+  // dropped), a toStep, and an absolute deadline timestamp.
+  interface PendingAdvance {
+    fromStep: Exclude<WizardStep, null>;
+    toStep: WizardStep;
+    deadline: number;
+  }
+  const [pendingAdvance, setPendingAdvance] = useState<PendingAdvance | null>(
+    null,
+  );
+  function cancelAdvance() {
+    setPendingAdvance(null);
+  }
+  function scheduleAdvance(
+    fromStep: Exclude<WizardStep, null>,
+    toStep: WizardStep,
+    ms = 1500,
+  ) {
+    setPendingAdvance({ fromStep, toStep, deadline: Date.now() + ms });
+  }
+  useEffect(() => {
+    if (!pendingAdvance) return;
+    const remaining = Math.max(0, pendingAdvance.deadline - Date.now());
+    const id = window.setTimeout(() => {
+      setExpandedSection((prev) =>
+        prev === pendingAdvance.fromStep ? pendingAdvance.toStep : prev,
+      );
+      setPendingAdvance(null);
+    }, remaining);
+    return () => window.clearTimeout(id);
+  }, [pendingAdvance]);
+  function toggleSection(id: Exclude<WizardStep, null>) {
+    cancelAdvance();
+    setExpandedSection((prev) => (prev === id ? null : id));
+  }
+
+  // "Touched" flags drive auto-advance — a step only advances after the
+  // user has actually interacted with one of its controls since
+  // entering, so simply opening a section doesn't auto-close it.
+  const [aircraftTouched, setAircraftTouched] = useState(false);
+  const [tripTouched, setTripTouched] = useState(false);
+  useEffect(() => {
+    // Reset on every section change so re-entering a step gives the
+    // user another grace period before the wizard fires.
+    if (expandedSection === "aircraft") setAircraftTouched(false);
+    if (expandedSection === "trip") setTripTouched(false);
+  }, [expandedSection]);
+
+  // Track which step (if any) has DOM focus inside its content.
+  // While the active step is focused, we pause auto-advance — yanking
+  // a section closed mid-keystroke is bad UX. SidebarSection emits
+  // focus/blur via capture handlers; each section's onFocusedChange
+  // sets or clears focusedSection identified by its own step id.
+  const [focusedSection, setFocusedSection] = useState<WizardStep>(null);
+  function makeFocusHandler(step: Exclude<WizardStep, null>) {
+    return (focused: boolean) => {
+      setFocusedSection((prev) => {
+        if (focused) return step;
+        // Only clear if we're the section currently being tracked —
+        // a stale blur event after another section took focus must
+        // not wipe the new value.
+        return prev === step ? null : prev;
+      });
+    };
+  }
 
   // Interactive-build state. Only consulted when planningMode is
   // "interactive"; the auto-plan flow above is fully independent so
@@ -224,6 +328,50 @@ export function App() {
     [datasets.airports, destination],
   );
 
+  // Wizard auto-advance effects. Aircraft advances on any touched
+  // change after a brief debounce; Trip advances once both endpoints
+  // resolve to valid airports (so typing "K" doesn't fire a half-second
+  // later). Each schedule cancels the previous one, so rapid input
+  // doesn't lurch.
+  useEffect(() => {
+    if (expandedSection !== "aircraft") return;
+    if (!aircraftTouched) return;
+    // Pause while the user is mid-edit inside this step. Blurring out
+    // re-runs the effect (focusedSection is a dep) and schedules a
+    // fresh advance with a full 1.5 s grace period.
+    if (focusedSection === "aircraft") {
+      cancelAdvance();
+      return;
+    }
+    scheduleAdvance("aircraft", "trip");
+  }, [
+    expandedSection,
+    aircraftTouched,
+    aircraftSlug,
+    reserveMin,
+    startingFuelGal,
+    focusedSection,
+  ]);
+  useEffect(() => {
+    if (expandedSection !== "trip") return;
+    if (!tripTouched) return;
+    if (!originAirport || !destinationAirport) {
+      cancelAdvance();
+      return;
+    }
+    if (focusedSection === "trip") {
+      cancelAdvance();
+      return;
+    }
+    scheduleAdvance("trip", "runway");
+  }, [
+    expandedSection,
+    tripTouched,
+    originAirport,
+    destinationAirport,
+    focusedSection,
+  ]);
+
   const interactiveStopAirports = useMemo(() => {
     const out = [];
     for (const id of interactiveStopIds) {
@@ -249,6 +397,7 @@ export function App() {
         sequence,
         aircraft: selectedAircraft,
         targetAltFt,
+        altitudeStrategy: autoAltStrategy,
         flightRule,
         reserveHr: reserveMin / 60,
         startingFuelGal,
@@ -264,6 +413,7 @@ export function App() {
     originAirport,
     destinationAirport,
     interactiveStopAirports,
+    autoAltStrategy,
     selectedAircraft,
     targetAltFt,
     flightRule,
@@ -554,51 +704,136 @@ export function App() {
     }
   }
 
-  function runWithSpinner(
-    targetFt: number,
-    overrides: PlanOverrides = {},
-  ) {
-    if (isPlanning) return;
-    // flushSync forces React to commit the spinner-on render before
-    // we yield. Without it, React 18 can defer the commit past our
-    // requestAnimationFrame callbacks and runPlan() below blocks the
-    // main thread for tens of seconds with the button still rendered
-    // in its idle state.
-    flushSync(() => setIsPlanning(true));
-    const startedAt = performance.now();
-    // After flushSync, the DOM has the spinner. Double-RAF ensures the
-    // browser actually paints it before runPlan blocks. Tailwind's
-    // animate-spin uses transform, which runs on the compositor and
-    // keeps spinning while the main thread is busy.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        try {
-          runPlan(targetFt, overrides);
-        } finally {
-          // Always schedule the back-to-idle transition through
-          // setTimeout. If runPlan blocks past MIN_SPINNER_MS,
-          // calling setIsPlanning(false) synchronously here would
-          // commit "planning" and "idle" in the same uninterrupted
-          // JS task — the renderer never yields, so neither users
-          // nor Playwright observe the spinner. The 50 ms floor
-          // guarantees at least one event-loop tick of visible
-          // spinner state.
-          const elapsed = performance.now() - startedAt;
-          const remaining = Math.max(50, MIN_SPINNER_MS - elapsed);
-          setTimeout(() => setIsPlanning(false), remaining);
-        }
+  // Auto-replan: any plan-affecting state change kicks off a debounced
+  // replan. Planning is fast enough now that the explicit Plan button
+  // is no longer the primary trigger — settings just feel live. Skipped
+  // in interactive mode (that pipeline computes incrementally) and
+  // until both endpoints resolve to known airports.
+  //
+  // We deliberately read state through a ref-trampoline so the deps
+  // array stays minimal and we don't fire on transient renders.
+  const runPlanRef = useRef(runPlan);
+  runPlanRef.current = runPlan;
+  useEffect(() => {
+    if (!dataReady) return;
+    if (planningMode !== "auto") return;
+    const o = airportByIdent(datasets.airports, origin);
+    const d = airportByIdent(datasets.airports, destination);
+    if (!o || !d) return;
+    const t = window.setTimeout(() => runPlanRef.current(targetAltFt), 300);
+    return () => window.clearTimeout(t);
+  }, [
+    dataReady,
+    planningMode,
+    datasets.airports,
+    origin,
+    destination,
+    aircraftSlug,
+    targetAltFt,
+    reserveMin,
+    startingFuelGal,
+    flightRule,
+    capLegTime,
+    maxLegHr,
+    filters,
+    runwaySettings,
+    excludedIds,
+    pinnedStopIds,
+  ]);
+
+  // The planner picks stops using `targetAltFt` for every leg; if the
+  // pilot wants a specific leg flown at a different altitude, we re-
+  // synthesize that route through buildInteractiveRoute with their
+  // per-leg overrides. Stops stay the same — only the altitudes (and
+  // therefore the leg time / fuel) shift. The planner's costFnId /
+  // ordering is preserved so the tab labels still make sense.
+  const displayedRoutes = useMemo(() => {
+    if (routes.length === 0) return routes;
+    return routes.map((route) => {
+      if (route.legs.length === 0) return route;
+      const sequence = [
+        route.legs[0].fromAirport,
+        ...route.legs.map((l) => l.toAirport),
+      ];
+      // Always rebuild through the interactive engine so each leg's
+      // altitude is the smart pick (cheapestCruiseAltFt — searches the
+      // aircraft's published cruise rows for the most fuel-efficient
+      // hemispheric-legal level at or above the pilot's target / any
+      // terrain floor) rather than the planner's bare hemispheric-of-
+      // target output. Overridden legs use the pilot's pinned value
+      // verbatim. Stops still come from the planner's optimization;
+      // we only refine altitudes here.
+      const legAltitudes = route.legs.map((l) => {
+        const override =
+          legAltOverrides[legAltKey(l.fromAirport.id, l.toAirport.id)];
+        return override !== undefined ? override : null;
       });
+      try {
+        const rebuilt = buildInteractiveRoute({
+          sequence,
+          aircraft: selectedAircraft,
+          targetAltFt,
+          altitudeStrategy: autoAltStrategy,
+          flightRule,
+          reserveHr: reserveMin / 60,
+          startingFuelGal,
+          legAltitudes,
+          variation: variationFn,
+          dem: demReady ? demSampler : undefined,
+        });
+        return {
+          ...rebuilt.route,
+          // Keep the planner's identity so the tab labels and route
+          // ordering don't suddenly look like interactive routes.
+          costFnId: route.costFnId,
+          cost: route.cost,
+        };
+      } catch {
+        return route;
+      }
+    });
+  }, [
+    routes,
+    legAltOverrides,
+    autoAltStrategy,
+    selectedAircraft,
+    targetAltFt,
+    flightRule,
+    reserveMin,
+    startingFuelGal,
+    demReady,
+  ]);
+
+  function legAltKey(fromId: string, toId: string): string {
+    return `${fromId}->${toId}`;
+  }
+  function handleChangeAutoLegAltitude(
+    leg: { fromAirport: { id: string }; toAirport: { id: string } },
+    altFt: number | null,
+  ) {
+    const key = legAltKey(leg.fromAirport.id, leg.toAirport.id);
+    setLegAltOverrides((prev) => {
+      if (altFt === null) {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      if (prev[key] === altFt) return prev;
+      return { ...prev, [key]: altFt };
     });
   }
-
-  function handlePlan() {
-    runWithSpinner(targetAltFt);
+  function isAutoLegAltOverridden(leg: {
+    fromAirport: { id: string };
+    toAirport: { id: string };
+  }): boolean {
+    return legAltKey(leg.fromAirport.id, leg.toAirport.id) in legAltOverrides;
   }
 
   const currentRoute =
     planningMode === "interactive"
       ? (interactiveBuild?.route ?? null)
-      : (routes[selectedRoute] ?? null);
+      : (displayedRoutes[selectedRoute] ?? null);
   const routeObstacles = useMemo(
     () => obstaclesNearRoute(datasets.obstacles, currentRoute),
     [currentRoute, datasets.obstacles],
@@ -703,14 +938,20 @@ export function App() {
     return out;
   }, [currentRoute, runwaySettings, selectedAircraft, startingFuelGal]);
 
-  function handleReplanAtMinSafe() {
-    if (!terrain) return;
-    const newAlt = terrain.replanTargetFt;
-    setTargetAltFt(newAlt);
-    // Plan synchronously with the new altitude — setTargetAltFt only
-    // takes effect on the next render, so handlePlan()'s closure would
-    // otherwise see the stale value and replan at the old altitude.
-    runWithSpinner(newAlt);
+  /** Bulk variant of handleChangeAutoLegAltitude — sets one override
+   *  per supplied (leg, altFt) pair in a single state commit so
+   *  TerrainPanel's "Pin all" doesn't trigger a render storm. */
+  function handlePinLegs(
+    targets: readonly { leg: { fromAirport: { id: string }; toAirport: { id: string } }; altFt: number }[],
+  ) {
+    if (targets.length === 0) return;
+    setLegAltOverrides((prev) => {
+      const next = { ...prev };
+      for (const t of targets) {
+        next[legAltKey(t.leg.fromAirport.id, t.leg.toAirport.id)] = t.altFt;
+      }
+      return next;
+    });
   }
 
   function handleExcludeStops(airportIds: string[]) {
@@ -723,17 +964,12 @@ export function App() {
     const pinnedChanged = nextPinned.length !== pinnedStopIds.length;
     setExcludedIds(nextExcluded);
     if (pinnedChanged) setPinnedStopIds(nextPinned);
-    runWithSpinner(targetAltFt, {
-      excluded: nextExcluded,
-      pinned: pinnedChanged ? nextPinned : undefined,
-    });
   }
 
   function handleIncludeStop(airportId: string) {
     const next = new Set(excludedIds);
     next.delete(airportId);
     setExcludedIds(next);
-    runWithSpinner(targetAltFt, { excluded: next });
   }
 
   function handleAddPins(airportIds: string[]) {
@@ -756,21 +992,15 @@ export function App() {
     }
     setPinnedStopIds(next);
     if (excludedChanged) setExcludedIds(nextExcluded);
-    runWithSpinner(targetAltFt, {
-      pinned: next,
-      excluded: excludedChanged ? nextExcluded : undefined,
-    });
   }
 
   function handleRemovePin(airportId: string) {
     const next = pinnedStopIds.filter((id) => id !== airportId);
     setPinnedStopIds(next);
-    runWithSpinner(targetAltFt, { pinned: next });
   }
 
   function handleReorderPins(nextPinned: string[]) {
     setPinnedStopIds(nextPinned);
-    runWithSpinner(targetAltFt, { pinned: nextPinned });
   }
 
   function handleReplaceStop(oldAirportId: string, newIdent: string) {
@@ -838,10 +1068,6 @@ export function App() {
 
     setExcludedIds(nextExcluded);
     setPinnedStopIds(nextPinned);
-    runWithSpinner(targetAltFt, {
-      excluded: nextExcluded,
-      pinned: nextPinned,
-    });
   }
 
   /** Map-drag snap radius: airports farther than this from the drop
@@ -854,7 +1080,6 @@ export function App() {
     oldAirportId: string,
     dropLngLat: { lat: number; lon: number },
   ): boolean {
-    if (isPlanning) return false;
     // Search the filter-eligible set so a drop snaps to an airport
     // that's actually visible on the map. Origin/destination get
     // merged in for completeness but are skipped: dropping a stop
@@ -943,204 +1168,397 @@ export function App() {
   }
 
   return (
-    <div className="flex h-full w-full">
-      <aside className="w-80 shrink-0 space-y-5 overflow-y-auto border-r border-slate-200 bg-slate-50 p-4">
-        <header>
-          <h1 className="text-lg font-semibold text-slate-900">Trip Planner</h1>
-          <p className="mt-1 text-xs text-slate-600">
-            GA route planning with fuel stops, terrain warnings, and approach
-            filters.
+    <div className="flex h-full w-full flex-col">
+      <header className="z-10 flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white/95 px-5 backdrop-blur">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-card">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            className="h-4 w-4"
+            aria-hidden="true"
+          >
+            <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 1 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1L15 22v-1.5L13 19v-5.5l8 2.5z" />
+          </svg>
+        </div>
+        <div className="flex-1">
+          <h1 className="text-[15px] font-semibold tracking-tight text-slate-900">
+            Trip Planner
+          </h1>
+          <p className="text-[11px] text-slate-500">
+            GA route planning · fuel stops · terrain · approaches
           </p>
-        </header>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Saved trips
-          </h2>
-          <TripsPanel
-            trips={trips}
-            defaultName={`${origin} → ${destination}`}
-            onSave={handleSaveTrip}
-            onLoad={handleLoadTrip}
-            onDelete={handleDeleteTrip}
-          />
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">Trip</h2>
-          {planningMode === "auto" ? (
-            <>
-              <TripPanel
-                origin={origin}
-                destination={destination}
-                onOriginChange={setOrigin}
-                onDestinationChange={setDestination}
-                flightRule={flightRule}
-                onFlightRuleChange={setFlightRule}
-                capLegTime={capLegTime}
-                onCapLegTimeChange={setCapLegTime}
-                maxLegHr={maxLegHr}
-                onMaxLegHrChange={setMaxLegHr}
-                onPlan={handlePlan}
-                isPlanning={isPlanning}
-                dataReady={dataReady}
-                error={error}
-              />
-              <button
-                type="button"
-                onClick={handleEnterInteractive}
-                disabled={!dataReady || !originAirport || !destinationAirport}
-                className="mt-2 w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                Build interactively →
-              </button>
-              <div className="mt-3">
-                <PinnedStops
-                  pinnedIds={pinnedStopIds}
-                  airports={datasets.airports}
-                  aircraftFuelType={selectedAircraft.fuel.type}
-                  originIdent={origin}
-                  destinationIdent={destination}
-                  onAdd={handleAddPins}
-                  onRemove={handleRemovePin}
-                  onReorder={handleReorderPins}
-                />
-              </div>
-              <div className="mt-3">
-                <ExcludedAirports
-                  excludedIds={excludedIds}
-                  airports={datasets.airports}
-                  originIdent={origin}
-                  destinationIdent={destination}
-                  onExclude={handleExcludeStops}
-                  onInclude={handleIncludeStop}
-                />
-              </div>
-            </>
-          ) : (
-            <InteractivePanel
-              originIdent={originAirport?.icao ?? originAirport?.lid ?? origin}
-              destinationIdent={
-                destinationAirport?.icao ?? destinationAirport?.lid ?? destination
+        </div>
+        <div className="hidden items-center gap-3 text-[11px] text-slate-500 sm:flex">
+          <span
+            className={
+              "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 " +
+              (dataReady
+                ? "bg-emerald-50 text-emerald-700"
+                : "bg-amber-50 text-amber-700")
+            }
+          >
+            <span
+              className={
+                "h-1.5 w-1.5 rounded-full " +
+                (dataReady ? "bg-emerald-500" : "animate-pulse bg-amber-500")
               }
-              stops={interactiveStopAirports}
-              route={currentRoute}
-              legAltitudes={legAltitudes}
-              legFeasibility={interactiveBuild?.feasibility ?? []}
-              stopRefuels={interactiveBuild?.stopRefuels ?? []}
-              distanceToDestNm={interactiveDistanceToDest}
-              rangeSolidNm={interactiveRings?.solid_nm ?? 0}
-              rangeDashedNm={interactiveRings?.dashed_nm ?? 0}
-              destInRange={
-                (interactiveRings?.solid_nm ?? 0) >= interactiveDistanceToDest
+              aria-hidden="true"
+            />
+            {dataReady ? "Airport database ready" : "Loading airports…"}
+          </span>
+          <span
+            className={
+              "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 " +
+              (demReady
+                ? "bg-emerald-50 text-emerald-700"
+                : "bg-slate-100 text-slate-500")
+            }
+          >
+            <span
+              className={
+                "h-1.5 w-1.5 rounded-full " +
+                (demReady ? "bg-emerald-500" : "bg-slate-400")
+              }
+              aria-hidden="true"
+            />
+            {demReady ? "Terrain ready" : "Terrain loading…"}
+          </span>
+        </div>
+      </header>
+      <div className="flex min-h-0 flex-1">
+        <aside className="w-[340px] shrink-0 space-y-3 overflow-y-auto border-r border-slate-200 bg-slate-50 p-4">
+          <SidebarSection
+            title="Saved trips"
+            summary={
+              trips.length === 0
+                ? "Save the current trip to revisit later"
+                : `${trips.length} saved · click to load or save`
+            }
+            expanded={expandedSection === "trips"}
+            onToggle={() => toggleSection("trips")}
+          >
+            <TripsPanel
+              trips={trips}
+              defaultName={
+                origin && destination
+                  ? `${origin} → ${destination}`
+                  : "Untitled trip"
+              }
+              onSave={handleSaveTrip}
+              onLoad={handleLoadTrip}
+              onDelete={handleDeleteTrip}
+            />
+          </SidebarSection>
+          <SidebarSection
+            number={1}
+            title="Aircraft"
+            summary={`${selectedAircraft.make} ${selectedAircraft.model} · ${reserveMin} min reserve · ${startingFuelGal.toFixed(0)}/${selectedAircraft.fuel.usable_capacity_gal} gal`}
+            expanded={expandedSection === "aircraft"}
+            onToggle={() => toggleSection("aircraft")}
+            next={{
+              label: "Trip",
+              onAdvance: () => {
+                cancelAdvance();
+                setExpandedSection("trip");
+              },
+            }}
+            countdownDeadline={
+              pendingAdvance?.fromStep === "aircraft"
+                ? pendingAdvance.deadline
+                : null
+            }
+            onFocusedChange={makeFocusHandler("aircraft")}
+          >
+            <AircraftPanel
+              aircraft={allAircraft}
+              selectedSlug={selectedAircraft.slug}
+              onSelect={(s) => {
+                setAircraftSlug(s);
+                setAircraftTouched(true);
+              }}
+              reserveMin={reserveMin}
+              onReserveChange={(n) => {
+                setReserveMin(n);
+                setAircraftTouched(true);
+              }}
+              startingFuelGal={startingFuelGal}
+              onStartingFuelChange={(n) => {
+                setStartingFuelGal(n);
+                setAircraftTouched(true);
+              }}
+              capacityGal={selectedAircraft.fuel.usable_capacity_gal}
+            />
+          </SidebarSection>
+          <SidebarSection
+            number={2}
+            title="Trip"
+            summary={
+              <span className="flex items-baseline gap-1.5">
+                <span className="font-mono font-medium text-slate-700">
+                  {origin}
+                </span>
+                <span className="text-slate-400">→</span>
+                <span className="font-mono font-medium text-slate-700">
+                  {destination}
+                </span>
+                <span className="text-slate-400">·</span>
+                <span>{flightRule}</span>
+                {planningMode === "interactive" && (
+                  <span className="rounded-full bg-orange-100 px-1.5 text-[10px] font-semibold uppercase text-orange-700">
+                    interactive
+                  </span>
+                )}
+                {capLegTime && (
+                  <>
+                    <span className="text-slate-400">·</span>
+                    <span>cap {maxLegHr}h</span>
+                  </>
+                )}
+              </span>
+            }
+            expanded={expandedSection === "trip"}
+            onToggle={() => toggleSection("trip")}
+            next={{
+              label: "Runway check",
+              onAdvance: () => {
+                cancelAdvance();
+                setExpandedSection("runway");
+              },
+            }}
+            countdownDeadline={
+              pendingAdvance?.fromStep === "trip"
+                ? pendingAdvance.deadline
+                : null
+            }
+            onFocusedChange={makeFocusHandler("trip")}
+          >
+            {planningMode === "auto" ? (
+              <>
+                <TripPanel
+                  origin={origin}
+                  destination={destination}
+                  onOriginChange={(v) => {
+                    setOrigin(v);
+                    setTripTouched(true);
+                  }}
+                  onDestinationChange={(v) => {
+                    setDestination(v);
+                    setTripTouched(true);
+                  }}
+                  flightRule={flightRule}
+                  onFlightRuleChange={(r) => {
+                    setFlightRule(r);
+                    setTripTouched(true);
+                  }}
+                  capLegTime={capLegTime}
+                  onCapLegTimeChange={(b) => {
+                    setCapLegTime(b);
+                    setTripTouched(true);
+                  }}
+                  maxLegHr={maxLegHr}
+                  onMaxLegHrChange={(h) => {
+                    setMaxLegHr(h);
+                    setTripTouched(true);
+                  }}
+                  error={error}
+                />
+                <button
+                  type="button"
+                  onClick={handleEnterInteractive}
+                  disabled={!dataReady || !originAirport || !destinationAirport}
+                  className="btn-secondary mt-3 w-full text-xs"
+                >
+                  Build interactively →
+                </button>
+                <div className="mt-4">
+                  <PinnedStops
+                    pinnedIds={pinnedStopIds}
+                    airports={datasets.airports}
+                    aircraftFuelType={selectedAircraft.fuel.type}
+                    originIdent={origin}
+                    destinationIdent={destination}
+                    onAdd={handleAddPins}
+                    onRemove={handleRemovePin}
+                    onReorder={handleReorderPins}
+                  />
+                </div>
+                <div className="mt-4">
+                  <ExcludedAirports
+                    excludedIds={excludedIds}
+                    airports={datasets.airports}
+                    originIdent={origin}
+                    destinationIdent={destination}
+                    onExclude={handleExcludeStops}
+                    onInclude={handleIncludeStop}
+                  />
+                </div>
+              </>
+            ) : (
+              <InteractivePanel
+                originIdent={originAirport?.icao ?? originAirport?.lid ?? origin}
+                destinationIdent={
+                  destinationAirport?.icao ?? destinationAirport?.lid ?? destination
+                }
+                stops={interactiveStopAirports}
+                route={currentRoute}
+                legAltitudes={legAltitudes}
+                legFeasibility={interactiveBuild?.feasibility ?? []}
+                stopRefuels={interactiveBuild?.stopRefuels ?? []}
+                distanceToDestNm={interactiveDistanceToDest}
+                rangeSolidNm={interactiveRings?.solid_nm ?? 0}
+                rangeDashedNm={interactiveRings?.dashed_nm ?? 0}
+                destInRange={
+                  (interactiveRings?.solid_nm ?? 0) >= interactiveDistanceToDest
+                }
+                cruiseCeilingFt={
+                  selectedAircraft.cruise[selectedAircraft.cruise.length - 1]
+                    ?.altitude_ft ?? 0
+                }
+                onRemoveStop={handleRemoveInteractiveStop}
+                onChangeLegAltitude={handleChangeLegAltitude}
+                onExit={handleExitInteractive}
+              />
+            )}
+          </SidebarSection>
+          <SidebarSection
+            number={3}
+            title="Runway check"
+            summary={runwayCheckSummary(
+              runwaySettings,
+              aircraftSupportsRunwayCheck(selectedAircraft),
+            )}
+            expanded={expandedSection === "runway"}
+            onToggle={() => toggleSection("runway")}
+            next={{
+              label: "Filters",
+              onAdvance: () => {
+                cancelAdvance();
+                setExpandedSection("filters");
+              },
+            }}
+          >
+            <RunwayPanel
+              settings={runwaySettings}
+              onChange={setRunwaySettings}
+              aircraftHasData={aircraftSupportsRunwayCheck(selectedAircraft)}
+              aircraftModel={selectedAircraft.model}
+            />
+          </SidebarSection>
+          <SidebarSection
+            number={4}
+            title="Airport filters"
+            summary={`${matches.length.toLocaleString()} of ${datasets.airports.length.toLocaleString()} airports match`}
+            expanded={expandedSection === "filters"}
+            onToggle={() => toggleSection("filters")}
+          >
+            <FilterPanel
+              filters={filters}
+              onChange={setFilters}
+              matchCount={matches.length}
+              totalCount={datasets.airports.length}
+              hasApproachData={datasets.hasApproachData}
+              aircraftFuelType={selectedAircraft.fuel.type}
+              runwayCheckActive={runwayCheckActive}
+            />
+          </SidebarSection>
+        </aside>
+        <main className="relative flex-1">
+          <MapView
+            airports={matches}
+            route={currentRoute}
+            onMoveStop={planningMode === "auto" ? handleMoveStop : undefined}
+            terminalWarnings={terminalWarnings}
+            interactive={
+              planningMode === "interactive" &&
+              interactiveDeparture &&
+              destinationAirport &&
+              interactiveRings
+                ? {
+                    center: interactiveDeparture,
+                    destination: destinationAirport,
+                    rangeSolidNm: interactiveRings.solid_nm,
+                    rangeDashedNm: interactiveRings.dashed_nm,
+                    onAirportClick: handleAddInteractiveStop,
+                    onAirportHoverHtml: interactiveHoverHtml,
+                  }
+                : undefined
+            }
+          />
+        </main>
+        {(routes.length > 0 || (planningMode === "interactive" && currentRoute)) && (
+          <aside className="flex w-[360px] shrink-0 flex-col border-l border-slate-200 bg-slate-50">
+            <CruisePanel
+              altitudeStrategy={autoAltStrategy}
+              onChangeAltitudeStrategy={setAutoAltStrategy}
+              route={planningMode === "auto" ? currentRoute : null}
+              onChangeLegAltitude={
+                planningMode === "auto"
+                  ? handleChangeAutoLegAltitude
+                  : undefined
+              }
+              isLegAltOverridden={
+                planningMode === "auto" ? isAutoLegAltOverridden : undefined
               }
               cruiseCeilingFt={
                 selectedAircraft.cruise[selectedAircraft.cruise.length - 1]
-                  ?.altitude_ft ?? 0
+                  ?.altitude_ft ?? undefined
               }
-              onRemoveStop={handleRemoveInteractiveStop}
-              onChangeLegAltitude={handleChangeLegAltitude}
-              onExit={handleExitInteractive}
             />
-          )}
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Aircraft &amp; cruise
-          </h2>
-          <AircraftPanel
-            aircraft={allAircraft}
-            selectedSlug={selectedAircraft.slug}
-            onSelect={setAircraftSlug}
-            targetAltFt={targetAltFt}
-            onTargetAltChange={setTargetAltFt}
-            reserveMin={reserveMin}
-            onReserveChange={setReserveMin}
-            startingFuelGal={startingFuelGal}
-            onStartingFuelChange={setStartingFuelGal}
-            capacityGal={selectedAircraft.fuel.usable_capacity_gal}
-          />
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Runway check
-          </h2>
-          <RunwayPanel
-            settings={runwaySettings}
-            onChange={setRunwaySettings}
-            aircraftHasData={aircraftSupportsRunwayCheck(selectedAircraft)}
-            aircraftModel={selectedAircraft.model}
-          />
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Airport filters
-          </h2>
-          <FilterPanel
-            filters={filters}
-            onChange={setFilters}
-            matchCount={matches.length}
-            totalCount={datasets.airports.length}
-            hasApproachData={datasets.hasApproachData}
-            aircraftFuelType={selectedAircraft.fuel.type}
-            runwayCheckActive={runwayCheckActive}
-          />
-        </section>
-      </aside>
-      <main className="relative flex-1">
-        <MapView
-          airports={matches}
-          route={currentRoute}
-          onMoveStop={planningMode === "auto" ? handleMoveStop : undefined}
-          terminalWarnings={terminalWarnings}
-          interactive={
-            planningMode === "interactive" &&
-            interactiveDeparture &&
-            destinationAirport &&
-            interactiveRings
-              ? {
-                  center: interactiveDeparture,
-                  destination: destinationAirport,
-                  rangeSolidNm: interactiveRings.solid_nm,
-                  rangeDashedNm: interactiveRings.dashed_nm,
-                  onAirportClick: handleAddInteractiveStop,
-                  onAirportHoverHtml: interactiveHoverHtml,
+            <div className="flex-1 overflow-y-auto">
+              <LegTable
+                routes={
+                  planningMode === "interactive" && currentRoute
+                    ? [currentRoute]
+                    : displayedRoutes
                 }
-              : undefined
-          }
-        />
-      </main>
-      {(routes.length > 0 || (planningMode === "interactive" && currentRoute)) && (
-        <aside className="flex w-80 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
-          <div className="flex-1 overflow-y-auto">
-            <LegTable
-              routes={planningMode === "interactive" && currentRoute ? [currentRoute] : routes}
-              selected={planningMode === "interactive" ? 0 : selectedRoute}
-              onSelect={planningMode === "interactive" ? () => {} : setSelectedRoute}
-              onExcludeStop={
-                planningMode === "interactive"
-                  ? () => {}
-                  : (id) => handleExcludeStops([id])
-              }
-              onReplaceStop={
-                planningMode === "interactive" ? () => {} : handleReplaceStop
-              }
-            />
-          </div>
-          <TerrainPanel
-            analysis={terrain}
-            targetAltFt={targetAltFt}
-            onReplanAtMinSafe={handleReplanAtMinSafe}
-            terminalWarnings={terminalWarnings}
-          />
-          <RunwayWarnings warnings={runwayWarnings} />
-          {currentRoute && (
-            <ExportPanel
+                selected={planningMode === "interactive" ? 0 : selectedRoute}
+                onSelect={planningMode === "interactive" ? () => {} : setSelectedRoute}
+                onExcludeStop={
+                  planningMode === "interactive"
+                    ? () => {}
+                    : (id) => handleExcludeStops([id])
+                }
+                onReplaceStop={
+                  planningMode === "interactive" ? () => {} : handleReplaceStop
+                }
+              />
+            </div>
+            <TerrainPanel
+              analysis={terrain}
               route={currentRoute}
-              aircraft={selectedAircraft}
-              terrain={terrain}
+              onPinLeg={
+                planningMode === "auto"
+                  ? handleChangeAutoLegAltitude
+                  : undefined
+              }
+              onPinLegs={planningMode === "auto" ? handlePinLegs : undefined}
+              terminalWarnings={terminalWarnings}
             />
-          )}
-        </aside>
-      )}
+            <RunwayWarnings warnings={runwayWarnings} />
+            {currentRoute && (
+              <ExportPanel
+                route={currentRoute}
+                aircraft={selectedAircraft}
+                terrain={terrain}
+              />
+            )}
+          </aside>
+        )}
+      </div>
     </div>
   );
+}
+
+function runwayCheckSummary(
+  settings: RunwaySettings,
+  aircraftHasData: boolean,
+): string {
+  if (!aircraftHasData) return "Not available for this aircraft";
+  if (!settings.enabled) return "Off — enable to check runway lengths";
+  const w = settings.weight === "maxGross" ? "max gross" : "estimated";
+  const isa = settings.isa_delta_c >= 0
+    ? `ISA+${settings.isa_delta_c}°C`
+    : `ISA${settings.isa_delta_c}°C`;
+  return `On · ${w} weight · +${settings.buffer_ft} ft buffer · ${isa}`;
 }
