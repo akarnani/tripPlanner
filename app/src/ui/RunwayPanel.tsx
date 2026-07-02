@@ -20,7 +20,7 @@ export function RunwayPanel({
   const disabled = !aircraftHasData;
   return (
     <div className="space-y-3">
-      <label className="flex items-center gap-2 text-xs text-slate-700">
+      <label className="flex items-center gap-2 text-xs text-ink">
         <input
           type="checkbox"
           checked={settings.enabled && !disabled}
@@ -33,7 +33,7 @@ export function RunwayPanel({
         Check runway lengths against POH
       </label>
       {!aircraftHasData && (
-        <p className="text-[11px] text-amber-700">
+        <p className="text-xs text-caution">
           The {aircraftModel} performance file has no takeoff/landing
           tables — runway check is unavailable.
         </p>
@@ -46,7 +46,7 @@ export function RunwayPanel({
         <div>
           <label
             htmlFor="runway-buffer"
-            className="block text-[11px] uppercase tracking-wide text-slate-500"
+            className="block text-xs uppercase tracking-wide text-muted"
           >
             Buffer
           </label>
@@ -65,16 +65,16 @@ export function RunwayPanel({
                   buffer_ft: Number.parseInt(e.target.value, 10) || 0,
                 })
               }
-              className="w-20 rounded border border-slate-300 bg-white px-2 py-1 disabled:bg-slate-100"
+              className="w-20 rounded border border-hairline-input bg-card px-2 py-1 font-mono text-ink disabled:bg-surface"
             />
-            <span className="text-slate-500">ft beyond POH required</span>
+            <span className="text-muted">ft beyond POH required</span>
           </div>
         </div>
         <div>
-          <span className="block text-[11px] uppercase tracking-wide text-slate-500">
+          <span className="block text-xs uppercase tracking-wide text-muted">
             Weight assumption
           </span>
-          <div className="mt-1 inline-flex overflow-hidden rounded border border-slate-300">
+          <div className="mt-1 inline-flex overflow-hidden rounded border border-hairline-input">
             {(
               [
                 { id: "estimated", label: "Estimated" },
@@ -87,17 +87,17 @@ export function RunwayPanel({
                 disabled={!settings.enabled || disabled}
                 onClick={() => onChange({ ...settings, weight: opt.id })}
                 className={
-                  "px-3 py-1 text-xs font-medium disabled:bg-slate-100 disabled:text-slate-400 " +
+                  "px-3 py-1 text-xs font-medium disabled:bg-surface disabled:text-muted " +
                   (settings.weight === opt.id
-                    ? "bg-slate-900 text-white"
-                    : "bg-white text-slate-700 hover:bg-slate-100")
+                    ? "bg-accent text-white"
+                    : "bg-card text-ink hover:bg-surface")
                 }
               >
                 {opt.label}
               </button>
             ))}
           </div>
-          <p className="mt-1 text-[11px] text-slate-500">
+          <p className="mt-1 text-xs text-muted">
             Estimated uses the route's computed weight and reads the
             next-higher POH weight tier — never an average, never a
             scaled number. When the POH only publishes one weight
@@ -107,12 +107,12 @@ export function RunwayPanel({
         <div>
           <label
             htmlFor="runway-isa"
-            className="block text-[11px] uppercase tracking-wide text-slate-500"
+            className="block text-xs uppercase tracking-wide text-muted"
           >
             Assumed temperature
           </label>
           <div className="mt-1 flex items-center gap-2 text-xs">
-            <span className="text-slate-500">ISA +</span>
+            <span className="text-muted">ISA +</span>
             <input
               id="runway-isa"
               type="number"
@@ -127,9 +127,9 @@ export function RunwayPanel({
                   isa_delta_c: Number.parseInt(e.target.value, 10) || 0,
                 })
               }
-              className="w-16 rounded border border-slate-300 bg-white px-2 py-1 disabled:bg-slate-100"
+              className="w-16 rounded border border-hairline-input bg-card px-2 py-1 font-mono text-ink disabled:bg-surface"
             />
-            <span className="text-slate-500">°C</span>
+            <span className="text-muted">°C</span>
           </div>
         </div>
       </div>

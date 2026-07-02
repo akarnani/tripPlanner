@@ -40,7 +40,7 @@ export function FilterPanel({
         <div>
           <label
             htmlFor="min-runway-ft"
-            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+            className="block text-xs font-medium uppercase tracking-wide text-muted"
           >
             Minimum runway length (ft)
           </label>
@@ -56,12 +56,12 @@ export function FilterPanel({
                 minRunwayFt: Number.parseInt(e.target.value, 10) || 0,
               })
             }
-            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink"
           />
         </div>
       )}
       {runwayCheckActive && (
-        <p className="text-[11px] text-slate-500">
+        <p className="text-xs text-muted">
           Manual minimum-runway filter is replaced by the POH-driven
           runway check (above).
         </p>
@@ -69,7 +69,7 @@ export function FilterPanel({
       <div>
         <label
           htmlFor="tower-req"
-          className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+          className="block text-xs font-medium uppercase tracking-wide text-muted"
         >
           Control tower
         </label>
@@ -79,7 +79,7 @@ export function FilterPanel({
           onChange={(e) =>
             onChange({ ...filters, tower: e.target.value as TowerMode })
           }
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+          className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink"
         >
           <option value="any">Any</option>
           <option value="required">Towered only</option>
@@ -89,7 +89,7 @@ export function FilterPanel({
       <div>
         <label
           htmlFor="approach-req"
-          className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+          className="block text-xs font-medium uppercase tracking-wide text-muted"
         >
           Approach
         </label>
@@ -103,7 +103,7 @@ export function FilterPanel({
               approach: e.target.value as ApproachRequirement,
             })
           }
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm disabled:bg-slate-100"
+          className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink disabled:bg-surface"
         >
           <option value="off">No approach required</option>
           <option value="any">Any IAP (LOC / VOR / LDA / BC / NDB / …)</option>
@@ -111,29 +111,29 @@ export function FilterPanel({
           <option value="rnav">RNAV / GPS</option>
         </select>
         {!hasApproachData && (
-          <p className="mt-1 text-[11px] text-slate-500">
+          <p className="mt-1 text-xs text-muted">
             CIFP data not loaded yet — filter disabled.
           </p>
         )}
       </div>
       <div>
-        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-800">
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
           <input
             type="checkbox"
             checked={filters.requireFuel}
             onChange={(e) =>
               onChange({ ...filters, requireFuel: e.target.checked })
             }
-            className="h-4 w-4 rounded border-slate-300"
+            className="h-4 w-4 rounded border-hairline-input"
           />
           Airport must sell {aircraftFuelType}
         </label>
-        <p className="mt-1 text-[11px] text-slate-500">
+        <p className="mt-1 text-xs text-muted">
           Origin and destination are exempt — only intermediate fuel
           stops are constrained.
         </p>
       </div>
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-muted">
         {matchCount.toLocaleString()} of {totalCount.toLocaleString()} airports
         match.
       </p>

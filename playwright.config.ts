@@ -16,7 +16,15 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // Sandboxed/remote environments often pre-install a Chromium
+        // whose revision doesn't match this @playwright/test version.
+        // Point PW_CHROMIUM_PATH at it to skip the browser download.
+        ...(process.env.PW_CHROMIUM_PATH
+          ? { launchOptions: { executablePath: process.env.PW_CHROMIUM_PATH } }
+          : {}),
+      },
     },
   ],
   webServer: {

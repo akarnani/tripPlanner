@@ -3,6 +3,7 @@ import type { Airport } from "@/data/loaders";
 import { airportByIdent } from "@/data/loaders";
 import type { FuelType } from "@/data/aircraft";
 import { airportSellsCompatibleFuel } from "@/engine/filters";
+import { AirportLink } from "./AirportLink";
 
 interface Props {
   /** Ordered list of airport ids the user has pinned as required
@@ -98,7 +99,7 @@ export function PinnedStops({
 
   return (
     <div>
-      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">
         Required stops (via)
       </p>
       <div className="flex gap-1">
@@ -116,17 +117,17 @@ export function PinnedStops({
             }
           }}
           placeholder="KICAO or KSEA KGEG KBOI"
-          className="w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs uppercase"
+          className="w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-xs uppercase text-ink"
         />
         <button
           type="button"
           onClick={submit}
-          className="shrink-0 rounded border border-slate-300 bg-white px-2 py-1 text-xs hover:bg-slate-100"
+          className="shrink-0 rounded border border-hairline-input bg-card px-2 py-1 text-xs text-ink hover:bg-surface"
         >
           Add
         </button>
       </div>
-      {error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}
+      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
       {pinnedIds.length > 0 && (
         <ol className="mt-2 space-y-1">
           {pinnedIds.map((id, i) => {
@@ -156,10 +157,10 @@ export function PinnedStops({
                   setDragOverIndex(null);
                 }}
                 className={
-                  "flex items-center gap-1 rounded border bg-white px-2 py-1 text-xs transition-colors " +
+                  "flex items-center gap-1 rounded border bg-card px-2 py-1 text-xs transition-colors " +
                   (isDropTarget
-                    ? "border-orange-400 ring-1 ring-orange-200"
-                    : "border-slate-200") +
+                    ? "border-accent ring-1 ring-accent"
+                    : "border-hairline") +
                   (isDragging ? " opacity-50" : "")
                 }
               >
@@ -181,7 +182,7 @@ export function PinnedStops({
                   }}
                   title="Drag to reorder"
                   aria-label="Drag to reorder"
-                  className="-ml-1 cursor-grab px-1 text-slate-400 hover:text-slate-700 active:cursor-grabbing"
+                  className="-ml-1 inline-flex h-6 w-6 cursor-grab items-center justify-center text-muted hover:text-ink active:cursor-grabbing"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -198,12 +199,14 @@ export function PinnedStops({
                     <circle cx="11" cy="13" r="1.2" />
                   </svg>
                 </span>
-                <span className="w-4 text-right text-slate-400">{i + 1}.</span>
-                <span className="font-mono">{labelFor(id)}</span>
+                <span className="w-4 text-right text-muted">{i + 1}.</span>
+                <span className="font-mono">
+                  <AirportLink ident={labelFor(id)} />
+                </span>
                 {!hasFuel && (
                   <span
                     title={`Doesn't stock ${aircraftFuelType} — treated as a pass-through, fuel state carries through`}
-                    className="rounded bg-amber-100 px-1 text-[10px] font-medium uppercase tracking-wide text-amber-800"
+                    className="rounded bg-[color-mix(in_srgb,var(--caution)_15%,transparent)] px-1 text-xs font-medium uppercase tracking-wide text-caution"
                   >
                     no fuel
                   </span>
@@ -213,7 +216,7 @@ export function PinnedStops({
                   type="button"
                   onClick={() => onRemove(id)}
                   title={`Unpin ${labelFor(id)}`}
-                  className="rounded px-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] hover:text-danger"
                 >
                   ×
                 </button>

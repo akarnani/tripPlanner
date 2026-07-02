@@ -42,6 +42,12 @@ export interface PlanInput {
   objectives?: string[];
   /** Optional per-objective parameters, keyed by objective id. */
   params?: Record<string, Record<string, number>>;
+  /** Optional progress callback for long searches (e.g. surfaced from
+   *  a Web Worker). Invoked with a cumulative node-expansion count —
+   *  across every objective (and, via `planWithWaypoints`, every
+   *  sub-leg) — throttled to roughly every 500 expansions by the
+   *  routing search, plus immediately whenever a route is found. */
+  onProgress?: (p: { expanded: number; found: number }) => void;
 }
 
 export interface Leg extends Edge {
@@ -104,13 +110,19 @@ export function plan(input: PlanInput): PlannedRoute[] {
   // K-shortest within a single objective: on a sparse airport graph the
   // 2nd/3rd "different" paths almost always backtrack, which is useless
   // as a flight-planning alternative.
+  // `kShortestPaths` reports expanded/found starting from zero on every
+  // call; re-base each objective's numbers onto a running total so a
+  // caller watching `onProgress` sees one monotonically increasing
+  // series across the whole `plan()` call.
+  const relayProgress = makeRelayProgress(input.onProgress);
   const seen = new Set<string>();
   const out: PlannedRoute[] = [];
   for (const id of objectives) {
     const def = costFnById(id);
     if (!def) continue;
     const costFn = def.build({ maxLegNm, ...(params?.[id] ?? {}) });
-    const [best] = kShortestPaths(graph, costFn, 1);
+    const [best] = kShortestPaths(graph, costFn, 1, relayProgress?.onProgress);
+    relayProgress?.advance();
     if (!best) continue;
     const key = best.nodes.join(">");
     if (seen.has(key)) continue;
@@ -118,6 +130,35 @@ export function plan(input: PlanInput): PlannedRoute[] {
     out.push(toRoute(best, graph.byId, id));
   }
   return out;
+}
+
+/** Wraps a `PlanInput.onProgress` so a sequence of independent search
+ *  calls (one per objective in `plan()`, one per sub-leg in
+ *  `planWithWaypoints()`) reports a single cumulative counter instead
+ *  of resetting to zero at the start of each call. Call `advance()`
+ *  once a search call has fully returned to fold its final numbers
+ *  into the running base before the next call starts. */
+function makeRelayProgress(
+  onProgress: ((p: { expanded: number; found: number }) => void) | undefined,
+): { onProgress: (p: { expanded: number; found: number }) => void; advance: () => void } | undefined {
+  if (!onProgress) return undefined;
+  let expandedBase = 0;
+  let foundBase = 0;
+  let lastExpanded = 0;
+  let lastFound = 0;
+  return {
+    onProgress: (p) => {
+      lastExpanded = p.expanded;
+      lastFound = p.found;
+      onProgress({ expanded: expandedBase + p.expanded, found: foundBase + p.found });
+    },
+    advance: () => {
+      expandedBase += lastExpanded;
+      foundBase += lastFound;
+      lastExpanded = 0;
+      lastFound = 0;
+    },
+  };
 }
 
 export interface PlanWithWaypointsInput extends PlanInput {
@@ -143,6 +184,10 @@ export function planWithWaypoints(input: PlanWithWaypointsInput): PlannedRoute[]
   const byId = new Map<string, Airport>(input.airports.map((a) => [a.id, a]));
   const fullTanks = input.aircraft.fuel.usable_capacity_gal;
   let startFuel = Math.min(input.startingFuelGal ?? fullTanks, fullTanks);
+  // Same re-basing trick as plan()'s per-objective loop, one level up:
+  // each sub-leg's plan() call reports its own expanded/found from
+  // zero, so relay them onto one cumulative series for the caller.
+  const relayProgress = makeRelayProgress(input.onProgress);
 
   const subResults: PlannedRoute[][] = [];
   for (let i = 0; i < sequence.length - 1; i++) {
@@ -151,7 +196,9 @@ export function planWithWaypoints(input: PlanWithWaypointsInput): PlannedRoute[]
       origin: sequence[i],
       destination: sequence[i + 1],
       startingFuelGal: startFuel,
+      onProgress: relayProgress?.onProgress,
     });
+    relayProgress?.advance();
     if (subRoutes.length === 0) return [];
     subResults.push(subRoutes);
 

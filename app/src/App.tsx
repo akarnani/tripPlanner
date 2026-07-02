@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { flushSync } from "react-dom";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useEffect } from "react";
 import {
   airportByIdent,
   EMPTY_DATASETS,
@@ -13,7 +13,7 @@ import {
   applyFilters,
   DEFAULT_FILTERS,
 } from "@/engine/filters";
-import { planWithWaypoints, type PlannedRoute } from "@/engine/plan";
+import { type PlannedRoute } from "@/engine/plan";
 import {
   buildInteractiveLeg,
   buildInteractiveRoute,
@@ -21,6 +21,7 @@ import {
   recommendLegAltitude,
   type LegAltitudeOverride,
 } from "@/engine/interactive";
+import { rankInteractiveCandidates } from "@/engine/candidates";
 import { greatCircleNM } from "@/engine/geo";
 import {
   aircraftSupportsRunwayCheck,
@@ -29,27 +30,24 @@ import {
   filterByRunwayFit,
   oatFromIsaDelta,
   perLegWeights,
-  type RunwayFitStatus,
   type RunwaySettings,
 } from "@/engine/runway";
-
-interface RunwayLegWarning {
-  legIndex: number;
-  phase: "takeoff" | "landing";
-  ident: string;
-  status: RunwayFitStatus;
-  required_ft: number;
-  available_ft: number;
-  buffer_ft: number;
-  weight_lb: number;
-  /** Field pressure altitude used for the POH lookup (we use field
-   *  elevation as a proxy when altimeter isn't known). Echoed in
-   *  the warning so the pilot can spot-check against the chart. */
-  pressure_alt_ft: number;
-  /** OAT used for the POH lookup, in °C. Currently always
-   *  ISA + the configured delta. */
-  temp_c: number;
-}
+import {
+  cruiseBurnGph,
+  perLegArrivalFuel,
+  reserveFuelGal,
+} from "@/engine/fuel";
+import {
+  collectRouteIssues,
+  type RunwayLegWarning,
+} from "@/engine/routeIssues";
+import { buildRouteProfile } from "@/engine/routeProfile";
+import {
+  RouteProfileDock,
+  type ViewportBounds,
+} from "./ui/RouteProfileDock";
+import { explainStopChoices } from "@/engine/stopAlternatives";
+import { WhyStopsPanel } from "./ui/WhyStopsPanel";
 import { obstaclesNearRoute } from "@/engine/obstacles";
 import { analyzeTerrain, type TerrainAnalysis } from "@/engine/terrain";
 import { terminalCorridorWarnings } from "@/engine/terrainPenalty";
@@ -58,19 +56,30 @@ import { TerrainGridDEMSampler } from "@/engine/terrainGrid";
 import { MagneticVariationGrid } from "@/engine/magneticVariation";
 import terrainGridUrl from "@data/terrain_grid.bin.gz?url";
 import magneticGridUrl from "@data/magnetic_grid.bin.gz?url";
-import { MapView } from "./ui/MapView";
+import { MapView, type MapViewApi } from "./ui/MapView";
+import { AirportLink } from "./ui/AirportLink";
 import { FilterPanel } from "./ui/FilterPanel";
 import { AircraftPanel } from "./ui/AircraftPanel";
 import { TripPanel } from "./ui/TripPanel";
 import { LegTable } from "./ui/LegTable";
-import { TerrainPanel } from "./ui/TerrainPanel";
 import { ExportPanel } from "./ui/ExportPanel";
 import { ExcludedAirports } from "./ui/ExcludedAirports";
 import { InteractivePanel } from "./ui/InteractivePanel";
 import { PinnedStops } from "./ui/PinnedStops";
 import { RunwayPanel } from "./ui/RunwayPanel";
-import { RunwayWarnings } from "./ui/RunwayWarnings";
-import { TripsPanel } from "./ui/TripsPanel";
+import { RouteIssuesPanel } from "./ui/RouteIssuesPanel";
+import { SavedTripsPopover } from "./ui/SavedTripsPopover";
+import { Section } from "./ui/Section";
+import { Toast, type ToastData } from "./ui/Toast";
+import { MapLegend } from "./ui/MapLegend";
+import { FirstRunHint } from "./ui/FirstRunHint";
+import { ThemeToggle } from "./ui/theme";
+import { usePlanner } from "./ui/usePlanner";
+import {
+  describePlanDiff,
+  snapshotsEqual,
+  type PlanSnapshot,
+} from "./ui/planSnapshot";
 import {
   deleteTrip,
   listTrips,
@@ -83,13 +92,22 @@ const magGrid = new MagneticVariationGrid(magneticGridUrl);
 const variationFn = (p: { lat: number; lon: number }) =>
   magGrid.variationDeg(p);
 
-const MIN_SPINNER_MS = 600;
+/** Everything the single-slot undo needs to restore a pre-mutation
+ *  world synchronously — including the planned routes themselves, so
+ *  undo never has to replan. */
+interface UndoSnapshot {
+  pinnedStopIds: readonly string[];
+  excludedIds: ReadonlySet<string>;
+  routes: PlannedRoute[];
+  selectedRoute: number;
+  planSnapshot: PlanSnapshot | null;
+}
 
 export function App() {
   const [datasets, setDatasets] = useState<Datasets>(EMPTY_DATASETS);
   const [dataReady, setDataReady] = useState(false);
   const [demReady, setDemReady] = useState(false);
-  const [isPlanning, setIsPlanning] = useState(false);
+  const { requestPlan, cancel, isPlanning, progress } = usePlanner();
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [aircraftSlug, setAircraftSlug] = useState(allAircraft[0]?.slug ?? "");
@@ -111,6 +129,56 @@ export function App() {
   );
   const [pinnedStopIds, setPinnedStopIds] = useState<readonly string[]>([]);
   const [trips, setTrips] = useState<SavedTrip[]>(() => listTrips());
+
+  // Snapshot of the inputs the current `routes` were planned with.
+  // Compared against the live inputs to drive the stale-plan banner
+  // and map dimming (T1). Null until the first successful plan.
+  const [planSnapshot, setPlanSnapshot] = useState<PlanSnapshot | null>(null);
+  const [toast, setToast] = useState<ToastData | null>(null);
+  const [hoveredLegIndex, setHoveredLegIndex] = useState<number | null>(null);
+  const [highlightIdent, setHighlightIdent] = useState<string | null>(null);
+  // Route summary carried by a loaded saved trip — shown in the rail
+  // (with the stale banner) until the user replans.
+  const [loadedTripSummary, setLoadedTripSummary] = useState<
+    NonNullable<SavedTrip["routeSummary"]> | null
+  >(null);
+  // Loading a saved auto-mode trip queues a plan for the next render:
+  // handleLoadTrip's setters haven't committed yet inside its own
+  // closure, so calling runPlan there would plan the PREVIOUS trip's
+  // inputs. The effect below fires once the loaded state is live.
+  const [autoPlanQueued, setAutoPlanQueued] = useState(false);
+  // True when the worker reported the current routes were searched
+  // WITHOUT the terrain grid (fetch failed / not ready). Terrain
+  // warnings still render — the main thread has its own sampler — so
+  // without this flag the pilot has no way to know stop selection
+  // ignored terrain.
+  const [planTerrainBlind, setPlanTerrainBlind] = useState(false);
+  // Docked route-profile panel over the map (open state). The viewport
+  // the profile windows itself to is NOT App state: a map `move` fires
+  // per animation frame, and routing that through App would re-render
+  // the whole coordinator every frame (starving MapLibre → laggy pan/
+  // zoom). Instead the viewport is a stable pub/sub the profile dock
+  // subscribes to directly, so only the dock re-renders on a gesture.
+  const [profileOpen, setProfileOpen] = useState(false);
+  const viewportSubsRef = useRef<Set<(b: ViewportBounds) => void>>(new Set());
+  const lastViewportRef = useRef<ViewportBounds | null>(null);
+  const handleViewportChange = useCallback((b: ViewportBounds) => {
+    lastViewportRef.current = b;
+    for (const fn of viewportSubsRef.current) fn(b);
+  }, []);
+  const subscribeViewport = useCallback((fn: (b: ViewportBounds) => void) => {
+    viewportSubsRef.current.add(fn);
+    // Replay the latest bounds so a dock mounting mid-session windows
+    // itself to the current viewport instead of the full route.
+    if (lastViewportRef.current) fn(lastViewportRef.current);
+    return () => {
+      viewportSubsRef.current.delete(fn);
+    };
+  }, []);
+  // Imperative map handle for the profile panel's wheel-zoom (zooms
+  // the map around the along-route point under the cursor).
+  const mapApiRef = useRef<MapViewApi | null>(null);
+  const undoRef = useRef<UndoSnapshot | null>(null);
 
   // Interactive-build state. Only consulted when planningMode is
   // "interactive"; the auto-plan flow above is fully independent so
@@ -152,6 +220,15 @@ export function App() {
   }, []);
 
   const selectedAircraft = aircraftBySlug(aircraftSlug) ?? allAircraft[0];
+
+  // Fires the queued auto-plan for a just-loaded saved trip, once the
+  // loaded inputs have committed (and the dataset is up, for trips
+  // loaded quickly after a cold start).
+  useEffect(() => {
+    if (!autoPlanQueued || !dataReady) return;
+    setAutoPlanQueued(false);
+    runPlan(targetAltFt);
+  }, [autoPlanQueued, dataReady]);
 
   // When the user picks a different aircraft, reset starting fuel to
   // that aircraft's full capacity — its tanks aren't comparable.
@@ -336,18 +413,69 @@ export function App() {
     return greatCircleNM(interactiveDeparture, destinationAirport);
   }, [interactiveDeparture, destinationAirport]);
 
-  function handleEnterInteractive() {
+  // Ranked candidate stops inside the dashed (max-range) ring,
+  // rendered as a pick list in the interactive sidebar (T10).
+  const interactiveCandidates = useMemo(() => {
+    if (
+      planningMode !== "interactive" ||
+      !interactiveDeparture ||
+      !destinationAirport ||
+      !interactiveRings
+    )
+      return [];
+    const exclude = new Set<string>(interactiveStopIds);
+    if (originAirport) exclude.add(originAirport.id);
+    exclude.add(destinationAirport.id);
+    try {
+      return rankInteractiveCandidates({
+        airports: matches,
+        departure: interactiveDeparture,
+        destination: destinationAirport,
+        excludeIds: exclude,
+        aircraft: selectedAircraft,
+        targetAltFt,
+        flightRule,
+        startingFuelGal: interactiveDepartureFuelGal,
+        reserveHr: reserveMin / 60,
+        rangeSolidNm: interactiveRings.solid_nm,
+        rangeDashedNm: interactiveRings.dashed_nm,
+        variation: variationFn,
+        dem: demReady ? demSampler : undefined,
+      });
+    } catch {
+      return [];
+    }
+  }, [
+    planningMode,
+    interactiveDeparture,
+    destinationAirport,
+    interactiveRings,
+    interactiveStopIds,
+    originAirport,
+    matches,
+    selectedAircraft,
+    targetAltFt,
+    flightRule,
+    interactiveDepartureFuelGal,
+    reserveMin,
+    demReady,
+  ]);
+
+  /** Enter interactive mode. Optionally seed the stop chain and
+   *  per-leg altitudes from a planned route ("Edit this route").
+   *  Without a seed, whatever interactive state existed before is
+   *  kept alive — mode switches never clear the other mode's work. */
+  function handleEnterInteractive(seed?: PlannedRoute) {
+    if (seed) {
+      setInteractiveStopIds(seed.legs.slice(0, -1).map((l) => l.toAirport.id));
+      setLegAltitudes(seed.legs.map((l) => l.cruise_alt_ft));
+    }
     setPlanningMode("interactive");
-    setInteractiveStopIds([]);
-    setLegAltitudes([]);
-    setRoutes([]);
     setError(null);
   }
 
   function handleExitInteractive() {
     setPlanningMode("auto");
-    setInteractiveStopIds([]);
-    setLegAltitudes([]);
   }
 
   function handleAddInteractiveStop(ident: string) {
@@ -372,6 +500,7 @@ export function App() {
       const head = prev.slice(0, -1);
       return [...head, null, closing ?? null];
     });
+    setHighlightIdent(null);
   }
 
   function handleRemoveInteractiveStop(stopIndex: number) {
@@ -410,14 +539,14 @@ export function App() {
     const inSolid = dist <= solid;
     const inDashed = dist <= dashed;
     const reachability = inSolid
-      ? `<span style="color:#0f766e">in range (${Math.round(dist).toLocaleString()} nm, ${Math.round(solid - dist).toLocaleString()} nm to spare)</span>`
+      ? `<span style="color:var(--ok)">in range (${Math.round(dist).toLocaleString()} nm, ${Math.round(solid - dist).toLocaleString()} nm to spare)</span>`
       : inDashed
-        ? `<span style="color:#b45309">past reserve — ${Math.round(dist).toLocaleString()} nm, ${Math.round(dist - solid).toLocaleString()} nm into the reserve</span>`
-        : `<span style="color:#b91c1c">out of range (${Math.round(dist).toLocaleString()} nm, ${Math.round(dashed).toLocaleString()} nm max on this tank)</span>`;
+        ? `<span style="color:var(--caution)">past reserve — ${Math.round(dist).toLocaleString()} nm, ${Math.round(dist - solid).toLocaleString()} nm into the reserve</span>`
+        : `<span style="color:var(--danger)">out of range (${Math.round(dist).toLocaleString()} nm, ${Math.round(dashed).toLocaleString()} nm max on this tank)</span>`;
     const sellsFuel = airportSellsCompatibleFuel(a, selectedAircraft.fuel.type);
     const fuelBit = sellsFuel
       ? null
-      : `<span style="color:#b45309">no ${selectedAircraft.fuel.type} — pass-through only</span>`;
+      : `<span style="color:var(--caution)">no ${selectedAircraft.fuel.type} — pass-through only</span>`;
     // Compute the prospective leg into this airport to surface
     // terrain warnings and altitude advice. Use the global target
     // altitude — the per-leg override hasn't been chosen yet for a
@@ -475,11 +604,13 @@ export function App() {
     if (fuelBit) parts.push(`<div>${fuelBit}</div>`);
     if (terrainBits.length > 0) {
       parts.push(
-        `<div style="color:#b45309">⚠ ${terrainBits.join(" · ")}</div>`,
+        `<div style="color:var(--caution)">⚠ ${terrainBits.join(" · ")}</div>`,
       );
     }
     if (altBits.length > 0) {
-      parts.push(`<div style="color:#475569">alt: ${altBits.join(" · ")}</div>`);
+      parts.push(
+        `<div style="color:var(--muted)">alt: ${altBits.join(" · ")}</div>`,
+      );
     }
     return parts.join("");
   }
@@ -491,6 +622,34 @@ export function App() {
     excluded?: ReadonlySet<string>;
     /** Same idea for the pinned waypoint list. */
     pinned?: readonly string[];
+  }
+
+  /** Snapshot the inputs a plan request is about to run with. Stored
+   *  on success and diffed against the live inputs to detect a stale
+   *  plan. Pinned/excluded are sorted so ordering-only changes (pin
+   *  reorder aside — that changes the route) don't read as staleness
+   *  in the set-membership sense; reorder still differs because the
+   *  pinned list is compared, see planSnapshot.ts. */
+  function makeSnapshot(
+    targetFt: number,
+    excluded: ReadonlySet<string>,
+    pinned: readonly string[],
+  ): PlanSnapshot {
+    return {
+      origin,
+      destination,
+      aircraftSlug: selectedAircraft.slug,
+      targetAltFt: targetFt,
+      reserveMin,
+      startingFuelGal,
+      flightRule,
+      capLegTime,
+      maxLegHr,
+      filters,
+      runwaySettings,
+      pinnedStopIds: [...pinned],
+      excludedIds: [...excluded].sort(),
+    };
   }
 
   function runPlan(targetFt: number, overrides: PlanOverrides = {}) {
@@ -526,73 +685,47 @@ export function App() {
         [...onRoute, o, d, ...pinnedAirports].map((a) => [a.id, a]),
       ).values(),
     );
-    try {
-      const result = planWithWaypoints({
-        airports: candidates,
-        origin: o.id,
-        destination: d.id,
+    // Snapshot the exact inputs this request runs with; committed
+    // only when the worker returns a route.
+    const snapshot = makeSnapshot(targetFt, excluded, pinned);
+    requestPlan(
+      {
+        candidates,
+        originId: o.id,
+        destinationId: d.id,
         aircraft: selectedAircraft,
         targetAltFt: targetFt,
         flightRule,
         reserveHr: reserveMin / 60,
-        variation: variationFn,
         maxLegHr: capLegTime ? maxLegHr : undefined,
         startingFuelGal,
-        excludedAirportIds: excluded,
-        waypoints: pinned,
-        dem: demReady ? demSampler : undefined,
-      });
-      if (result.length === 0) {
-        setError("no route found — try relaxing constraints");
-        setRoutes([]);
-        return;
-      }
-      setRoutes(result);
-      setSelectedRoute(0);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  function runWithSpinner(
-    targetFt: number,
-    overrides: PlanOverrides = {},
-  ) {
-    if (isPlanning) return;
-    // flushSync forces React to commit the spinner-on render before
-    // we yield. Without it, React 18 can defer the commit past our
-    // requestAnimationFrame callbacks and runPlan() below blocks the
-    // main thread for tens of seconds with the button still rendered
-    // in its idle state.
-    flushSync(() => setIsPlanning(true));
-    const startedAt = performance.now();
-    // After flushSync, the DOM has the spinner. Double-RAF ensures the
-    // browser actually paints it before runPlan blocks. Tailwind's
-    // animate-spin uses transform, which runs on the compositor and
-    // keeps spinning while the main thread is busy.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        try {
-          runPlan(targetFt, overrides);
-        } finally {
-          // Always schedule the back-to-idle transition through
-          // setTimeout. If runPlan blocks past MIN_SPINNER_MS,
-          // calling setIsPlanning(false) synchronously here would
-          // commit "planning" and "idle" in the same uninterrupted
-          // JS task — the renderer never yields, so neither users
-          // nor Playwright observe the spinner. The 50 ms floor
-          // guarantees at least one event-loop tick of visible
-          // spinner state.
-          const elapsed = performance.now() - startedAt;
-          const remaining = Math.max(50, MIN_SPINNER_MS - elapsed);
-          setTimeout(() => setIsPlanning(false), remaining);
-        }
-      });
-    });
+        excludedAirportIds: [...excluded],
+        waypoints: [...pinned],
+      },
+      {
+        onResult: (result, meta) => {
+          if (result.length === 0) {
+            setError("no route found — try relaxing constraints");
+            setRoutes([]);
+            setPlanSnapshot(null);
+            return;
+          }
+          setRoutes(result);
+          setSelectedRoute(0);
+          setPlanSnapshot(snapshot);
+          setLoadedTripSummary(null);
+          setPlanTerrainBlind(!meta.demUsed);
+          // The profile panel is part of reading a plan — open it with
+          // the results rather than making the pilot find the toggle.
+          setProfileOpen(true);
+        },
+        onError: (message) => setError(message),
+      },
+    );
   }
 
   function handlePlan() {
-    runWithSpinner(targetAltFt);
+    runPlan(targetAltFt);
   }
 
   const currentRoute =
@@ -703,17 +836,179 @@ export function App() {
     return out;
   }, [currentRoute, runwaySettings, selectedAircraft, startingFuelGal]);
 
-  function handleReplanAtMinSafe() {
-    if (!terrain) return;
-    const newAlt = terrain.replanTargetFt;
-    setTargetAltFt(newAlt);
-    // Plan synchronously with the new altitude — setTargetAltFt only
-    // takes effect on the next render, so handlePlan()'s closure would
-    // otherwise see the stale value and replan at the old altitude.
-    runWithSpinner(newAlt);
+  // Unified route-issues list (T5): terrain + terminal corridors +
+  // runway fits, sorted danger-first. Replaces the three stacked
+  // warning panels.
+  const routeIssues = useMemo(() => {
+    const issues = collectRouteIssues({
+      terrain,
+      targetAltFt,
+      corridor: terminalWarnings,
+      runway: runwayWarnings,
+      onReplanAt: (ft) => {
+        setTargetAltFt(ft);
+        // Plan with the new altitude immediately — setTargetAltFt
+        // only takes effect next render, so the closure would
+        // otherwise replan at the stale value.
+        runPlan(ft);
+      },
+    });
+    // Surfaced first among cautions: an auto-planned route whose
+    // search ran without the terrain grid picked its fuel stops
+    // terrain-blind, even though per-leg terrain warnings (computed
+    // main-thread) still render normally.
+    if (planTerrainBlind && planningMode === "auto" && routes.length > 0) {
+      issues.unshift({
+        legIndex: -1,
+        phase: "cruise",
+        severity: "caution",
+        ident: "route",
+        message:
+          "Terrain data wasn't available when this route was planned — fuel-stop selection ignored terrain. Replan to retry with terrain costs.",
+        action: { label: "Replan", apply: () => runPlan(targetAltFt) },
+      });
+    }
+    return issues;
+  }, [
+    terrain,
+    targetAltFt,
+    terminalWarnings,
+    runwayWarnings,
+    planTerrainBlind,
+    planningMode,
+    routes.length,
+  ]);
+
+  // Per-leg fuel-on-landing for the displayed route (T6). Shares the
+  // exact refuel/pass-through propagation the runway weight model
+  // uses (perLegArrivalFuel mirrors perLegWeights).
+  const arrivalFuelGal = useMemo(() => {
+    if (!currentRoute) return undefined;
+    const legs = currentRoute.legs;
+    const legOriginRefuels = legs.map((leg, i) =>
+      i === 0
+        ? true
+        : airportSellsCompatibleFuel(
+            leg.fromAirport,
+            selectedAircraft.fuel.type,
+          ),
+    );
+    return perLegArrivalFuel({
+      aircraft: selectedAircraft,
+      legFuelBurnGal: legs.map((l) => l.fuel_gal),
+      legOriginRefuels,
+      startingFuelGal,
+    });
+  }, [currentRoute, selectedAircraft, startingFuelGal]);
+
+  const reserveGal = useMemo(() => {
+    try {
+      return reserveFuelGal({
+        aircraft: selectedAircraft,
+        altitude_ft: targetAltFt,
+        reserve_min: reserveMin,
+      });
+    } catch {
+      return undefined;
+    }
+  }, [selectedAircraft, targetAltFt, reserveMin]);
+
+  const cautionFloorGal = useMemo(() => {
+    if (reserveGal === undefined) return undefined;
+    try {
+      return (
+        reserveGal + (cruiseBurnGph(selectedAircraft, targetAltFt) * 15) / 60
+      );
+    } catch {
+      return undefined;
+    }
+  }, [reserveGal, selectedAircraft, targetAltFt]);
+
+  // Whole-route altitude-vs-terrain profile for the docked panel over
+  // the map. Null until the DEM grid is up (a profile with no terrain
+  // silhouette would be misleading rather than degraded).
+  const routeProfile = useMemo(() => {
+    if (!demReady || !currentRoute || currentRoute.legs.length === 0) {
+      return null;
+    }
+    return buildRouteProfile({
+      route: currentRoute,
+      aircraft: selectedAircraft,
+      dem: demSampler,
+    });
+  }, [demReady, currentRoute, selectedAircraft]);
+
+  // The profile's along-track window follows the map viewport — that
+  // computation lives in RouteProfileDock so it (and only it) re-runs
+  // per gesture frame, not the whole App.
+
+  // Stale-plan detection (T1): compare the live inputs against the
+  // snapshot the current routes were planned with. Suppressed while a
+  // replan is already in flight (the snapshot refreshes on result).
+  const liveSnapshot = useMemo(
+    () => makeSnapshot(targetAltFt, excludedIds, pinnedStopIds),
+    [
+      origin,
+      destination,
+      selectedAircraft.slug,
+      targetAltFt,
+      reserveMin,
+      startingFuelGal,
+      flightRule,
+      capLegTime,
+      maxLegHr,
+      filters,
+      runwaySettings,
+      pinnedStopIds,
+      excludedIds,
+    ],
+  );
+  const isStale =
+    planningMode === "auto" &&
+    routes.length > 0 &&
+    planSnapshot !== null &&
+    !isPlanning &&
+    !snapshotsEqual(planSnapshot, liveSnapshot);
+  const staleDiffs = useMemo(
+    () => (isStale && planSnapshot ? describePlanDiff(planSnapshot, liveSnapshot) : []),
+    [isStale, planSnapshot, liveSnapshot],
+  );
+
+  /** Capture everything the single-slot undo restores. Called before
+   *  any mutation that replans. */
+  function pushUndo() {
+    undoRef.current = {
+      pinnedStopIds,
+      excludedIds,
+      routes,
+      selectedRoute,
+      planSnapshot,
+    };
+  }
+
+  function handleUndo() {
+    const u = undoRef.current;
+    if (!u) return;
+    undoRef.current = null;
+    // Kill any replan the undone mutation kicked off — the restored
+    // routes are the source of truth and must not be overwritten by
+    // a late worker result.
+    cancel();
+    setPinnedStopIds(u.pinnedStopIds);
+    setExcludedIds(u.excludedIds);
+    setRoutes(u.routes);
+    setSelectedRoute(u.selectedRoute);
+    setPlanSnapshot(u.planSnapshot);
+    setToast(null);
+  }
+
+  function identOf(airportId: string): string {
+    const a = datasets.airports.find((x) => x.id === airportId);
+    return a ? (a.icao ?? a.lid) : airportId;
   }
 
   function handleExcludeStops(airportIds: string[]) {
+    pushUndo();
     const nextExcluded = new Set(excludedIds);
     for (const id of airportIds) nextExcluded.add(id);
     // Excluding a pinned airport contradicts the pin — the exclusion
@@ -723,22 +1018,29 @@ export function App() {
     const pinnedChanged = nextPinned.length !== pinnedStopIds.length;
     setExcludedIds(nextExcluded);
     if (pinnedChanged) setPinnedStopIds(nextPinned);
-    runWithSpinner(targetAltFt, {
+    runPlan(targetAltFt, {
       excluded: nextExcluded,
       pinned: pinnedChanged ? nextPinned : undefined,
+    });
+    setToast({
+      message: `${airportIds.map(identOf).join(", ")} excluded — route replanned`,
+      actionLabel: "Undo",
+      onAction: handleUndo,
     });
   }
 
   function handleIncludeStop(airportId: string) {
+    pushUndo();
     const next = new Set(excludedIds);
     next.delete(airportId);
     setExcludedIds(next);
-    runWithSpinner(targetAltFt, { excluded: next });
+    runPlan(targetAltFt, { excluded: next });
   }
 
   function handleAddPins(airportIds: string[]) {
     const fresh = airportIds.filter((id) => !pinnedStopIds.includes(id));
     if (fresh.length === 0) return;
+    pushUndo();
     const next = [...pinnedStopIds, ...fresh];
     // Pinning an excluded airport contradicts the exclusion — the
     // pin is the more recent intent, so drop the exclusion in the
@@ -756,21 +1058,28 @@ export function App() {
     }
     setPinnedStopIds(next);
     if (excludedChanged) setExcludedIds(nextExcluded);
-    runWithSpinner(targetAltFt, {
+    runPlan(targetAltFt, {
       pinned: next,
       excluded: excludedChanged ? nextExcluded : undefined,
     });
   }
 
   function handleRemovePin(airportId: string) {
+    pushUndo();
     const next = pinnedStopIds.filter((id) => id !== airportId);
     setPinnedStopIds(next);
-    runWithSpinner(targetAltFt, { pinned: next });
+    runPlan(targetAltFt, { pinned: next });
+    setToast({
+      message: `${identOf(airportId)} unpinned — route replanned`,
+      actionLabel: "Undo",
+      onAction: handleUndo,
+    });
   }
 
   function handleReorderPins(nextPinned: string[]) {
+    pushUndo();
     setPinnedStopIds(nextPinned);
-    runWithSpinner(targetAltFt, { pinned: nextPinned });
+    runPlan(targetAltFt, { pinned: nextPinned });
   }
 
   function handleReplaceStop(oldAirportId: string, newIdent: string) {
@@ -780,6 +1089,7 @@ export function App() {
       return;
     }
     if (replacement.id === oldAirportId) return;
+    pushUndo();
 
     const oldPinIndex = pinnedStopIds.indexOf(oldAirportId);
     let nextPinned: string[];
@@ -838,9 +1148,14 @@ export function App() {
 
     setExcludedIds(nextExcluded);
     setPinnedStopIds(nextPinned);
-    runWithSpinner(targetAltFt, {
+    runPlan(targetAltFt, {
       excluded: nextExcluded,
       pinned: nextPinned,
+    });
+    setToast({
+      message: `${identOf(oldAirportId)} replaced with ${replacement.icao ?? replacement.lid} — route replanned`,
+      actionLabel: "Undo",
+      onAction: handleUndo,
     });
   }
 
@@ -874,15 +1189,18 @@ export function App() {
     }
     if (!nearest) return false;
     if (nearest.id === oldAirportId) return false;
-    // Drag is purely additive: pin the dragged-to airport so the route
-    // is forced through it, but leave the dragged-from airport alone.
-    // The user can still exclude the old stop via its × in the leg
-    // table or excluded-stops panel if they want it gone.
-    handleAddPins([nearest.id]);
+    // Drag means MOVE: route through the same replace semantics as
+    // the leg table's ✎ action — exclude the dragged-from stop (or
+    // swap the pin), pin the snapped-to airport at the same position,
+    // and replan. The grab cursor promised a move; leaving the old
+    // stop behind read as a bug.
+    handleReplaceStop(oldAirportId, nearest.ident);
     return true;
   }
 
   function handleSaveTrip(name: string) {
+    const routeForSummary =
+      planningMode === "auto" ? (routes[selectedRoute] ?? null) : currentRoute;
     const trip: SavedTrip = {
       name,
       origin,
@@ -908,6 +1226,20 @@ export function App() {
         a === undefined || a === null ? null : a,
       ),
       runwaySettings,
+      // A lightweight summary of the planned route at save time —
+      // routes themselves aren't persisted (datasets change cycle to
+      // cycle), but the summary lets a loaded trip show what it was
+      // instead of an empty rail.
+      routeSummary: routeForSummary
+        ? {
+            stopIdents: routeForSummary.legs
+              .slice(0, -1)
+              .map((l) => l.toAirport.icao ?? l.toAirport.lid),
+            distance_nm: routeForSummary.totals.distance_nm,
+            time_hr: routeForSummary.totals.time_hr,
+            fuel_gal: routeForSummary.totals.fuel_gal,
+          }
+        : undefined,
       savedAt: new Date().toISOString(),
     };
     setTrips(saveTrip(trip));
@@ -935,160 +1267,222 @@ export function App() {
     setLegAltitudes(t.legAltitudes ?? []);
     setRunwaySettings(t.runwaySettings ?? DEFAULT_RUNWAY_SETTINGS);
     setRoutes([]);
+    setPlanSnapshot(null);
+    setLoadedTripSummary(t.routeSummary ?? null);
     setError(null);
+    // Plan immediately — a loaded trip that needs a second click on
+    // Replan is just friction. Interactive trips rebuild live from
+    // their restored state and don't use the auto planner.
+    setAutoPlanQueued((t.planningMode ?? "auto") === "auto");
   }
 
   function handleDeleteTrip(name: string) {
     setTrips(deleteTrip(name));
   }
 
+  // Summary chips for the collapsed sidebar accordions (T4).
+  const runwayChip = runwaySettings.enabled
+    ? aircraftSupportsRunwayCheck(selectedAircraft)
+      ? "POH · on"
+      : "no data"
+    : "off";
+  const filterChip = `${matches.length.toLocaleString()} match`;
+
+  const hasRailContent =
+    routes.length > 0 || (planningMode === "interactive" && currentRoute);
+
+  const planButtonState = !dataReady
+    ? "loading"
+    : isPlanning
+      ? "planning"
+      : "idle";
+
   return (
-    <div className="flex h-full w-full">
-      <aside className="w-80 shrink-0 space-y-5 overflow-y-auto border-r border-slate-200 bg-slate-50 p-4">
-        <header>
-          <h1 className="text-lg font-semibold text-slate-900">Trip Planner</h1>
-          <p className="mt-1 text-xs text-slate-600">
-            GA route planning with fuel stops, terrain warnings, and approach
-            filters.
-          </p>
-        </header>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Saved trips
-          </h2>
-          <TripsPanel
-            trips={trips}
-            defaultName={`${origin} → ${destination}`}
-            onSave={handleSaveTrip}
-            onLoad={handleLoadTrip}
-            onDelete={handleDeleteTrip}
-          />
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">Trip</h2>
-          {planningMode === "auto" ? (
-            <>
-              <TripPanel
-                origin={origin}
-                destination={destination}
-                onOriginChange={setOrigin}
-                onDestinationChange={setDestination}
-                flightRule={flightRule}
-                onFlightRuleChange={setFlightRule}
-                capLegTime={capLegTime}
-                onCapLegTimeChange={setCapLegTime}
-                maxLegHr={maxLegHr}
-                onMaxLegHrChange={setMaxLegHr}
-                onPlan={handlePlan}
-                isPlanning={isPlanning}
-                dataReady={dataReady}
-                error={error}
-              />
-              <button
-                type="button"
-                onClick={handleEnterInteractive}
-                disabled={!dataReady || !originAirport || !destinationAirport}
-                className="mt-2 w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                Build interactively →
-              </button>
-              <div className="mt-3">
-                <PinnedStops
-                  pinnedIds={pinnedStopIds}
-                  airports={datasets.airports}
+    <div className="flex h-full w-full bg-surface text-ink">
+      <aside className="relative flex w-80 shrink-0 flex-col border-r border-hairline bg-surface">
+        <div className="flex-1 overflow-y-auto">
+          <div className="space-y-4 p-4 pb-0">
+            <header className="flex items-center justify-between gap-2">
+              <h1 className="text-lg font-semibold text-ink">Trip Planner</h1>
+              <div className="flex items-center gap-2">
+                <SavedTripsPopover
+                  trips={trips}
+                  defaultName={`${origin} → ${destination}`}
+                  onSave={handleSaveTrip}
+                  onLoad={handleLoadTrip}
+                  onDelete={handleDeleteTrip}
+                />
+                <ThemeToggle />
+              </div>
+            </header>
+            <Section id="trip" title="Trip" collapsible={false}>
+              {planningMode === "auto" ? (
+                <>
+                  <TripPanel
+                    origin={origin}
+                    destination={destination}
+                    onOriginChange={setOrigin}
+                    onDestinationChange={setDestination}
+                    flightRule={flightRule}
+                    onFlightRuleChange={setFlightRule}
+                    capLegTime={capLegTime}
+                    onCapLegTimeChange={setCapLegTime}
+                    maxLegHr={maxLegHr}
+                    onMaxLegHrChange={setMaxLegHr}
+                  />
+                  <div className="mt-3">
+                    <PinnedStops
+                      pinnedIds={pinnedStopIds}
+                      airports={datasets.airports}
+                      aircraftFuelType={selectedAircraft.fuel.type}
+                      originIdent={origin}
+                      destinationIdent={destination}
+                      onAdd={handleAddPins}
+                      onRemove={handleRemovePin}
+                      onReorder={handleReorderPins}
+                    />
+                  </div>
+                  <div className="mt-3">
+                    <ExcludedAirports
+                      excludedIds={excludedIds}
+                      airports={datasets.airports}
+                      originIdent={origin}
+                      destinationIdent={destination}
+                      onExclude={handleExcludeStops}
+                      onInclude={handleIncludeStop}
+                    />
+                  </div>
+                </>
+              ) : (
+                <InteractivePanel
+                  originIdent={
+                    originAirport?.icao ?? originAirport?.lid ?? origin
+                  }
+                  destinationIdent={
+                    destinationAirport?.icao ??
+                    destinationAirport?.lid ??
+                    destination
+                  }
+                  stops={interactiveStopAirports}
+                  route={currentRoute}
+                  legAltitudes={legAltitudes}
+                  legFeasibility={interactiveBuild?.feasibility ?? []}
+                  stopRefuels={interactiveBuild?.stopRefuels ?? []}
+                  distanceToDestNm={interactiveDistanceToDest}
+                  rangeSolidNm={interactiveRings?.solid_nm ?? 0}
+                  rangeDashedNm={interactiveRings?.dashed_nm ?? 0}
+                  destInRange={
+                    (interactiveRings?.solid_nm ?? 0) >=
+                    interactiveDistanceToDest
+                  }
+                  cruiseCeilingFt={
+                    selectedAircraft.cruise[selectedAircraft.cruise.length - 1]
+                      ?.altitude_ft ?? 0
+                  }
+                  onRemoveStop={handleRemoveInteractiveStop}
+                  onChangeLegAltitude={handleChangeLegAltitude}
+                  onExit={handleExitInteractive}
+                  candidates={interactiveCandidates}
+                  onSelectCandidate={handleAddInteractiveStop}
+                  onHoverCandidate={setHighlightIdent}
                   aircraftFuelType={selectedAircraft.fuel.type}
-                  originIdent={origin}
-                  destinationIdent={destination}
-                  onAdd={handleAddPins}
-                  onRemove={handleRemovePin}
-                  onReorder={handleReorderPins}
                 />
-              </div>
-              <div className="mt-3">
-                <ExcludedAirports
-                  excludedIds={excludedIds}
-                  airports={datasets.airports}
-                  originIdent={origin}
-                  destinationIdent={destination}
-                  onExclude={handleExcludeStops}
-                  onInclude={handleIncludeStop}
-                />
-              </div>
-            </>
-          ) : (
-            <InteractivePanel
-              originIdent={originAirport?.icao ?? originAirport?.lid ?? origin}
-              destinationIdent={
-                destinationAirport?.icao ?? destinationAirport?.lid ?? destination
-              }
-              stops={interactiveStopAirports}
-              route={currentRoute}
-              legAltitudes={legAltitudes}
-              legFeasibility={interactiveBuild?.feasibility ?? []}
-              stopRefuels={interactiveBuild?.stopRefuels ?? []}
-              distanceToDestNm={interactiveDistanceToDest}
-              rangeSolidNm={interactiveRings?.solid_nm ?? 0}
-              rangeDashedNm={interactiveRings?.dashed_nm ?? 0}
-              destInRange={
-                (interactiveRings?.solid_nm ?? 0) >= interactiveDistanceToDest
-              }
-              cruiseCeilingFt={
-                selectedAircraft.cruise[selectedAircraft.cruise.length - 1]
-                  ?.altitude_ft ?? 0
-              }
-              onRemoveStop={handleRemoveInteractiveStop}
-              onChangeLegAltitude={handleChangeLegAltitude}
-              onExit={handleExitInteractive}
-            />
-          )}
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Aircraft &amp; cruise
-          </h2>
-          <AircraftPanel
-            aircraft={allAircraft}
-            selectedSlug={selectedAircraft.slug}
-            onSelect={setAircraftSlug}
-            targetAltFt={targetAltFt}
-            onTargetAltChange={setTargetAltFt}
-            reserveMin={reserveMin}
-            onReserveChange={setReserveMin}
-            startingFuelGal={startingFuelGal}
-            onStartingFuelChange={setStartingFuelGal}
-            capacityGal={selectedAircraft.fuel.usable_capacity_gal}
-          />
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Runway check
-          </h2>
-          <RunwayPanel
-            settings={runwaySettings}
-            onChange={setRunwaySettings}
-            aircraftHasData={aircraftSupportsRunwayCheck(selectedAircraft)}
-            aircraftModel={selectedAircraft.model}
-          />
-        </section>
-        <section>
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">
-            Airport filters
-          </h2>
-          <FilterPanel
-            filters={filters}
-            onChange={setFilters}
-            matchCount={matches.length}
-            totalCount={datasets.airports.length}
-            hasApproachData={datasets.hasApproachData}
-            aircraftFuelType={selectedAircraft.fuel.type}
-            runwayCheckActive={runwayCheckActive}
-          />
-        </section>
+              )}
+            </Section>
+            <Section id="aircraft" title="Aircraft & cruise" collapsible={false}>
+              <AircraftPanel
+                aircraft={allAircraft}
+                selectedSlug={selectedAircraft.slug}
+                onSelect={setAircraftSlug}
+                targetAltFt={targetAltFt}
+                onTargetAltChange={setTargetAltFt}
+                reserveMin={reserveMin}
+                onReserveChange={setReserveMin}
+                startingFuelGal={startingFuelGal}
+                onStartingFuelChange={setStartingFuelGal}
+                capacityGal={selectedAircraft.fuel.usable_capacity_gal}
+              />
+            </Section>
+            <Section id="runway" title="Runway check" summary={runwayChip}>
+              <RunwayPanel
+                settings={runwaySettings}
+                onChange={setRunwaySettings}
+                aircraftHasData={aircraftSupportsRunwayCheck(selectedAircraft)}
+                aircraftModel={selectedAircraft.model}
+              />
+            </Section>
+            <Section id="filters" title="Airport filters" summary={filterChip}>
+              <FilterPanel
+                filters={filters}
+                onChange={setFilters}
+                matchCount={matches.length}
+                totalCount={datasets.airports.length}
+                hasApproachData={datasets.hasApproachData}
+                aircraftFuelType={selectedAircraft.fuel.type}
+                runwayCheckActive={runwayCheckActive}
+              />
+            </Section>
+          </div>
+          {/* Sticky footer inside the scroll container: the primary
+              action stays visible at every scroll position (T4). */}
+          <div className="sticky bottom-0 mt-4 space-y-2 border-t border-hairline bg-surface p-4">
+            {planningMode === "auto" ? (
+              <>
+                <button
+                  type="button"
+                  data-testid="plan-trip"
+                  data-state={planButtonState}
+                  onClick={isPlanning ? cancel : handlePlan}
+                  disabled={!dataReady}
+                  className="w-full rounded bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {!dataReady ? (
+                    "Loading airport database…"
+                  ) : isPlanning ? (
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <span
+                        data-testid="plan-trip-spinner"
+                        className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                      />
+                      Cancel
+                    </span>
+                  ) : (
+                    "Plan trip"
+                  )}
+                </button>
+                {isPlanning && (
+                  <p className="text-center text-xs text-muted" aria-live="polite">
+                    {progress
+                      ? `Planning… ${progress.expanded.toLocaleString()} airports considered · ${progress.found} route${progress.found === 1 ? "" : "s"} found`
+                      : "Planning…"}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleEnterInteractive()}
+                  disabled={!dataReady || !originAirport || !destinationAirport}
+                  className="w-full rounded px-3 py-1.5 text-xs font-medium text-muted hover:text-ink disabled:opacity-50"
+                >
+                  Build interactively →
+                </button>
+                {error && <p className="text-xs text-danger">{error}</p>}
+              </>
+            ) : (
+              <p className="text-center text-xs text-muted">
+                Interactive build — click airports on the map or pick from the
+                candidate list.
+              </p>
+            )}
+          </div>
+        </div>
       </aside>
       <main className="relative flex-1">
         <MapView
           airports={matches}
           route={currentRoute}
+          routeDimmed={isStale}
+          hoveredLegIndex={hoveredLegIndex}
+          highlightIdent={highlightIdent}
           onMoveStop={planningMode === "auto" ? handleMoveStop : undefined}
           terminalWarnings={terminalWarnings}
           interactive={
@@ -1106,41 +1500,218 @@ export function App() {
                 }
               : undefined
           }
+          onViewportChange={handleViewportChange}
+          mapApiRef={mapApiRef}
+        />
+        <MapLegend
+          interactiveMode={planningMode === "interactive"}
+          raised={profileOpen && !!routeProfile}
+        />
+        {routeProfile && !profileOpen && (
+          <button
+            type="button"
+            onClick={() => setProfileOpen(true)}
+            className="absolute bottom-3 right-3 z-10 rounded-md border border-hairline bg-card px-2.5 py-1.5 text-xs font-medium text-ink shadow-md hover:bg-surface"
+          >
+            Profile ▴
+          </button>
+        )}
+        {routeProfile && profileOpen && (
+          <RouteProfileDock
+            data={routeProfile}
+            subscribeViewport={subscribeViewport}
+            hoveredLegIndex={hoveredLegIndex}
+            onHoverLeg={setHoveredLegIndex}
+            onClose={() => setProfileOpen(false)}
+            onZoomAround={({ lat, lon, deltaZoom }) =>
+              mapApiRef.current?.zoomAround({ lat, lon }, deltaZoom)
+            }
+          />
+        )}
+        {/* Stale-plan callout in the map's line of sight: the dimmed
+            route needs an on-map explanation, not just the rail
+            banner (easy to miss while panning the chart). */}
+        {isStale && (
+          <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center px-4">
+            <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-caution bg-[color-mix(in_srgb,var(--caution)_14%,var(--card))] px-3 py-2 shadow-lg">
+              <p className="text-xs text-caution">
+                <strong>Plan out of date</strong>
+                {staleDiffs.length > 0 && <> — {staleDiffs[0]}</>}
+                {staleDiffs.length > 1 && <> and {staleDiffs.length - 1} more</>}
+                <span className="block text-ink opacity-70">
+                  The dimmed route was planned with your previous inputs.
+                </span>
+              </p>
+              <button
+                type="button"
+                onClick={handlePlan}
+                disabled={isPlanning}
+                className="shrink-0 rounded bg-caution px-2.5 py-1 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              >
+                Replan
+              </button>
+            </div>
+          </div>
+        )}
+        {!hasRailContent && planningMode === "auto" && (
+          <FirstRunHint origin={origin} destination={destination} />
+        )}
+        <Toast
+          toast={toast}
+          onDismiss={() => setToast(null)}
+          raised={profileOpen && !!routeProfile}
         />
       </main>
-      {(routes.length > 0 || (planningMode === "interactive" && currentRoute)) && (
-        <aside className="flex w-80 shrink-0 flex-col border-l border-slate-200 bg-slate-50">
-          <div className="flex-1 overflow-y-auto">
-            <LegTable
-              routes={planningMode === "interactive" && currentRoute ? [currentRoute] : routes}
-              selected={planningMode === "interactive" ? 0 : selectedRoute}
-              onSelect={planningMode === "interactive" ? () => {} : setSelectedRoute}
-              onExcludeStop={
-                planningMode === "interactive"
-                  ? () => {}
-                  : (id) => handleExcludeStops([id])
-              }
-              onReplaceStop={
-                planningMode === "interactive" ? () => {} : handleReplaceStop
-              }
+      {/* The right rail is always mounted (T7) so planning doesn't
+          reflow the map; before the first plan it shows an empty
+          state or the summary of a just-loaded saved trip. */}
+      <aside className="flex w-80 shrink-0 flex-col border-l border-hairline bg-surface">
+        {hasRailContent ? (
+          <>
+            {isStale && (
+              <div className="border-b border-hairline border-l-4 border-l-caution bg-[color-mix(in_srgb,var(--caution)_12%,transparent)] p-3">
+                <p className="text-xs text-caution">
+                  <strong>Inputs changed</strong> since this plan
+                  {staleDiffs.length > 0 && <> — {staleDiffs[0]}</>}
+                  {staleDiffs.length > 1 && (
+                    <> and {staleDiffs.length - 1} more</>
+                  )}
+                </p>
+                <button
+                  type="button"
+                  onClick={handlePlan}
+                  className="mt-2 w-full rounded bg-caution px-2 py-1 text-xs font-semibold text-white hover:opacity-90"
+                >
+                  Replan
+                </button>
+              </div>
+            )}
+            <div className="flex-1 overflow-y-auto">
+              <LegTable
+                routes={
+                  planningMode === "interactive" && currentRoute
+                    ? [currentRoute]
+                    : routes
+                }
+                selected={planningMode === "interactive" ? 0 : selectedRoute}
+                onSelect={
+                  planningMode === "interactive" ? () => {} : setSelectedRoute
+                }
+                onExcludeStop={
+                  planningMode === "interactive"
+                    ? () => {}
+                    : (id) => handleExcludeStops([id])
+                }
+                onReplaceStop={
+                  planningMode === "interactive" ? () => {} : handleReplaceStop
+                }
+                arrivalFuelGal={arrivalFuelGal}
+                reserveGal={reserveGal}
+                cautionFloorGal={cautionFloorGal}
+                reserveMin={reserveMin}
+                hoveredLegIndex={hoveredLegIndex}
+                onHoverLeg={setHoveredLegIndex}
+                onEditRoute={
+                  planningMode === "auto" && routes[selectedRoute]
+                    ? () => handleEnterInteractive(routes[selectedRoute])
+                    : undefined
+                }
+                onShowProfile={
+                  routeProfile ? () => setProfileOpen(true) : undefined
+                }
+              />
+            </div>
+            <RouteIssuesPanel
+              issues={routeIssues}
+              hoveredLegIndex={hoveredLegIndex}
+              onHoverLeg={setHoveredLegIndex}
             />
+            {planningMode === "auto" &&
+              routes[selectedRoute] &&
+              routes[selectedRoute].legs.length > 1 && (
+                <WhyStopsPanel
+                  // Remount per route so explanations cached on first
+                  // expand never go stale after a replan.
+                  key={routes[selectedRoute].legs
+                    .map((l) => l.toAirport.id)
+                    .join(">")}
+                  getExplanations={() =>
+                    explainStopChoices({
+                      route: routes[selectedRoute],
+                      matches,
+                      // Pool BEFORE the runway-fit filter, so a stop that
+                      // was dropped only for a tight/short runway can
+                      // still surface as an alternative (with that as its
+                      // reason) rather than silently vanishing.
+                      baseMatches,
+                      aircraft: selectedAircraft,
+                      targetAltFt,
+                      flightRule,
+                      reserveHr: reserveMin / 60,
+                      startingFuelGal,
+                      variation: variationFn,
+                      dem: demReady ? demSampler : undefined,
+                      pinnedStopIds: new Set(pinnedStopIds),
+                      runwaySettings,
+                      maxLegHr: capLegTime ? maxLegHr : undefined,
+                    })
+                  }
+                  onHoverAirport={setHighlightIdent}
+                />
+              )}
+            {currentRoute && (
+              <ExportPanel
+                route={currentRoute}
+                aircraft={selectedAircraft}
+                terrain={terrain}
+              />
+            )}
+          </>
+        ) : loadedTripSummary ? (
+          <div className="space-y-3 p-4">
+            <div className="rounded border border-hairline bg-card p-3">
+              <p className="text-xs font-semibold text-ink">
+                Saved route summary
+              </p>
+              <p className="mt-1 font-mono text-xs text-ink">
+                {[origin, ...loadedTripSummary.stopIdents, destination].map(
+                  (id, i) => (
+                    <span key={i}>
+                      {i > 0 && <span className="text-muted"> → </span>}
+                      <AirportLink ident={id} />
+                    </span>
+                  ),
+                )}
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                {loadedTripSummary.distance_nm.toFixed(0)} nm ·{" "}
+                {loadedTripSummary.time_hr.toFixed(1)} hr ·{" "}
+                {loadedTripSummary.fuel_gal.toFixed(1)} gal
+              </p>
+            </div>
+            <div className="rounded border border-hairline bg-card p-3">
+              <p className="text-xs text-caution">
+                <strong>Inputs may have changed</strong> since this trip was
+                saved — replan to refresh the route.
+              </p>
+              <button
+                type="button"
+                onClick={handlePlan}
+                disabled={!dataReady || isPlanning}
+                className="mt-2 w-full rounded bg-caution px-2 py-1 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              >
+                Replan
+              </button>
+            </div>
           </div>
-          <TerrainPanel
-            analysis={terrain}
-            targetAltFt={targetAltFt}
-            onReplanAtMinSafe={handleReplanAtMinSafe}
-            terminalWarnings={terminalWarnings}
-          />
-          <RunwayWarnings warnings={runwayWarnings} />
-          {currentRoute && (
-            <ExportPanel
-              route={currentRoute}
-              aircraft={selectedAircraft}
-              terrain={terrain}
-            />
-          )}
-        </aside>
-      )}
+        ) : (
+          <div className="flex flex-1 items-center justify-center p-6">
+            <p className="text-center text-xs text-muted">
+              Plan a trip to see legs, fuel, and route issues.
+            </p>
+          </div>
+        )}
+      </aside>
     </div>
   );
 }

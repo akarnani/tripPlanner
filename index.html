@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Trip Planner</title>
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("theme") || "auto";
+          var prefersDark =
+            typeof matchMedia === "function" &&
+            matchMedia("(prefers-color-scheme: dark)").matches;
+          var dark = stored === "dark" || (stored === "auto" && prefersDark);
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (e) {
+          /* ignore */
+        }
+      })();
+    </script>
   </head>
   <body class="h-screen w-screen overflow-hidden">
     <div id="root" class="h-full w-full"></div>

@@ -58,8 +58,9 @@ export interface TerrainAnalysis {
   samples: TerrainSample[];
   warnings: TerrainWarning[];
   perLeg: PerLegAnalysis[];
-  /** Single global "if you replan, target at least this" altitude, the
-   *  max of all legs' hemispheric min-safe altitudes. The engine then
+  /** Single global "if you replan, target at least this" altitude:
+   *  the max hemispheric min-safe altitude across the legs that
+   *  warned (route-wide max when nothing warned). The engine then
    *  re-rounds per leg as legs go opposite directions. */
   replanTargetFt: number;
 }
@@ -188,7 +189,17 @@ export function analyzeTerrain(input: AnalyzeInput): TerrainAnalysis {
     }
   });
 
-  const replanTargetFt = perLeg.reduce((m, l) => Math.max(m, l.minSafeAltFt), 0);
+  // Suggested replan target. Only legs that actually warned drive it:
+  // the planner may already have lifted other legs' cruise altitudes
+  // well above the shared target, and folding their (higher) min-safe
+  // altitudes into the suggestion produces a "replan several thousand
+  // feet up" prompt for a route whose only real problem is one
+  // marginal leg. With no warnings, fall back to the route-wide max so
+  // the value still reads as "lowest target that clears everything".
+  const warnedLegs = new Set(warnings.map((w) => w.legIndex));
+  const replanTargetFt = perLeg
+    .filter((l) => warnedLegs.size === 0 || warnedLegs.has(l.legIndex))
+    .reduce((m, l) => Math.max(m, l.minSafeAltFt), 0);
 
   return { samples, warnings, perLeg, replanTargetFt };
 }

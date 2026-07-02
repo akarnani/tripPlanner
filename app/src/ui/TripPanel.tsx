@@ -11,12 +11,6 @@ interface Props {
   onCapLegTimeChange: (b: boolean) => void;
   maxLegHr: number;
   onMaxLegHrChange: (h: number) => void;
-  onPlan: () => void;
-  /** When true, the Plan button shows a spinner and is disabled. */
-  isPlanning: boolean;
-  /** When true, the Plan button is disabled with a "loading…" label. */
-  dataReady: boolean;
-  error: string | null;
 }
 
 export function TripPanel({
@@ -30,24 +24,14 @@ export function TripPanel({
   onCapLegTimeChange,
   maxLegHr,
   onMaxLegHrChange,
-  onPlan,
-  isPlanning,
-  dataReady,
-  error,
 }: Props) {
-  const buttonLabel = !dataReady
-    ? "Loading airport database…"
-    : isPlanning
-      ? "Planning…"
-      : "Plan trip";
-  const buttonDisabled = !dataReady || isPlanning;
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label
             htmlFor="origin"
-            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+            className="block text-xs font-medium uppercase tracking-wide text-muted"
           >
             From
           </label>
@@ -57,13 +41,13 @@ export function TripPanel({
             value={origin}
             onChange={(e) => onOriginChange(e.target.value.toUpperCase())}
             placeholder="KSEA"
-            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-sm uppercase"
+            className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-sm uppercase text-ink"
           />
         </div>
         <div>
           <label
             htmlFor="destination"
-            className="block text-xs font-medium uppercase tracking-wide text-slate-500"
+            className="block text-xs font-medium uppercase tracking-wide text-muted"
           >
             To
           </label>
@@ -73,15 +57,15 @@ export function TripPanel({
             value={destination}
             onChange={(e) => onDestinationChange(e.target.value.toUpperCase())}
             placeholder="KBOI"
-            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 font-mono text-sm uppercase"
+            className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-sm uppercase text-ink"
           />
         </div>
       </div>
       <div>
-        <span className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+        <span className="block text-xs font-medium uppercase tracking-wide text-muted">
           Flight rule
         </span>
-        <div className="mt-1 inline-flex overflow-hidden rounded border border-slate-300">
+        <div className="mt-1 inline-flex overflow-hidden rounded border border-hairline-input">
           {(["VFR", "IFR"] as FlightRule[]).map((r) => (
             <button
               key={r}
@@ -90,22 +74,22 @@ export function TripPanel({
               className={
                 "px-3 py-1 text-xs font-semibold " +
                 (flightRule === r
-                  ? "bg-slate-900 text-white"
-                  : "bg-white text-slate-700 hover:bg-slate-100")
+                  ? "bg-accent text-white"
+                  : "bg-card text-ink hover:bg-surface")
               }
             >
               {r}
             </button>
           ))}
         </div>
-        <p className="mt-1 text-[11px] text-slate-500">
+        <p className="mt-1 text-xs text-muted">
           {flightRule === "VFR"
             ? "Cruise altitudes round to odd-/even-thousands + 500."
             : "Cruise altitudes round to odd/even thousands."}
         </p>
       </div>
       <div>
-        <label className="flex items-center gap-2 text-xs text-slate-700">
+        <label className="flex items-center gap-2 text-xs text-ink">
           <input
             type="checkbox"
             checked={capLegTime}
@@ -124,35 +108,11 @@ export function TripPanel({
             onChange={(e) =>
               onMaxLegHrChange(Number.parseFloat(e.target.value) || 2)
             }
-            className="w-14 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-sm disabled:bg-slate-100 disabled:text-slate-400"
+            className="w-14 rounded border border-hairline-input bg-card px-1.5 py-0.5 text-sm text-ink disabled:bg-surface disabled:text-muted"
           />
           hours
         </label>
       </div>
-      <button
-        type="button"
-        data-testid="plan-trip"
-        data-state={
-          !dataReady ? "loading" : isPlanning ? "planning" : "idle"
-        }
-        onClick={onPlan}
-        disabled={buttonDisabled}
-        className="flex w-full items-center justify-center gap-2 rounded bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:bg-slate-400"
-      >
-        {(isPlanning || !dataReady) && (
-          <span
-            aria-hidden="true"
-            data-testid="plan-trip-spinner"
-            className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent"
-          />
-        )}
-        {buttonLabel}
-      </button>
-      <p className="text-[11px] text-slate-500">
-        Each plan returns one route per objective (fewest stops, shortest
-        time). Duplicates are dropped.
-      </p>
-      {error && <p className="text-xs text-red-600">{error}</p>}
     </div>
   );
 }

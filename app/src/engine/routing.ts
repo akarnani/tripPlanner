@@ -232,9 +232,16 @@ function climbSpeedKt(_aircraft: Aircraft, cruise_tas_kt: number): number {
 
 export type CostFn = (edge: Edge) => number;
 
+/** Reported at most every ~500 node expansions, plus immediately
+ *  whenever a new route is found. */
+export type SearchProgress = { expanded: number; found: number };
+
 interface DijkstraOptions {
   bannedEdges?: Set<string>; // "from→to" keys
   bannedNodes?: Set<string>;
+  /** Called once per node popped off the frontier (i.e. per node
+   *  "expanded"). Callers throttle; this fires unconditionally. */
+  onExpand?: () => void;
 }
 
 function edgeKey(e: Edge): string {
@@ -268,6 +275,7 @@ function dijkstra(
     if (u === null) return null;
     if (u === end) break;
     visited.add(u);
+    opts.onExpand?.();
 
     for (const edge of graph.neighbors(u)) {
       if (opts.bannedNodes?.has(edge.to)) continue;
@@ -301,13 +309,43 @@ function pathKey(p: Path): string {
   return p.nodes.join("");
 }
 
+const PROGRESS_EXPANSION_INTERVAL = 500;
+
 /**
  * Yen's K-shortest-paths. Returns up to K distinct loop-free paths from
  * the origin to the destination, sorted by ascending cost.
+ *
+ * `onProgress`, when given, is invoked with a running node-expansion
+ * count (across every Dijkstra call this search performs, main + spurs)
+ * throttled to roughly every 500 expansions, plus immediately whenever
+ * a route is added to the result set.
  */
-export function kShortestPaths(graph: Graph, cost: CostFn, K: number): Path[] {
-  const first = dijkstra(graph, graph.origin, graph.destination, cost);
+export function kShortestPaths(
+  graph: Graph,
+  cost: CostFn,
+  K: number,
+  onProgress?: (p: SearchProgress) => void,
+): Path[] {
+  let expanded = 0;
+  let found = 0;
+  let lastReported = 0;
+  const onExpand = onProgress
+    ? () => {
+        expanded++;
+        if (expanded - lastReported >= PROGRESS_EXPANSION_INTERVAL) {
+          lastReported = expanded;
+          onProgress({ expanded, found });
+        }
+      }
+    : undefined;
+  const reportFound = () => onProgress?.({ expanded, found });
+
+  const first = dijkstra(graph, graph.origin, graph.destination, cost, {
+    onExpand,
+  });
   if (!first) return [];
+  found++;
+  reportFound();
   const A: Path[] = [first];
   const B: Path[] = [];
   const seen = new Set<string>([pathKey(first)]);
@@ -333,6 +371,7 @@ export function kShortestPaths(graph: Graph, cost: CostFn, K: number): Path[] {
       const spurPath = dijkstra(graph, spurNode, graph.destination, cost, {
         bannedEdges,
         bannedNodes,
+        onExpand,
       });
       if (!spurPath) continue;
 
@@ -351,6 +390,8 @@ export function kShortestPaths(graph: Graph, cost: CostFn, K: number): Path[] {
     if (B.length === 0) break;
     B.sort((a, b) => a.cost - b.cost);
     A.push(B.shift()!);
+    found++;
+    reportFound();
   }
   return A;
 }

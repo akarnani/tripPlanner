@@ -18,6 +18,26 @@ async function parseMatchCount(page: Page): Promise<number> {
   return m ? Number(m[1].replace(/,/g, "")) : 0;
 }
 
+/** Runway check + airport filters live in collapsed accordions (T4);
+ *  expand one by its header title before poking its controls. */
+async function openSection(page: Page, title: string): Promise<void> {
+  const header = page.getByRole("button", { name: new RegExp(title) });
+  if ((await header.getAttribute("aria-expanded")) !== "true") {
+    await header.click();
+  }
+}
+
+async function planAndWaitForRoute(page: Page): Promise<void> {
+  await page.getByTestId("plan-trip").click();
+  await expect(
+    page.getByRole("button", { name: /Total time · \d+ stop/ }).first(),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("plan-trip")).toHaveAttribute(
+    "data-state",
+    "idle",
+  );
+}
+
 test.describe("trip planner smoke", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
@@ -31,7 +51,7 @@ test.describe("trip planner smoke", () => {
     await expect(page.getByLabel("From", { exact: true })).toHaveValue("KSEA");
     await expect(page.getByLabel("To", { exact: true })).toHaveValue("KBOI");
     await expect(page.getByRole("button", { name: "VFR" })).toHaveClass(
-      /bg-slate-900/,
+      /bg-accent/,
     );
   });
 
@@ -133,6 +153,30 @@ test.describe("trip planner smoke", () => {
     await expect(firstAltCell).toHaveText(/^\d+,?\d*$/);
     const altText = (await firstAltCell.textContent()) ?? "";
     expect(altText.replace(/,/g, "")).toMatch(/500$/);
+
+    // The route-profile panel opens on its own with the plan (as soon
+    // as the DEM grid is up — no click required).
+    await expect(page.getByTestId("route-profile")).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(
+      page.getByRole("img", { name: /Route altitude profile/ }),
+    ).toBeVisible();
+    // The dock (RouteProfileDock) subscribes to the map viewport and
+    // feeds the window down; with the map fit to the whole route it
+    // should report a non-degenerate "N–M nm of T nm" span.
+    await expect(
+      page.getByTestId("route-profile").getByText(/\d+–\d+ nm of \d+ nm/),
+    ).toBeVisible();
+    // The × closes it; a leg-row click and the Profile toggle both
+    // bring it back.
+    await page.getByRole("button", { name: "Close route profile" }).click();
+    await expect(page.getByTestId("route-profile")).not.toBeVisible();
+    await page.locator("table tbody tr").first().click();
+    await expect(page.getByTestId("route-profile")).toBeVisible();
+    await page.getByRole("button", { name: "Close route profile" }).click();
+    await page.getByRole("button", { name: "Profile ▴" }).click();
+    await expect(page.getByTestId("route-profile")).toBeVisible();
   });
 
   test("flipping VFR → IFR drops the +500 from every leg altitude", async ({
@@ -173,6 +217,7 @@ test.describe("trip planner smoke", () => {
   test("min-runway filter changes the airport match count", async ({
     page,
   }) => {
+    await openSection(page, "Airport filters");
     const before = await parseMatchCount(page);
     await page.getByLabel("Minimum runway length (ft)").fill("8000");
     await expect.poll(() => parseMatchCount(page)).not.toBe(before);
@@ -181,6 +226,7 @@ test.describe("trip planner smoke", () => {
   test("Precision approach filter restricts the match count below 'no filter'", async ({
     page,
   }) => {
+    await openSection(page, "Airport filters");
     const select = page.getByLabel("Approach");
     if (!(await select.isEnabled())) test.skip();
 
@@ -220,7 +266,7 @@ test.describe("trip planner smoke", () => {
     const before = Number((await targetInput.inputValue()) ?? "0");
 
     const replan = page.getByRole("button", {
-      name: /Replan with .* ft target/,
+      name: /Replan at [\d,]+ ft/,
     });
     if (await replan.isVisible()) {
       await replan.click();
@@ -269,5 +315,156 @@ test.describe("trip planner smoke", () => {
     // Returning to auto mode brings the Plan button back.
     await page.getByRole("button", { name: "Switch to auto plan" }).click();
     await expect(page.getByTestId("plan-trip")).toBeVisible();
+  });
+
+  test("changing an input after planning shows the stale banner; Replan clears it", async ({
+    page,
+  }) => {
+    await planAndWaitForRoute(page);
+    await expect(page.getByText("Inputs changed")).not.toBeVisible();
+
+    // Bump the cruise altitude — the plan no longer matches the inputs.
+    await page.getByLabel("Target altitude (ft)").fill("8500");
+    const banner = page.getByText("Inputs changed");
+    await expect(banner).toBeVisible();
+
+    // The rendered route dims along with the banner (dev builds expose
+    // the map as window.__tripPlannerMap).
+    const routeOpacity = () =>
+      page.evaluate(() => {
+        const map = (
+          window as unknown as {
+            __tripPlannerMap?: {
+              getLayer(id: string): unknown;
+              getPaintProperty(id: string, prop: string): unknown;
+            };
+          }
+        ).__tripPlannerMap;
+        if (!map?.getLayer("route-line")) return -1;
+        return map.getPaintProperty("route-line", "line-opacity") as number;
+      });
+    await expect.poll(routeOpacity, { timeout: 15_000 }).toBe(0.4);
+
+    // The on-map callout explains the dimmed route in line of sight.
+    const mapCallout = page.getByText("Plan out of date");
+    await expect(mapCallout).toBeVisible();
+
+    // Two Replan buttons while stale (rail banner + map callout);
+    // either clears the state.
+    await page
+      .getByRole("button", { name: "Replan", exact: true })
+      .first()
+      .click();
+    await expect(banner).not.toBeVisible({ timeout: 30_000 });
+    await expect(mapCallout).not.toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("plan-trip")).toHaveAttribute(
+      "data-state",
+      "idle",
+      { timeout: 30_000 },
+    );
+  });
+
+  test("excluding a stop shows an undo toast; undo restores the route instantly", async ({
+    page,
+  }) => {
+    // Cap legs at 1 hr so KSEA→KBOI needs intermediate stops — the
+    // exclude × only renders on legs that end at a replaceable stop.
+    await page.getByRole("checkbox", { name: /Cap each leg/ }).check();
+    await page.locator("#max-leg-hr").fill("1");
+    await planAndWaitForRoute(page);
+    const legRows = page.locator("table tbody tr");
+    const legCountBefore = await legRows.count();
+    expect(legCountBefore).toBeGreaterThan(1);
+
+    // Exclude the first intermediate stop via its × button.
+    await page
+      .getByRole("button", { name: /^Exclude / })
+      .first()
+      .click();
+    await expect(page.getByText(/excluded — route replanned/)).toBeVisible();
+
+    // Undo restores the previous routes synchronously — no waiting on
+    // a replan.
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(
+      page.getByText(/excluded — route replanned/),
+    ).not.toBeVisible();
+    await expect(legRows).toHaveCount(legCountBefore);
+  });
+
+  test("loading a saved trip auto-plans it — no second click", async ({
+    page,
+  }) => {
+    await planAndWaitForRoute(page);
+
+    // Save under the default name via the header popover.
+    await page.getByRole("button", { name: "Saved trips ▾" }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Saved ✓" })).toBeVisible();
+    // fill() below doesn't dispatch a pointerdown, so close the
+    // popover explicitly before touching the form.
+    await page.keyboard.press("Escape");
+
+    // Change the destination so the loaded trip has real work to do.
+    await page.getByLabel("To", { exact: true }).fill("KPDX");
+
+    // Load it back: planning must start on its own and produce the
+    // saved trip's route.
+    await page.getByRole("button", { name: "Saved trips ▾" }).click();
+    await page
+      .getByRole("button", { name: /KSEA → KBOI/ })
+      .first()
+      .click();
+    await expect(
+      page.getByRole("button", { name: /Total time · \d+ stop/ }).first(),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("plan-trip")).toHaveAttribute(
+      "data-state",
+      "idle",
+      { timeout: 30_000 },
+    );
+    await expect(page.getByLabel("To", { exact: true })).toHaveValue("KBOI");
+    await expect(page.getByText("Inputs changed")).not.toBeVisible();
+  });
+
+  test("theme toggle switches to dark mode and persists across reload", async ({
+    page,
+  }) => {
+    const html = page.locator("html");
+    await expect(html).not.toHaveClass(/dark/);
+
+    // Wait for the initial style + custom layers (dev builds expose
+    // the map instance as window.__tripPlannerMap for exactly this).
+    const airportLayers = () =>
+      page.evaluate(() => {
+        const map = (
+          window as unknown as {
+            __tripPlannerMap?: {
+              getLayer(id: string): unknown;
+              isStyleLoaded(): boolean;
+            };
+          }
+        ).__tripPlannerMap;
+        if (!map || !map.isStyleLoaded()) return -1;
+        return ["airports-towered", "airports-nontowered", "route-line"].filter(
+          (id) => !!map.getLayer(id),
+        ).length;
+      });
+    await expect.poll(airportLayers, { timeout: 30_000 }).toBe(3);
+
+    await page.getByRole("radio", { name: "Dark" }).click();
+    await expect(html).toHaveClass(/dark/);
+
+    // setStyle() drops every runtime-added layer; registerLayers must
+    // put them back once the dark basemap's style loads. A diff-based
+    // setStyle silently skips that reload — this catches it.
+    await expect.poll(airportLayers, { timeout: 30_000 }).toBe(3);
+
+    await page.reload();
+    await expect(
+      page.getByRole("heading", { name: "Trip Planner" }),
+    ).toBeVisible();
+    await expect(html).toHaveClass(/dark/);
+    await expect.poll(airportLayers, { timeout: 30_000 }).toBe(3);
   });
 });
