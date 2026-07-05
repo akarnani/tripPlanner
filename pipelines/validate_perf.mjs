@@ -124,11 +124,17 @@ function validate(file, data) {
         return fail(file, `${where}: total_50ft_ft must be ≥ ground_roll_ft`);
     }
     // Group rows by weight tier (using the explicit weight_lb if
-    // present, otherwise the table's reference weight). Each tier
-    // must form a complete (pressure_alt × temp) grid — pilots
-    // reading a missing cell off a partial grid would silently get
-    // the wrong distance, so we fail validation rather than
-    // interpolate over a hole.
+    // present, otherwise the table's reference weight). A tier need
+    // not be a full rectangle — POH charts leave the hot/high corner
+    // blank when it's out of the demonstrated envelope, and per
+    // CLAUDE.md we drop those corners rather than guess. But blanks
+    // are only allowed in that corner: the published cells must be
+    // "downward-closed" — if a cell (alt, temp) is present, every
+    // cooler-and-lower cell (alt' ≤ alt, temp' ≤ temp) must be
+    // present too. That still catches an accidental interior hole
+    // (which would make the lookup silently read the wrong cell)
+    // while permitting the genuine out-of-envelope corner. Duplicate
+    // (alt, temp) cells within a tier are also rejected.
     const refWeight =
       phase === "landing"
         ? (data.weights.max_landing_lb ?? data.weights.max_gross_lb)
@@ -138,19 +144,33 @@ function validate(file, data) {
       const w = row.weight_lb ?? refWeight;
       let tier = tiers.get(w);
       if (!tier) {
-        tier = { rows: [], alts: new Set(), temps: new Set() };
+        tier = { rows: [], alts: new Set(), temps: new Set(), cells: new Set() };
         tiers.set(w, tier);
       }
+      const key = `${row.pressure_alt_ft}|${row.temp_c}`;
+      if (tier.cells.has(key))
+        return fail(
+          file,
+          `${phase}.distance_table at weight=${w} has a duplicate cell (alt=${row.pressure_alt_ft}, temp=${row.temp_c})`,
+        );
       tier.rows.push(row);
       tier.alts.add(row.pressure_alt_ft);
       tier.temps.add(row.temp_c);
+      tier.cells.add(key);
     }
     for (const [w, tier] of tiers) {
-      if (tier.rows.length !== tier.alts.size * tier.temps.size) {
-        return fail(
-          file,
-          `${phase}.distance_table at weight=${w} is not a complete grid (${tier.alts.size} altitudes × ${tier.temps.size} temps = ${tier.alts.size * tier.temps.size} cells expected, got ${tier.rows.length})`,
-        );
+      for (const row of tier.rows) {
+        for (const a of tier.alts) {
+          if (a > row.pressure_alt_ft) continue;
+          for (const t of tier.temps) {
+            if (t > row.temp_c) continue;
+            if (!tier.cells.has(`${a}|${t}`))
+              return fail(
+                file,
+                `${phase}.distance_table at weight=${w} has a hole at (alt=${a}, temp=${t}) below published cell (alt=${row.pressure_alt_ft}, temp=${row.temp_c}) — blanks are only allowed in the hot/high out-of-envelope corner`,
+              );
+          }
+        }
       }
     }
   }

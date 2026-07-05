@@ -43,7 +43,16 @@ export function oatFromIsaDelta(
  *  envelope; the corner is the closest published answer). Inputs
  *  below the smallest published value also clamp to the smallest
  *  cell — same rule, conservatively returns whatever the POH
- *  actually printed nearest the request. */
+ *  actually printed nearest the request.
+ *
+ *  Ragged grids: POH charts leave the hot/high corner blank when
+ *  it's out of the demonstrated envelope, so the next-higher cell a
+ *  request rounds up to may not exist. Rather than throw or
+ *  extrapolate, fall back to the most-demanding published cell the
+ *  request still dominates (pressure_alt ≤ a and temp ≤ t) — a
+ *  conservative lower bound that never reads an optimistically short
+ *  number. On a complete grid the rounded-up cell is itself that
+ *  maximum, so this is a no-op there. */
 export function lookupRunwayDistance(
   table: readonly RunwayDistanceRow[],
   weight_lb: number,
@@ -60,9 +69,19 @@ export function lookupRunwayDistance(
   const temps = uniqueAscending(subset.map((r) => r.temp_c));
   const a = nextHigherOrMax(alts, pressure_alt_ft);
   const t = nextHigherOrMax(temps, temp_c);
-  const row = subset.find(
-    (r) => r.pressure_alt_ft === a && r.temp_c === t,
-  );
+  let row = subset.find((r) => r.pressure_alt_ft === a && r.temp_c === t);
+  if (!row) {
+    // Blank out-of-envelope corner: no cell at the rounded-up
+    // (alt, temp). Take the most-demanding published cell the
+    // request still dominates — the conservative published answer,
+    // never an optimistic one, and never an extrapolation. The
+    // bottom-left cell always exists (grids are downward-closed), so
+    // this set is non-empty.
+    for (const r of subset) {
+      if (r.pressure_alt_ft > a || r.temp_c > t) continue;
+      if (!row || r.total_50ft_ft > row.total_50ft_ft) row = r;
+    }
+  }
   if (!row) {
     throw new Error(
       `lookupRunwayDistance: missing cell at weight=${w}, alt=${a}, temp=${t}`,

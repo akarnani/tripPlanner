@@ -128,6 +128,28 @@ describe("lookupRunwayDistance", () => {
     const b = lookupRunwayDistance(TIERED_TABLE, 2200, 0, 0);
     expect(a.ground_roll_ft).toBe(b.ground_roll_ft);
   });
+
+  test("ragged grid: a blank hot/high corner falls back to the worst dominated cell", () => {
+    // The POH leaves the 4,000 ft × 20 °C corner blank (out of
+    // envelope). A request that rounds up into that corner must NOT
+    // throw and must NOT read an optimistically short number — it
+    // returns the most-demanding published cell the request still
+    // dominates (here 4,000 ft × 0 °C, the largest total in the
+    // remaining grid).
+    const RAGGED = [
+      { weight_lb: 2550, pressure_alt_ft: 0, temp_c: 0, ground_roll_ft: 800, total_50ft_ft: 1400 },
+      { weight_lb: 2550, pressure_alt_ft: 0, temp_c: 20, ground_roll_ft: 900, total_50ft_ft: 1600 },
+      { weight_lb: 2550, pressure_alt_ft: 4000, temp_c: 0, ground_roll_ft: 1000, total_50ft_ft: 1800 },
+      // 4,000 ft × 20 °C intentionally omitted (blank corner)
+    ];
+    const r = lookupRunwayDistance(RAGGED, 2550, 4000, 20);
+    expect(r.ground_roll_ft).toBe(1000); // 4,000 ft × 0 °C
+    expect(r.total_50ft_ft).toBe(1800);
+    // In-envelope cells are unaffected.
+    const inGrid = lookupRunwayDistance(RAGGED, 2550, 0, 20);
+    expect(inGrid.ground_roll_ft).toBe(900);
+    expect(inGrid.total_50ft_ft).toBe(1600);
+  });
 });
 
 describe("requiredTakeoffDistance / requiredLandingDistance", () => {
