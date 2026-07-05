@@ -104,9 +104,10 @@ climb:
 # Short-field takeoff at 3,100 lb max gross from POH Section 5,
 # Figure 5-4 sheet 1 of 2. Conditions: flaps 20°, 2400 RPM and full
 # throttle prior to brake release, cowl flaps open, paved/level/dry,
-# zero wind. The published table extends to 8,000 ft × 40 °C but the
-# high-altitude/high-temp corners are blank; the engine-readable
-# subset is SL → 6,000 ft × 0–40 °C.
+# zero wind. Full published extent SL → 8,000 ft × 0–40 °C. The
+# 7,000 ft/40 °C and 8,000 ft/30–40 °C corners are blank in the POH
+# (out of envelope) and are omitted rather than guessed — the runway
+# lookup treats a request landing in a blank corner conservatively.
 takeoff:
   distance_table:
     - { pressure_alt_ft: 0,    temp_c: 0,  ground_roll_ft: 735,  total_50ft_ft: 1410 }
@@ -144,6 +145,13 @@ takeoff:
     - { pressure_alt_ft: 6000, temp_c: 20, ground_roll_ft: 1460, total_50ft_ft: 3030 }
     - { pressure_alt_ft: 6000, temp_c: 30, ground_roll_ft: 1570, total_50ft_ft: 3310 }
     - { pressure_alt_ft: 6000, temp_c: 40, ground_roll_ft: 1685, total_50ft_ft: 3635 }
+    - { pressure_alt_ft: 7000, temp_c: 0,  ground_roll_ft: 1380, total_50ft_ft: 2870 }
+    - { pressure_alt_ft: 7000, temp_c: 10, ground_roll_ft: 1490, total_50ft_ft: 3140 }
+    - { pressure_alt_ft: 7000, temp_c: 20, ground_roll_ft: 1605, total_50ft_ft: 3450 }
+    - { pressure_alt_ft: 7000, temp_c: 30, ground_roll_ft: 1730, total_50ft_ft: 3805 }
+    - { pressure_alt_ft: 8000, temp_c: 0,  ground_roll_ft: 1520, total_50ft_ft: 3260 }
+    - { pressure_alt_ft: 8000, temp_c: 10, ground_roll_ft: 1640, total_50ft_ft: 3600 }
+    - { pressure_alt_ft: 8000, temp_c: 20, ground_roll_ft: 1770, total_50ft_ft: 3990 }
 # Short-field landing at 3,100 lb from POH Section 5, Figure 5-10.
 # Conditions: flaps 40°, power off, maximum braking, paved/level/dry,
 # zero wind. Speed at 50 ft: 66 KIAS.
