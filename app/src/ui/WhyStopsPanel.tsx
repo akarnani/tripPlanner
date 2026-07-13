@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AirportLink } from "./AirportLink";
+import { useMediaQuery } from "./useMediaQuery";
 import type { StopAlternative, StopExplanation } from "@/engine/stopAlternatives";
 
 interface Props {
@@ -34,6 +35,9 @@ export function WhyStopsPanel({ getExplanations, onHoverAirport }: Props) {
   const [explanations, setExplanations] = useState<StopExplanation[] | null>(
     null,
   );
+  // Touch has no hover; tap an alternative to toggle its map highlight.
+  const coarse = useMediaQuery("(pointer: coarse)");
+  const [tappedIdent, setTappedIdent] = useState<string | null>(null);
 
   // Once we know (post-expand) that there's nothing to explain — a
   // direct route with no intermediate stops — hide the whole
@@ -102,9 +106,31 @@ export function WhyStopsPanel({ getExplanations, onHoverAirport }: Props) {
                         {exp.alternatives.map((alt) => (
                           <li
                             key={alt.airport.id}
-                            onMouseEnter={() => onHoverAirport?.(identOf(alt))}
-                            onMouseLeave={() => onHoverAirport?.(null)}
-                            className="flex min-h-[24px] flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-surface"
+                            onMouseEnter={
+                              coarse
+                                ? undefined
+                                : () => onHoverAirport?.(identOf(alt))
+                            }
+                            onMouseLeave={
+                              coarse ? undefined : () => onHoverAirport?.(null)
+                            }
+                            onClick={
+                              coarse
+                                ? () => {
+                                    const id = identOf(alt);
+                                    const next = tappedIdent === id ? null : id;
+                                    setTappedIdent(next);
+                                    onHoverAirport?.(next);
+                                  }
+                                : undefined
+                            }
+                            className={
+                              "flex min-h-[24px] flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-surface " +
+                              (coarse ? "cursor-pointer " : "") +
+                              (coarse && tappedIdent === identOf(alt)
+                                ? "bg-surface"
+                                : "")
+                            }
                           >
                             <span className="shrink-0 font-mono text-xs font-semibold text-ink">
                               <AirportLink ident={identOf(alt)} />

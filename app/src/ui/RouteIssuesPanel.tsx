@@ -1,5 +1,6 @@
 import type { RouteIssue } from "@/engine/routeIssues";
 import { AirportLink } from "./AirportLink";
+import { useMediaQuery } from "./useMediaQuery";
 
 /** A route issue's ident is either a single airport ("KGEG") or a
  *  cruise pair ("KGEG→KBOI"); link each airport part to AirNav while
@@ -33,6 +34,8 @@ const PHASE_LABEL: Record<RouteIssue["phase"], string> = {
  *  list. Hovering a row surfaces the leg it belongs to (leg table
  *  row + map segment) via `onHoverLeg`. */
 export function RouteIssuesPanel({ issues, hoveredLegIndex, onHoverLeg }: Props) {
+  // Touch has no hover; tap a row to toggle its leg highlight instead.
+  const coarse = useMediaQuery("(pointer: coarse)");
   if (issues.length === 0) {
     return (
       <div className="flex items-center gap-2.5 rounded-md border border-hairline bg-card px-3 py-2.5 shadow-sm">
@@ -71,10 +74,16 @@ export function RouteIssuesPanel({ issues, hoveredLegIndex, onHoverLeg }: Props)
           return (
             <li
               key={i}
-              onMouseEnter={() => onHoverLeg(issue.legIndex)}
-              onMouseLeave={() => onHoverLeg(null)}
+              onMouseEnter={coarse ? undefined : () => onHoverLeg(issue.legIndex)}
+              onMouseLeave={coarse ? undefined : () => onHoverLeg(null)}
+              onClick={
+                coarse
+                  ? () => onHoverLeg(isHovered ? null : issue.legIndex)
+                  : undefined
+              }
               className={
                 "flex gap-2.5 border-l-4 px-3 py-2.5 " +
+                (coarse ? "cursor-pointer " : "") +
                 (i < issues.length - 1 ? "border-b border-b-hairline " : "") +
                 (issue.severity === "danger"
                   ? "border-l-danger "
@@ -116,7 +125,8 @@ export function RouteIssuesPanel({ issues, hoveredLegIndex, onHoverLeg }: Props)
         })}
       </ul>
       <div className="border-t border-hairline bg-surface px-3 py-2 text-xs text-muted">
-        Hovering an issue highlights its leg row and map segment.
+        {coarse ? "Tap" : "Hovering"} an issue highlights its leg row and map
+        segment.
       </div>
     </div>
   );
