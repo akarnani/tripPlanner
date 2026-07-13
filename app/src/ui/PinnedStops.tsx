@@ -177,7 +177,7 @@ export function PinnedStops({
                   type="button"
                   onClick={() => onRemove(id)}
                   title={`Unpin ${labelFor(id)}`}
-                  className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] hover:text-danger"
+                  className="tap-target inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] hover:text-danger"
                 >
                   ×
                 </button>

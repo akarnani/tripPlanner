@@ -13,11 +13,15 @@ interface Props {
   windowEndNm: number;
   hoveredLegIndex?: number | null;
   onHoverLeg?: (i: number | null) => void;
-  onClose: () => void;
+  /** Omitted in `inline` mode (a sheet tab, closed by switching tabs). */
+  onClose?: () => void;
   /** Fired when the user wheel-zooms over the chart. `lat`/`lon` are the
    *  along-route point under the cursor, so the map zooms around the
    *  spot the pilot is actually looking at instead of its own center. */
   onZoomAround?: (p: { lat: number; lon: number; deltaZoom: number }) => void;
+  /** Fill the parent (mobile bottom-sheet tab) instead of floating as a
+   *  28%-height overlay pinned to the map's bottom edge. */
+  inline?: boolean;
 }
 
 // The chart's geometry lives in ROUTE-DATA coordinates: x is distance
@@ -151,6 +155,7 @@ export function RouteProfile({
   onHoverLeg,
   onClose,
   onZoomAround,
+  inline = false,
 }: Props) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const chartRef = useRef<HTMLDivElement | null>(null);
@@ -423,7 +428,11 @@ export function RouteProfile({
   return (
     <div
       data-testid="route-profile"
-      className="pointer-events-auto absolute inset-x-0 bottom-0 z-10 flex h-[28%] min-h-[150px] flex-col border-t border-hairline bg-card"
+      className={
+        inline
+          ? "relative flex h-full w-full flex-col bg-card"
+          : "pointer-events-auto absolute inset-x-0 bottom-0 z-10 flex h-[28%] min-h-[150px] flex-col border-t border-hairline bg-card"
+      }
     >
       <div className="flex items-center justify-between gap-3 border-b border-hairline px-3 py-1">
         <span className="text-xs font-semibold text-ink">Route profile</span>
@@ -458,14 +467,16 @@ export function RouteProfile({
             </span>
           )}
         </span>
-        <button
-          type="button"
-          aria-label="Close route profile"
-          onClick={onClose}
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:text-ink"
-        >
-          ×
-        </button>
+        {onClose && (
+          <button
+            type="button"
+            aria-label="Close route profile"
+            onClick={onClose}
+            className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:text-ink"
+          >
+            ×
+          </button>
+        )}
       </div>
       <div ref={chartRef} className="relative flex-1">
         <svg

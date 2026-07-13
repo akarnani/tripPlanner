@@ -284,7 +284,7 @@ function RouteDetail({
                           setDraft("");
                         }}
                         onClick={(e) => e.stopPropagation()}
-                        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface hover:text-ink"
+                        className="tap-target inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface hover:text-ink"
                       >
                         ✎
                       </button>
@@ -296,7 +296,7 @@ function RouteDetail({
                           e.stopPropagation();
                           onExcludeStop(leg.toAirport.id, toIdent);
                         }}
-                        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] hover:text-danger"
+                        className="tap-target inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] hover:text-danger"
                       >
                         ×
                       </button>
