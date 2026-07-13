@@ -868,19 +868,35 @@ export function MapView({
     };
     for (const layer of [LAYER_TOWERED, LAYER_NONTOWERED]) {
       bind("click", layer, (e) => {
-        // Interactive build mode only (onAirportClick present):
-        // clicking pins a popup with the airport verdict and an
-        // explicit "Add stop" button (T10) — the stop is added when
-        // the button is pressed, not on the map click, so the pilot
-        // can read the verdict without a stray click committing it.
-        // Non-interactive mode keeps the old no-op behavior.
-        if (!onAirportClickRef.current) return;
         const f = e.features?.[0];
         if (!f || f.geometry.type !== "Point") return;
         const p = f.properties ?? {};
         const ident = p.ident;
         if (typeof ident !== "string") return;
         const [lon, lat] = f.geometry.coordinates as [number, number];
+        // Browse mode (no onAirportClick handler): a tap pins the airport
+        // info card. Hover tooltips never fire on touch, so this is the
+        // only way to read an airport's details with a finger. Desktop
+        // gets the same on click, which is harmless.
+        if (!onAirportClickRef.current) {
+          popup.remove();
+          pinnedPopupRef.current?.remove();
+          const pinned = new maplibregl.Popup({
+            closeButton: true,
+            closeOnClick: true,
+          })
+            .setLngLat([lon, lat])
+            .setHTML(
+              `<div class="text-xs" style="color:var(--ink)">${airportInfoHtml(p, null)}</div>`,
+            )
+            .addTo(map);
+          pinnedPopupRef.current = pinned;
+          return;
+        }
+        // Interactive build mode: pin a popup with the airport verdict
+        // and an explicit "Add stop" button (T10) — the stop is added
+        // when the button is pressed, not on the map click, so the pilot
+        // can read the verdict without a stray click committing it.
         const extraHtml = onAirportHoverHtmlRef.current?.(ident) ?? null;
         // The pinned popup replaces the transient hover one (which
         // would sit at the same spot) and any previously pinned popup

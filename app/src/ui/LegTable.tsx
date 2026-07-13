@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { PlannedRoute } from "@/engine/plan";
 import { costFnById } from "@/engine/costFns";
 import { AirportLink } from "./AirportLink";
+import { useMediaQuery } from "./useMediaQuery";
 
 interface Props {
   routes: PlannedRoute[];
@@ -139,6 +140,10 @@ function RouteDetail({
   // Index of the leg whose "Change to…" input is open, or null.
   const [editingLegIdx, setEditingLegIdx] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  // On touch there's no hover, so a row tap toggles the leg highlight
+  // (map segment + cross-panel sync) instead of opening the profile
+  // dock. Mouse devices keep hover + click-to-open-profile unchanged.
+  const coarse = useMediaQuery("(pointer: coarse)");
   const showArr = arrivalFuelGal !== undefined;
   const showFootnote =
     showArr && reserveGal !== undefined && reserveMin !== undefined;
@@ -201,12 +206,16 @@ function RouteDetail({
               <tr
                 key={i}
                 title={rowTitle}
-                onMouseEnter={() => onHoverLeg?.(i)}
-                onMouseLeave={() => onHoverLeg?.(null)}
-                onClick={onShowProfile}
+                onMouseEnter={coarse ? undefined : () => onHoverLeg?.(i)}
+                onMouseLeave={coarse ? undefined : () => onHoverLeg?.(null)}
+                onClick={() =>
+                  coarse
+                    ? onHoverLeg?.(hoveredLegIndex === i ? null : i)
+                    : onShowProfile?.()
+                }
                 className={
                   "border-b border-hairline " +
-                  (onShowProfile ? "cursor-pointer " : "") +
+                  (onShowProfile || coarse ? "cursor-pointer " : "") +
                   (hoveredLegIndex === i ? "bg-card" : "")
                 }
               >
