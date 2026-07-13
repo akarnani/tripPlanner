@@ -46,6 +46,7 @@ import {
   RouteProfileDock,
   type ViewportBounds,
 } from "./ui/RouteProfileDock";
+import { RouteProfile } from "./ui/RouteProfile";
 import { explainStopChoices } from "@/engine/stopAlternatives";
 import { WhyStopsPanel } from "./ui/WhyStopsPanel";
 import { obstaclesNearRoute } from "@/engine/obstacles";
@@ -165,7 +166,9 @@ export function App() {
   // bottom sheet; `isDesktop` selects between the two layouts. The sheet
   // has three tabs and three drag detents.
   const isDesktop = useMediaQuery("(min-width: 1024px)");
-  const [sheetTab, setSheetTab] = useState<"plan" | "route" | "issues">("plan");
+  const [sheetTab, setSheetTab] = useState<
+    "plan" | "route" | "issues" | "profile"
+  >("plan");
   const [sheetDetent, setSheetDetent] = useState<"peek" | "half" | "full">(
     "half",
   );
@@ -1776,10 +1779,33 @@ export function App() {
     setSheetDetent((d) =>
       d === "peek" ? "half" : d === "half" ? "full" : "peek",
     );
-  const openSheetTab = (tab: "plan" | "route" | "issues") => {
+  const openSheetTab = (tab: "plan" | "route" | "issues" | "profile") => {
     setSheetTab(tab);
     setSheetDetent((d) => (d === "peek" ? "half" : d));
   };
+  // The terrain profile is only offered once it's been built (DEM up +
+  // a route). Falls off the tab bar otherwise.
+  const sheetTabList: Array<"plan" | "route" | "issues" | "profile"> =
+    routeProfile
+      ? ["plan", "route", "issues", "profile"]
+      : ["plan", "route", "issues"];
+
+  const profileTab = routeProfile ? (
+    <RouteProfile
+      inline
+      data={routeProfile}
+      windowStartNm={0}
+      windowEndNm={routeProfile.totalNm}
+      hoveredLegIndex={hoveredLegIndex}
+      onHoverLeg={setHoveredLegIndex}
+    />
+  ) : (
+    <div className="flex h-full items-center justify-center p-6">
+      <p className="text-center text-xs text-muted">
+        Plan a trip to see the terrain profile.
+      </p>
+    </div>
+  );
 
   const routeTab = hasRailContent ? (
     <div className="flex h-full flex-col">
@@ -1840,7 +1866,7 @@ export function App() {
           <span className="h-1 w-10 rounded-full bg-hairline-input" />
         </button>
         <div className="flex shrink-0 gap-1.5 px-3 pb-2">
-          {(["plan", "route", "issues"] as const).map((tab) => (
+          {sheetTabList.map((tab) => (
             <button
               key={tab}
               type="button"
@@ -1861,7 +1887,9 @@ export function App() {
             ? planTab
             : sheetTab === "route"
               ? routeTab
-              : issuesTab}
+              : sheetTab === "profile"
+                ? profileTab
+                : issuesTab}
         </div>
         {sheetFooter}
       </div>
