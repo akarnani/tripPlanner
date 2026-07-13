@@ -75,6 +75,7 @@ import { MapLegend } from "./ui/MapLegend";
 import { FirstRunHint } from "./ui/FirstRunHint";
 import { ThemeToggle } from "./ui/theme";
 import { usePlanner } from "./ui/usePlanner";
+import { useMediaQuery } from "./ui/useMediaQuery";
 import {
   describePlanDiff,
   snapshotsEqual,
@@ -160,6 +161,14 @@ export function App() {
   // zoom). Instead the viewport is a stable pub/sub the profile dock
   // subscribes to directly, so only the dock re-renders on a gesture.
   const [profileOpen, setProfileOpen] = useState(false);
+  // Below `lg` the three columns collapse into a full-screen map with a
+  // bottom sheet; `isDesktop` selects between the two layouts. The sheet
+  // has three tabs and three drag detents.
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+  const [sheetTab, setSheetTab] = useState<"plan" | "route" | "issues">("plan");
+  const [sheetDetent, setSheetDetent] = useState<"peek" | "half" | "full">(
+    "half",
+  );
   const viewportSubsRef = useRef<Set<(b: ViewportBounds) => void>>(new Set());
   const lastViewportRef = useRef<ViewportBounds | null>(null);
   const handleViewportChange = useCallback((b: ViewportBounds) => {
@@ -718,6 +727,10 @@ export function App() {
           // The profile panel is part of reading a plan — open it with
           // the results rather than making the pilot find the toggle.
           setProfileOpen(true);
+          // On the mobile layout, surface the freshly-planned route by
+          // flipping the sheet to the Route tab and raising it to half.
+          setSheetTab("route");
+          setSheetDetent((d) => (d === "peek" ? "half" : d));
         },
         onError: (message) => setError(message),
       },
@@ -1297,25 +1310,24 @@ export function App() {
       ? "planning"
       : "idle";
 
-  return (
-    <div className="flex h-full w-full bg-surface text-ink">
-      <aside className="relative flex w-80 shrink-0 flex-col border-r border-hairline bg-surface">
-        <div className="flex-1 overflow-y-auto">
-          <div className="space-y-4 p-4 pb-0">
-            <header className="flex items-center justify-between gap-2">
-              <h1 className="text-lg font-semibold text-ink">Trip Planner</h1>
-              <div className="flex items-center gap-2">
-                <SavedTripsPopover
-                  trips={trips}
-                  defaultName={`${origin} → ${destination}`}
-                  onSave={handleSaveTrip}
-                  onLoad={handleLoadTrip}
-                  onDelete={handleDeleteTrip}
-                />
-                <ThemeToggle />
-              </div>
-            </header>
-            <Section id="trip" title="Trip" collapsible={false}>
+  // ---- shared building blocks, assembled differently by the desktop
+  //      columns and the mobile app-bar + bottom-sheet layout ----
+  const headerControls = (
+    <div className="flex items-center gap-2">
+      <SavedTripsPopover
+        trips={trips}
+        defaultName={`${origin} → ${destination}`}
+        onSave={handleSaveTrip}
+        onLoad={handleLoadTrip}
+        onDelete={handleDeleteTrip}
+      />
+      <ThemeToggle />
+    </div>
+  );
+
+  const inputSections = (
+    <>
+      <Section id="trip" title="Trip" collapsible={false}>
               {planningMode === "auto" ? (
                 <>
                   <TripPanel
@@ -1421,12 +1433,14 @@ export function App() {
                 aircraftFuelType={selectedAircraft.fuel.type}
                 runwayCheckActive={runwayCheckActive}
               />
-            </Section>
-          </div>
-          {/* Sticky footer inside the scroll container: the primary
-              action stays visible at every scroll position (T4). */}
-          <div className="sticky bottom-0 mt-4 space-y-2 border-t border-hairline bg-surface p-4">
-            {planningMode === "auto" ? (
+      </Section>
+    </>
+  );
+
+  // Primary action(s) — the desktop sticky footer and the mobile Plan
+  // tab footer both render this.
+  const planFooter =
+    planningMode === "auto" ? (
               <>
                 <button
                   type="button"
@@ -1472,11 +1486,10 @@ export function App() {
                 Interactive build — click airports on the map or pick from the
                 candidate list.
               </p>
-            )}
-          </div>
-        </div>
-      </aside>
-      <main className="relative flex-1">
+    );
+
+  const mapMain = (
+    <main className="relative flex-1">
         <MapView
           airports={matches}
           route={currentRoute}
@@ -1503,11 +1516,13 @@ export function App() {
           onViewportChange={handleViewportChange}
           mapApiRef={mapApiRef}
         />
-        <MapLegend
-          interactiveMode={planningMode === "interactive"}
-          raised={profileOpen && !!routeProfile}
-        />
-        {routeProfile && !profileOpen && (
+        {isDesktop && (
+          <MapLegend
+            interactiveMode={planningMode === "interactive"}
+            raised={profileOpen && !!routeProfile}
+          />
+        )}
+        {isDesktop && routeProfile && !profileOpen && (
           <button
             type="button"
             onClick={() => setProfileOpen(true)}
@@ -1516,7 +1531,7 @@ export function App() {
             Profile ▴
           </button>
         )}
-        {routeProfile && profileOpen && (
+        {isDesktop && routeProfile && profileOpen && (
           <RouteProfileDock
             data={routeProfile}
             subscribeViewport={subscribeViewport}
@@ -1559,159 +1574,297 @@ export function App() {
         <Toast
           toast={toast}
           onDismiss={() => setToast(null)}
-          raised={profileOpen && !!routeProfile}
+          raised={isDesktop && profileOpen && !!routeProfile}
+          position={isDesktop ? "bottom" : "top"}
         />
-      </main>
-      {/* The right rail is always mounted (T7) so planning doesn't
-          reflow the map; before the first plan it shows an empty
-          state or the summary of a just-loaded saved trip. */}
-      <aside className="flex w-80 shrink-0 flex-col border-l border-hairline bg-surface">
-        {hasRailContent ? (
-          <>
-            {isStale && (
-              <div className="border-b border-hairline border-l-4 border-l-caution bg-[color-mix(in_srgb,var(--caution)_12%,transparent)] p-3">
-                <p className="text-xs text-caution">
-                  <strong>Inputs changed</strong> since this plan
-                  {staleDiffs.length > 0 && <> — {staleDiffs[0]}</>}
-                  {staleDiffs.length > 1 && (
-                    <> and {staleDiffs.length - 1} more</>
-                  )}
-                </p>
-                <button
-                  type="button"
-                  onClick={handlePlan}
-                  className="mt-2 w-full rounded bg-caution px-2 py-1 text-xs font-semibold text-white hover:opacity-90"
-                >
-                  Replan
-                </button>
-              </div>
-            )}
-            <div className="flex-1 overflow-y-auto">
-              <LegTable
-                routes={
-                  planningMode === "interactive" && currentRoute
-                    ? [currentRoute]
-                    : routes
-                }
-                selected={planningMode === "interactive" ? 0 : selectedRoute}
-                onSelect={
-                  planningMode === "interactive" ? () => {} : setSelectedRoute
-                }
-                onExcludeStop={
-                  planningMode === "interactive"
-                    ? () => {}
-                    : (id) => handleExcludeStops([id])
-                }
-                onReplaceStop={
-                  planningMode === "interactive" ? () => {} : handleReplaceStop
-                }
-                arrivalFuelGal={arrivalFuelGal}
-                reserveGal={reserveGal}
-                cautionFloorGal={cautionFloorGal}
-                reserveMin={reserveMin}
-                hoveredLegIndex={hoveredLegIndex}
-                onHoverLeg={setHoveredLegIndex}
-                onEditRoute={
-                  planningMode === "auto" && routes[selectedRoute]
-                    ? () => handleEnterInteractive(routes[selectedRoute])
-                    : undefined
-                }
-                onShowProfile={
-                  routeProfile ? () => setProfileOpen(true) : undefined
-                }
-              />
+    </main>
+  );
+
+  const staleRailBanner = isStale ? (
+    <div className="border-b border-hairline border-l-4 border-l-caution bg-[color-mix(in_srgb,var(--caution)_12%,transparent)] p-3">
+      <p className="text-xs text-caution">
+        <strong>Inputs changed</strong> since this plan
+        {staleDiffs.length > 0 && <> — {staleDiffs[0]}</>}
+        {staleDiffs.length > 1 && <> and {staleDiffs.length - 1} more</>}
+      </p>
+      <button
+        type="button"
+        onClick={handlePlan}
+        className="mt-2 w-full rounded bg-caution px-2 py-1 text-xs font-semibold text-white hover:opacity-90"
+      >
+        Replan
+      </button>
+    </div>
+  ) : null;
+
+  const legTableEl = (
+    <LegTable
+      routes={
+        planningMode === "interactive" && currentRoute
+          ? [currentRoute]
+          : routes
+      }
+      selected={planningMode === "interactive" ? 0 : selectedRoute}
+      onSelect={planningMode === "interactive" ? () => {} : setSelectedRoute}
+      onExcludeStop={
+        planningMode === "interactive"
+          ? () => {}
+          : (id) => handleExcludeStops([id])
+      }
+      onReplaceStop={
+        planningMode === "interactive" ? () => {} : handleReplaceStop
+      }
+      arrivalFuelGal={arrivalFuelGal}
+      reserveGal={reserveGal}
+      cautionFloorGal={cautionFloorGal}
+      reserveMin={reserveMin}
+      hoveredLegIndex={hoveredLegIndex}
+      onHoverLeg={setHoveredLegIndex}
+      onEditRoute={
+        planningMode === "auto" && routes[selectedRoute]
+          ? () => handleEnterInteractive(routes[selectedRoute])
+          : undefined
+      }
+      onShowProfile={routeProfile ? () => setProfileOpen(true) : undefined}
+    />
+  );
+
+  const routeIssuesEl = (
+    <RouteIssuesPanel
+      issues={routeIssues}
+      hoveredLegIndex={hoveredLegIndex}
+      onHoverLeg={setHoveredLegIndex}
+    />
+  );
+
+  const whyStopsEl =
+    planningMode === "auto" &&
+    routes[selectedRoute] &&
+    routes[selectedRoute].legs.length > 1 ? (
+      <WhyStopsPanel
+        // Remount per route so explanations cached on first expand
+        // never go stale after a replan.
+        key={routes[selectedRoute].legs.map((l) => l.toAirport.id).join(">")}
+        getExplanations={() =>
+          explainStopChoices({
+            route: routes[selectedRoute],
+            matches,
+            // Pool BEFORE the runway-fit filter, so a stop dropped only
+            // for a tight/short runway can still surface as an
+            // alternative rather than silently vanishing.
+            baseMatches,
+            aircraft: selectedAircraft,
+            targetAltFt,
+            flightRule,
+            reserveHr: reserveMin / 60,
+            startingFuelGal,
+            variation: variationFn,
+            dem: demReady ? demSampler : undefined,
+            pinnedStopIds: new Set(pinnedStopIds),
+            runwaySettings,
+            maxLegHr: capLegTime ? maxLegHr : undefined,
+          })
+        }
+        onHoverAirport={setHighlightIdent}
+      />
+    ) : null;
+
+  const exportEl = currentRoute ? (
+    <ExportPanel
+      route={currentRoute}
+      aircraft={selectedAircraft}
+      terrain={terrain}
+    />
+  ) : null;
+
+  const savedSummaryEl = loadedTripSummary ? (
+    <div className="space-y-3 p-4">
+      <div className="rounded border border-hairline bg-card p-3">
+        <p className="text-xs font-semibold text-ink">Saved route summary</p>
+        <p className="mt-1 font-mono text-xs text-ink">
+          {[origin, ...loadedTripSummary.stopIdents, destination].map(
+            (id, i) => (
+              <span key={i}>
+                {i > 0 && <span className="text-muted"> → </span>}
+                <AirportLink ident={id} />
+              </span>
+            ),
+          )}
+        </p>
+        <p className="mt-1 text-xs text-muted">
+          {loadedTripSummary.distance_nm.toFixed(0)} nm ·{" "}
+          {loadedTripSummary.time_hr.toFixed(1)} hr ·{" "}
+          {loadedTripSummary.fuel_gal.toFixed(1)} gal
+        </p>
+      </div>
+      <div className="rounded border border-hairline bg-card p-3">
+        <p className="text-xs text-caution">
+          <strong>Inputs may have changed</strong> since this trip was saved —
+          replan to refresh the route.
+        </p>
+        <button
+          type="button"
+          onClick={handlePlan}
+          disabled={!dataReady || isPlanning}
+          className="mt-2 w-full rounded bg-caution px-2 py-1 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+        >
+          Replan
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  const railEmptyEl = (
+    <div className="flex flex-1 items-center justify-center p-6">
+      <p className="text-center text-xs text-muted">
+        Plan a trip to see legs, fuel, and route issues.
+      </p>
+    </div>
+  );
+
+  // ---- Desktop (≥ lg): the original three-column workspace ----
+  if (isDesktop) {
+    return (
+      <div className="flex h-full w-full bg-surface text-ink">
+        <aside className="relative flex w-80 shrink-0 flex-col border-r border-hairline bg-surface">
+          <div className="flex-1 overflow-y-auto">
+            <div className="space-y-4 p-4 pb-0">
+              <header className="flex items-center justify-between gap-2">
+                <h1 className="text-lg font-semibold text-ink">Trip Planner</h1>
+                {headerControls}
+              </header>
+              {inputSections}
             </div>
-            <RouteIssuesPanel
-              issues={routeIssues}
-              hoveredLegIndex={hoveredLegIndex}
-              onHoverLeg={setHoveredLegIndex}
-            />
-            {planningMode === "auto" &&
-              routes[selectedRoute] &&
-              routes[selectedRoute].legs.length > 1 && (
-                <WhyStopsPanel
-                  // Remount per route so explanations cached on first
-                  // expand never go stale after a replan.
-                  key={routes[selectedRoute].legs
-                    .map((l) => l.toAirport.id)
-                    .join(">")}
-                  getExplanations={() =>
-                    explainStopChoices({
-                      route: routes[selectedRoute],
-                      matches,
-                      // Pool BEFORE the runway-fit filter, so a stop that
-                      // was dropped only for a tight/short runway can
-                      // still surface as an alternative (with that as its
-                      // reason) rather than silently vanishing.
-                      baseMatches,
-                      aircraft: selectedAircraft,
-                      targetAltFt,
-                      flightRule,
-                      reserveHr: reserveMin / 60,
-                      startingFuelGal,
-                      variation: variationFn,
-                      dem: demReady ? demSampler : undefined,
-                      pinnedStopIds: new Set(pinnedStopIds),
-                      runwaySettings,
-                      maxLegHr: capLegTime ? maxLegHr : undefined,
-                    })
-                  }
-                  onHoverAirport={setHighlightIdent}
-                />
-              )}
-            {currentRoute && (
-              <ExportPanel
-                route={currentRoute}
-                aircraft={selectedAircraft}
-                terrain={terrain}
-              />
-            )}
-          </>
-        ) : loadedTripSummary ? (
-          <div className="space-y-3 p-4">
-            <div className="rounded border border-hairline bg-card p-3">
-              <p className="text-xs font-semibold text-ink">
-                Saved route summary
-              </p>
-              <p className="mt-1 font-mono text-xs text-ink">
-                {[origin, ...loadedTripSummary.stopIdents, destination].map(
-                  (id, i) => (
-                    <span key={i}>
-                      {i > 0 && <span className="text-muted"> → </span>}
-                      <AirportLink ident={id} />
-                    </span>
-                  ),
-                )}
-              </p>
-              <p className="mt-1 text-xs text-muted">
-                {loadedTripSummary.distance_nm.toFixed(0)} nm ·{" "}
-                {loadedTripSummary.time_hr.toFixed(1)} hr ·{" "}
-                {loadedTripSummary.fuel_gal.toFixed(1)} gal
-              </p>
-            </div>
-            <div className="rounded border border-hairline bg-card p-3">
-              <p className="text-xs text-caution">
-                <strong>Inputs may have changed</strong> since this trip was
-                saved — replan to refresh the route.
-              </p>
-              <button
-                type="button"
-                onClick={handlePlan}
-                disabled={!dataReady || isPlanning}
-                className="mt-2 w-full rounded bg-caution px-2 py-1 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
-              >
-                Replan
-              </button>
+            {/* Sticky footer inside the scroll container: the primary
+                action stays visible at every scroll position (T4). */}
+            <div className="sticky bottom-0 mt-4 space-y-2 border-t border-hairline bg-surface p-4">
+              {planFooter}
             </div>
           </div>
-        ) : (
-          <div className="flex flex-1 items-center justify-center p-6">
-            <p className="text-center text-xs text-muted">
-              Plan a trip to see legs, fuel, and route issues.
-            </p>
-          </div>
-        )}
-      </aside>
+        </aside>
+        {mapMain}
+        {/* The right rail is always mounted (T7) so planning doesn't
+            reflow the map; before the first plan it shows an empty
+            state or the summary of a just-loaded saved trip. */}
+        <aside className="flex w-80 shrink-0 flex-col border-l border-hairline bg-surface">
+          {hasRailContent ? (
+            <>
+              {staleRailBanner}
+              <div className="flex-1 overflow-y-auto">{legTableEl}</div>
+              {routeIssuesEl}
+              {whyStopsEl}
+              {exportEl}
+            </>
+          ) : loadedTripSummary ? (
+            savedSummaryEl
+          ) : (
+            railEmptyEl
+          )}
+        </aside>
+      </div>
+    );
+  }
+
+  // ---- Mobile / tablet (< lg): full-screen map + bottom sheet ----
+  const sheetHeightClass =
+    sheetDetent === "peek"
+      ? "h-[150px]"
+      : sheetDetent === "half"
+        ? "h-[56%]"
+        : "h-[90%]";
+  const cycleDetent = () =>
+    setSheetDetent((d) =>
+      d === "peek" ? "half" : d === "half" ? "full" : "peek",
+    );
+  const openSheetTab = (tab: "plan" | "route" | "issues") => {
+    setSheetTab(tab);
+    setSheetDetent((d) => (d === "peek" ? "half" : d));
+  };
+
+  const routeTab = hasRailContent ? (
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto">{legTableEl}</div>
+      {whyStopsEl}
+    </div>
+  ) : loadedTripSummary ? (
+    savedSummaryEl
+  ) : (
+    railEmptyEl
+  );
+
+  const issuesTab =
+    hasRailContent && routeIssues.length > 0 ? (
+      <div className="h-full overflow-y-auto">{routeIssuesEl}</div>
+    ) : (
+      <div className="flex h-full items-center justify-center p-6">
+        <p className="text-center text-xs text-muted">
+          {hasRailContent
+            ? "No route issues flagged for this plan."
+            : "Plan a trip to see route issues."}
+        </p>
+      </div>
+    );
+
+  const planTab = (
+    <div className="h-full space-y-4 overflow-y-auto p-4">{inputSections}</div>
+  );
+
+  const sheetFooter =
+    sheetTab === "plan" ? (
+      <div className="pb-safe space-y-2 border-t border-hairline bg-surface p-4">
+        {planFooter}
+      </div>
+    ) : sheetTab === "route" && exportEl ? (
+      <div className="pb-safe">{exportEl}</div>
+    ) : null;
+
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-surface text-ink">
+      <header className="pt-safe z-10 flex items-center gap-2 border-b border-hairline bg-surface px-4 pb-2">
+        <h1 className="flex-1 text-base font-semibold text-ink">Trip Planner</h1>
+        {headerControls}
+      </header>
+      {mapMain}
+      <div
+        className={
+          "absolute inset-x-0 bottom-0 z-30 flex flex-col rounded-t-2xl border-t border-hairline bg-card shadow-[0_-10px_30px_-16px_rgba(0,0,0,0.4)] transition-[height] duration-300 " +
+          sheetHeightClass
+        }
+      >
+        <button
+          type="button"
+          onClick={cycleDetent}
+          aria-label="Resize panel"
+          className="flex shrink-0 justify-center py-2"
+        >
+          <span className="h-1 w-10 rounded-full bg-hairline-input" />
+        </button>
+        <div className="flex shrink-0 gap-1.5 px-3 pb-2">
+          {(["plan", "route", "issues"] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => openSheetTab(tab)}
+              className={
+                "flex-1 rounded-md px-2 py-2 text-xs font-semibold capitalize " +
+                (sheetTab === tab
+                  ? "bg-accent text-white"
+                  : "bg-surface text-muted")
+              }
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+        <div className="min-h-0 flex-1">
+          {sheetTab === "plan"
+            ? planTab
+            : sheetTab === "route"
+              ? routeTab
+              : issuesTab}
+        </div>
+        {sheetFooter}
+      </div>
     </div>
   );
 }

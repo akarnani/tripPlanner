@@ -11,6 +11,9 @@ interface Props {
   onDismiss: () => void;
   /** Lifts the toast above the docked route-profile panel. */
   raised?: boolean;
+  /** Anchor edge. Defaults to "bottom"; the mobile layout uses "top" so
+   *  the toast (and its Undo action) clears the bottom sheet. */
+  position?: "top" | "bottom";
 }
 
 const AUTO_DISMISS_MS = 6000;
@@ -19,7 +22,7 @@ const AUTO_DISMISS_MS = 6000;
  *  (e.g. the map container) so the absolute positioning here is
  *  scoped to it. Auto-dismisses after ~6 s; callers are responsible
  *  for only ever having one toast queued at a time. */
-export function Toast({ toast, onDismiss, raised }: Props) {
+export function Toast({ toast, onDismiss, raised, position = "bottom" }: Props) {
   useEffect(() => {
     if (!toast) return;
     const id = window.setTimeout(onDismiss, AUTO_DISMISS_MS);
@@ -32,7 +35,11 @@ export function Toast({ toast, onDismiss, raised }: Props) {
     <div
       className={
         "pointer-events-none absolute inset-x-0 z-20 flex justify-center px-4 " +
-        (raised ? "bottom-[calc(28%+1rem)]" : "bottom-4")
+        (position === "top"
+          ? "top-4"
+          : raised
+            ? "bottom-[calc(28%+1rem)]"
+            : "bottom-4")
       }
     >
       <div className="pointer-events-auto flex items-center gap-3 rounded-md bg-ink px-4 py-2.5 text-card shadow-lg">

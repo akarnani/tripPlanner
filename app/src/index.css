@@ -11,7 +11,12 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
+html {
+  /* dvh tracks the *visible* viewport so the mobile URL bar can't clip
+     the bottom action bar; vh is the fallback for older engines. */
+  height: 100vh;
+  height: 100dvh;
+}
 body,
 #root {
   height: 100%;
@@ -66,4 +71,22 @@ body {
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* On touch devices a control smaller than 16px makes iOS Safari zoom the
+   viewport on focus. Bump form controls to 16px there only. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Safe-area-aware padding for the mobile app bar and bottom-sheet footer. */
+.pt-safe {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+}
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
 }

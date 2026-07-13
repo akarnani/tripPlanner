@@ -37,12 +37,6 @@ export function PinnedStops({
 }: Props) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // Index of the row whose grip handle is currently being dragged, or
-  // null when no drag is in progress. dragOverIndex is the row the
-  // cursor is hovering over while dragging — used for a visible
-  // drop-target outline.
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const byId = new Map<string, Airport>();
   for (const a of airports) byId.set(a.id, a);
@@ -89,11 +83,15 @@ export function PinnedStops({
     setError(invalid.length > 0 ? `couldn't add: ${invalid.join(", ")}` : null);
   }
 
-  function dropAt(targetIndex: number) {
-    if (dragIndex === null || dragIndex === targetIndex) return;
+  // Reorder by one position. Replaces the old HTML5 drag-and-drop grip,
+  // which never fired on touch — up/down controls work with a finger or
+  // the keyboard, and the pinned list is short enough that single-step
+  // moves are fine.
+  function moveStop(index: number, dir: -1 | 1) {
+    const target = index + dir;
+    if (target < 0 || target >= pinnedIds.length) return;
     const next = [...pinnedIds];
-    const [moved] = next.splice(dragIndex, 1);
-    next.splice(targetIndex, 0, moved);
+    [next[index], next[target]] = [next[target], next[index]];
     onReorder(next);
   }
 
@@ -135,70 +133,33 @@ export function PinnedStops({
             const hasFuel = a
               ? airportSellsCompatibleFuel(a, aircraftFuelType)
               : true; // unknown airport: don't second-guess the user
-            const isDragging = dragIndex === i;
-            const isDropTarget =
-              dragOverIndex === i && dragIndex !== null && dragIndex !== i;
             return (
               <li
                 key={id}
-                onDragOver={(e) => {
-                  if (dragIndex === null) return;
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (dragOverIndex !== i) setDragOverIndex(i);
-                }}
-                onDragLeave={() => {
-                  if (dragOverIndex === i) setDragOverIndex(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  dropAt(i);
-                  setDragIndex(null);
-                  setDragOverIndex(null);
-                }}
-                className={
-                  "flex items-center gap-1 rounded border bg-card px-2 py-1 text-xs transition-colors " +
-                  (isDropTarget
-                    ? "border-accent ring-1 ring-accent"
-                    : "border-hairline") +
-                  (isDragging ? " opacity-50" : "")
-                }
+                className="flex items-center gap-1 rounded border border-hairline bg-card px-2 py-1 text-xs"
               >
-                <span
-                  draggable
-                  onDragStart={(e) => {
-                    setDragIndex(i);
-                    e.dataTransfer.effectAllowed = "move";
-                    // Drag the whole row visually, not just the grip
-                    // handle. parentElement is the <li>; falling back
-                    // to the handle itself keeps the drag working if
-                    // the DOM ever shifts.
-                    const row = e.currentTarget.parentElement;
-                    if (row) e.dataTransfer.setDragImage(row, 0, 0);
-                  }}
-                  onDragEnd={() => {
-                    setDragIndex(null);
-                    setDragOverIndex(null);
-                  }}
-                  title="Drag to reorder"
-                  aria-label="Drag to reorder"
-                  className="-ml-1 inline-flex h-6 w-6 cursor-grab items-center justify-center text-muted hover:text-ink active:cursor-grabbing"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 16 16"
-                    fill="currentColor"
-                    className="h-3 w-3"
-                    aria-hidden="true"
+                <div className="-ml-1 flex flex-col text-muted">
+                  <button
+                    type="button"
+                    onClick={() => moveStop(i, -1)}
+                    disabled={i === 0}
+                    title={`Move ${labelFor(id)} up`}
+                    aria-label={`Move ${labelFor(id)} up`}
+                    className="flex h-3.5 w-6 items-center justify-center leading-none hover:text-ink disabled:opacity-30"
                   >
-                    <circle cx="5" cy="3" r="1.2" />
-                    <circle cx="11" cy="3" r="1.2" />
-                    <circle cx="5" cy="8" r="1.2" />
-                    <circle cx="11" cy="8" r="1.2" />
-                    <circle cx="5" cy="13" r="1.2" />
-                    <circle cx="11" cy="13" r="1.2" />
-                  </svg>
-                </span>
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveStop(i, 1)}
+                    disabled={i === pinnedIds.length - 1}
+                    title={`Move ${labelFor(id)} down`}
+                    aria-label={`Move ${labelFor(id)} down`}
+                    className="flex h-3.5 w-6 items-center justify-center leading-none hover:text-ink disabled:opacity-30"
+                  >
+                    ▼
+                  </button>
+                </div>
                 <span className="w-4 text-right text-muted">{i + 1}.</span>
                 <span className="font-mono">
                   <AirportLink ident={labelFor(id)} />
