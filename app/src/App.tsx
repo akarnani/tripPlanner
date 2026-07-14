@@ -162,10 +162,18 @@ export function App() {
   // zoom). Instead the viewport is a stable pub/sub the profile dock
   // subscribes to directly, so only the dock re-renders on a gesture.
   const [profileOpen, setProfileOpen] = useState(false);
-  // Below `lg` the three columns collapse into a full-screen map with a
-  // bottom sheet; `isDesktop` selects between the two layouts. The sheet
-  // has three tabs and three drag detents.
+  // Three layouts: desktop (≥1024) keeps the three columns; tablet
+  // (768–1023) is map + results rail + a slide-in inputs drawer; phone
+  // (<768) is a full-screen map with a bottom sheet.
   const isDesktop = useMediaQuery("(min-width: 1024px)");
+  const isTablet = useMediaQuery(
+    "(min-width: 768px) and (max-width: 1023px)",
+  );
+  // Map overlays (legend, route-profile dock) belong on the roomy
+  // desktop/tablet map; the phone hides them behind the bottom sheet.
+  const wideMap = isDesktop || isTablet;
+  // Tablet inputs drawer open state (unused by the other two layouts).
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [sheetTab, setSheetTab] = useState<
     "plan" | "route" | "issues" | "profile"
   >("plan");
@@ -734,6 +742,8 @@ export function App() {
           // flipping the sheet to the Route tab and raising it to half.
           setSheetTab("route");
           setSheetDetent((d) => (d === "peek" ? "half" : d));
+          // On tablet, close the inputs drawer to reveal the map + rail.
+          setDrawerOpen(false);
         },
         onError: (message) => setError(message),
       },
@@ -1519,13 +1529,22 @@ export function App() {
           onViewportChange={handleViewportChange}
           mapApiRef={mapApiRef}
         />
-        {isDesktop && (
+        {isTablet && (
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            className="absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-md border border-hairline bg-card px-3 py-2 text-sm font-medium text-ink shadow-md hover:bg-surface"
+          >
+            <span aria-hidden="true">☰</span> Trip
+          </button>
+        )}
+        {wideMap && (
           <MapLegend
             interactiveMode={planningMode === "interactive"}
             raised={profileOpen && !!routeProfile}
           />
         )}
-        {isDesktop && routeProfile && !profileOpen && (
+        {wideMap && routeProfile && !profileOpen && (
           <button
             type="button"
             onClick={() => setProfileOpen(true)}
@@ -1534,7 +1553,7 @@ export function App() {
             Profile ▴
           </button>
         )}
-        {isDesktop && routeProfile && profileOpen && (
+        {wideMap && routeProfile && profileOpen && (
           <RouteProfileDock
             data={routeProfile}
             subscribeViewport={subscribeViewport}
@@ -1577,8 +1596,8 @@ export function App() {
         <Toast
           toast={toast}
           onDismiss={() => setToast(null)}
-          raised={isDesktop && profileOpen && !!routeProfile}
-          position={isDesktop ? "bottom" : "top"}
+          raised={wideMap && profileOpen && !!routeProfile}
+          position={wideMap ? "bottom" : "top"}
         />
     </main>
   );
@@ -1726,43 +1745,80 @@ export function App() {
   );
 
   // ---- Desktop (≥ lg): the original three-column workspace ----
+  // Shared column contents — assembled as fixed desktop columns, and as
+  // the tablet drawer + rail.
+  const inputScroller = (
+    <div className="flex-1 overflow-y-auto">
+      <div className="space-y-4 p-4 pb-0">
+        <header className="flex items-center justify-between gap-2">
+          <h1 className="text-lg font-semibold text-ink">Trip Planner</h1>
+          {headerControls}
+        </header>
+        {inputSections}
+      </div>
+      {/* Sticky footer inside the scroll container: the primary action
+          stays visible at every scroll position (T4). */}
+      <div className="sticky bottom-0 mt-4 space-y-2 border-t border-hairline bg-surface p-4">
+        {planFooter}
+      </div>
+    </div>
+  );
+
+  const resultsRail = hasRailContent ? (
+    <>
+      {staleRailBanner}
+      <div className="flex-1 overflow-y-auto">{legTableEl}</div>
+      {routeIssuesEl}
+      {whyStopsEl}
+      {exportEl}
+    </>
+  ) : loadedTripSummary ? (
+    savedSummaryEl
+  ) : (
+    railEmptyEl
+  );
+
+  // ---- Desktop (≥1024): the three-column workspace ----
   if (isDesktop) {
     return (
       <div className="flex h-full w-full bg-surface text-ink">
         <aside className="relative flex w-80 shrink-0 flex-col border-r border-hairline bg-surface">
-          <div className="flex-1 overflow-y-auto">
-            <div className="space-y-4 p-4 pb-0">
-              <header className="flex items-center justify-between gap-2">
-                <h1 className="text-lg font-semibold text-ink">Trip Planner</h1>
-                {headerControls}
-              </header>
-              {inputSections}
-            </div>
-            {/* Sticky footer inside the scroll container: the primary
-                action stays visible at every scroll position (T4). */}
-            <div className="sticky bottom-0 mt-4 space-y-2 border-t border-hairline bg-surface p-4">
-              {planFooter}
-            </div>
-          </div>
+          {inputScroller}
         </aside>
         {mapMain}
         {/* The right rail is always mounted (T7) so planning doesn't
             reflow the map; before the first plan it shows an empty
             state or the summary of a just-loaded saved trip. */}
         <aside className="flex w-80 shrink-0 flex-col border-l border-hairline bg-surface">
-          {hasRailContent ? (
-            <>
-              {staleRailBanner}
-              <div className="flex-1 overflow-y-auto">{legTableEl}</div>
-              {routeIssuesEl}
-              {whyStopsEl}
-              {exportEl}
-            </>
-          ) : loadedTripSummary ? (
-            savedSummaryEl
-          ) : (
-            railEmptyEl
-          )}
+          {resultsRail}
+        </aside>
+      </div>
+    );
+  }
+
+  // ---- Tablet (768–1023): map + results rail, inputs in a drawer ----
+  if (isTablet) {
+    return (
+      <div className="relative flex h-full w-full overflow-hidden bg-surface text-ink">
+        {mapMain}
+        <aside className="flex w-72 shrink-0 flex-col border-l border-hairline bg-surface">
+          {resultsRail}
+        </aside>
+        {drawerOpen && (
+          <button
+            type="button"
+            aria-label="Close trip inputs"
+            onClick={() => setDrawerOpen(false)}
+            className="absolute inset-0 z-30 bg-black/30"
+          />
+        )}
+        <aside
+          className={
+            "absolute inset-y-0 left-0 z-40 flex w-80 max-w-[85%] flex-col border-r border-hairline bg-surface shadow-2xl transition-transform duration-300 " +
+            (drawerOpen ? "translate-x-0" : "-translate-x-full")
+          }
+        >
+          {inputScroller}
         </aside>
       </div>
     );
