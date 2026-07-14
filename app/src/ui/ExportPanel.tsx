@@ -11,9 +11,27 @@ interface Props {
   terrain: TerrainAnalysis | null;
 }
 
+/** iOS Safari (and iPadOS, which reports as a Mac but has touch)
+ *  ignores the `download` attribute on blob URLs, so a normal anchor
+ *  click does nothing. Detect it to fall back to opening the file. */
+function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return (
+    /iP(hone|ad|od)/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
 function download(name: string, type: string, content: BlobPart) {
   const blob = content instanceof Blob ? content : new Blob([content], { type });
   const url = URL.createObjectURL(blob);
+  if (isIOS()) {
+    // Open the file so the user can save/share it from the viewer; the
+    // download attribute wouldn't fire here.
+    window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return;
+  }
   const a = document.createElement("a");
   a.href = url;
   a.download = name;

@@ -169,6 +169,7 @@ function RouteDetail({
           </dd>
         </div>
       </dl>
+      <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-hairline text-left text-muted">
@@ -308,6 +309,7 @@ function RouteDetail({
           })}
         </tbody>
       </table>
+      </div>
       {showFootnote && (
         <p className="mt-2 text-xs text-muted">
           Arr = fuel on landing · reserve {reserveGal!.toFixed(1)} gal (

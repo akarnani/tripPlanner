@@ -16,11 +16,25 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      // Desktop-only smoke tests; the mobile spec runs under mobile-chrome.
+      testIgnore: /mobile\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         // Sandboxed/remote environments often pre-install a Chromium
         // whose revision doesn't match this @playwright/test version.
         // Point PW_CHROMIUM_PATH at it to skip the browser download.
+        ...(process.env.PW_CHROMIUM_PATH
+          ? { launchOptions: { executablePath: process.env.PW_CHROMIUM_PATH } }
+          : {}),
+      },
+    },
+    {
+      name: "mobile-chrome",
+      // The mobile bottom-sheet layout (< 768px, coarse pointer). Pixel 5
+      // is a Chromium device, so it shares PW_CHROMIUM_PATH.
+      testMatch: /mobile\.spec\.ts/,
+      use: {
+        ...devices["Pixel 5"],
         ...(process.env.PW_CHROMIUM_PATH
           ? { launchOptions: { executablePath: process.env.PW_CHROMIUM_PATH } }
           : {}),
