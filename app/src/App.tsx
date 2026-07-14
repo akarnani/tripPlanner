@@ -1502,7 +1502,7 @@ export function App() {
     );
 
   const mapMain = (
-    <main className="relative flex-1">
+    <main className="relative min-h-0 flex-1">
         <MapView
           airports={matches}
           route={currentRoute}
@@ -1901,15 +1901,20 @@ export function App() {
     ) : null;
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-surface text-ink">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-surface text-ink">
       <header className="pt-safe z-10 flex items-center gap-2 border-b border-hairline bg-surface px-4 pb-2">
         <h1 className="flex-1 text-base font-semibold text-ink">Trip Planner</h1>
         {headerControls}
       </header>
       {mapMain}
+      {/* In normal flow (not an absolute overlay): a native <select>
+          inside an absolutely-positioned, scrolled container gets its
+          popup mispositioned by Chromium, so the sheet stays in-flow and
+          the map area (which resizes with the detent) is kept crisp by a
+          ResizeObserver in MapView. The −mt keeps the floating look. */}
       <div
         className={
-          "absolute inset-x-0 bottom-0 z-30 flex flex-col rounded-t-2xl border-t border-hairline bg-card shadow-[0_-10px_30px_-16px_rgba(0,0,0,0.4)] transition-[height] duration-300 " +
+          "z-30 -mt-3 flex shrink-0 flex-col rounded-t-2xl border-t border-hairline bg-card shadow-[0_-10px_30px_-16px_rgba(0,0,0,0.4)] transition-[height] duration-300 " +
           sheetHeightClass
         }
       >

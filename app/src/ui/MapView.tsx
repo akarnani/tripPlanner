@@ -1012,6 +1012,20 @@ export function MapView({
     };
     map.on("move", emitViewport);
 
+    // The container can resize without a window resize — the mobile
+    // bottom sheet grows/shrinks the map area as its detent changes.
+    // MapLibre's trackResize only watches the window, so observe the
+    // container directly and resize on the next frame.
+    let resizeRaf = 0;
+    const resizeObserver = new ResizeObserver(() => {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0;
+        map.resize();
+      });
+    });
+    resizeObserver.observe(containerRef.current);
+
     map.on("load", () => {
       // mapRef is only assigned here (not at construction) so the
       // theme-swap effect below stays inert until the first style has
@@ -1043,6 +1057,8 @@ export function MapView({
     }
 
     return () => {
+      resizeObserver.disconnect();
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
       for (const m of stopMarkersRef.current) m.remove();
       stopMarkersRef.current = [];
       if (hoverCloseTimerRef.current !== null) {
