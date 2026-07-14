@@ -1,4 +1,5 @@
 import type { Aircraft } from "@/data/aircraft";
+import { Select } from "./Select";
 
 interface Props {
   aircraft: readonly Aircraft[];
@@ -32,17 +33,18 @@ export function AircraftPanel({
         <label className="block text-xs font-medium uppercase tracking-wide text-muted">
           Aircraft
         </label>
-        <select
-          value={selectedSlug}
-          onChange={(e) => onSelect(e.target.value)}
-          className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink"
-        >
-          {aircraft.map((a) => (
-            <option key={a.slug} value={a.slug}>
-              {a.make} {a.model}
-            </option>
-          ))}
-        </select>
+        <div className="mt-1">
+          <Select
+            ariaLabel="Aircraft"
+            value={selectedSlug}
+            onChange={onSelect}
+            options={aircraft.map((a) => ({
+              value: a.slug,
+              label: `${a.make} ${a.model}`,
+            }))}
+            className="w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink"
+          />
+        </div>
       </div>
       <div className="grid grid-cols-3 gap-x-2 gap-y-1">
         <label

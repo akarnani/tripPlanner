@@ -3,6 +3,7 @@ import type { PlannedRoute } from "@/engine/plan";
 import type { LegAltitudeOverride } from "@/engine/interactive";
 import type { InteractiveCandidate } from "@/engine/candidates";
 import { AirportLink } from "./AirportLink";
+import { Select } from "./Select";
 
 interface Props {
   /** Origin airport identifier (display purposes). */
@@ -333,12 +334,16 @@ function LegAndStop({
                   custom
                 </span>
               )}
-              <select
-                value={altFt ?? ""}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  onAltitudeChange(v === "" ? null : Number.parseInt(v, 10));
-                }}
+              <Select
+                ariaLabel="Leg cruise altitude"
+                value={altFt != null ? String(altFt) : ""}
+                onChange={(v) =>
+                  onAltitudeChange(v === "" ? null : Number.parseInt(v, 10))
+                }
+                options={[
+                  { value: "", label: "auto" },
+                  ...opts.map((alt) => ({ value: String(alt), label: fmtFt(alt) })),
+                ]}
                 className={
                   "rounded border bg-card px-1 py-0.5 text-xs font-mono text-ink " +
                   (isOverride ? "border-accent" : "border-hairline-input")
@@ -348,14 +353,7 @@ function LegAndStop({
                     ? "Custom altitude; click hemispheric option to revert"
                     : "Hemispheric default — pick another to override"
                 }
-              >
-                <option value="">auto</option>
-                {opts.map((alt) => (
-                  <option key={alt} value={alt}>
-                    {fmtFt(alt)}
-                  </option>
-                ))}
-              </select>
+              />
             </span>
           </div>
           {!feasible && (
