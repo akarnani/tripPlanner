@@ -4,6 +4,7 @@ import type {
   TowerMode,
 } from "@/engine/filters";
 import type { FuelType } from "@/data/aircraft";
+import { Select } from "./Select";
 
 interface Props {
   filters: HardFilters;
@@ -73,18 +74,19 @@ export function FilterPanel({
         >
           Control tower
         </label>
-        <select
-          id="tower-req"
-          value={filters.tower}
-          onChange={(e) =>
-            onChange({ ...filters, tower: e.target.value as TowerMode })
-          }
-          className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink"
-        >
-          <option value="any">Any</option>
-          <option value="required">Towered only</option>
-          <option value="forbidden">Non-towered only</option>
-        </select>
+        <div className="mt-1">
+          <Select
+            id="tower-req"
+            value={filters.tower}
+            onChange={(v) => onChange({ ...filters, tower: v as TowerMode })}
+            options={[
+              { value: "any", label: "Any" },
+              { value: "required", label: "Towered only" },
+              { value: "forbidden", label: "Non-towered only" },
+            ]}
+            className="w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink"
+          />
+        </div>
       </div>
       <div>
         <label
@@ -93,23 +95,26 @@ export function FilterPanel({
         >
           Approach
         </label>
-        <select
-          id="approach-req"
-          value={filters.approach}
-          disabled={!hasApproachData}
-          onChange={(e) =>
-            onChange({
-              ...filters,
-              approach: e.target.value as ApproachRequirement,
-            })
-          }
-          className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink disabled:bg-surface"
-        >
-          <option value="off">No approach required</option>
-          <option value="any">Any IAP (LOC / VOR / LDA / BC / NDB / …)</option>
-          <option value="precision">Precision or LPV</option>
-          <option value="rnav">RNAV / GPS</option>
-        </select>
+        <div className="mt-1">
+          <Select
+            id="approach-req"
+            value={filters.approach}
+            disabled={!hasApproachData}
+            onChange={(v) =>
+              onChange({ ...filters, approach: v as ApproachRequirement })
+            }
+            options={[
+              { value: "off", label: "No approach required" },
+              {
+                value: "any",
+                label: "Any IAP (LOC / VOR / LDA / BC / NDB / …)",
+              },
+              { value: "precision", label: "Precision or LPV" },
+              { value: "rnav", label: "RNAV / GPS" },
+            ]}
+            className="w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink disabled:bg-surface"
+          />
+        </div>
         {!hasApproachData && (
           <p className="mt-1 text-xs text-muted">
             CIFP data not loaded yet — filter disabled.

@@ -227,28 +227,35 @@ test.describe("trip planner smoke", () => {
     page,
   }) => {
     await openSection(page, "Airport filters");
-    const select = page.getByLabel("Approach");
-    if (!(await select.isEnabled())) test.skip();
+    const trigger = page.getByLabel("Approach");
+    if (!(await trigger.isEnabled())) test.skip();
 
-    await select.selectOption("off");
+    // The Approach picker is a custom listbox (Select.tsx): open it, then
+    // click the option.
+    const pick = async (name: string | RegExp) => {
+      await trigger.click();
+      await page.getByRole("option", { name }).click();
+    };
+
+    await pick("No approach required");
     await expect.poll(() => parseMatchCount(page)).toBeGreaterThan(0);
     const offCount = await parseMatchCount(page);
 
-    await select.selectOption("any");
+    await pick(/^Any IAP/);
     await expect
       .poll(() => parseMatchCount(page), { timeout: 5000 })
       .toBeLessThan(offCount);
     const anyCount = await parseMatchCount(page);
     expect(anyCount).toBeGreaterThan(0);
 
-    await select.selectOption("precision");
+    await pick("Precision or LPV");
     await expect
       .poll(() => parseMatchCount(page), { timeout: 5000 })
       .toBeLessThan(anyCount);
     const precCount = await parseMatchCount(page);
     expect(precCount).toBeGreaterThan(0);
 
-    await select.selectOption("rnav");
+    await pick("RNAV / GPS");
     await expect
       .poll(() => parseMatchCount(page), { timeout: 5000 })
       .toBeGreaterThan(0);

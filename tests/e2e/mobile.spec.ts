@@ -64,6 +64,37 @@ test.describe("mobile bottom-sheet layout", () => {
     await expect(page.locator("table tbody tr")).toHaveCount(0);
   });
 
+  test("the aircraft dropdown opens anchored to its trigger, not off over the map", async ({
+    page,
+  }) => {
+    // Expand the sheet so the Aircraft picker is comfortably in view.
+    await page.getByRole("button", { name: /resize panel/i }).tap();
+    await page.waitForTimeout(400);
+    const trigger = page.getByLabel("Aircraft");
+    await trigger.scrollIntoViewIfNeeded();
+    const tb = await trigger.boundingBox();
+    if (!tb) throw new Error("aircraft trigger not found");
+
+    await trigger.tap();
+    const listbox = page.getByRole("listbox");
+    await expect(listbox).toBeVisible();
+    const lb = await listbox.boundingBox();
+    if (!lb) throw new Error("listbox not rendered");
+
+    // The menu sits directly against the trigger (below or above) and
+    // overlaps it horizontally — not detached over the map, which was
+    // the native-<select> bug this custom Select replaces.
+    const adjacent =
+      Math.abs(lb.y - (tb.y + tb.height)) < 16 ||
+      Math.abs(lb.y + lb.height - tb.y) < 16;
+    expect(adjacent).toBe(true);
+    expect(Math.abs(lb.x - tb.x)).toBeLessThan(12);
+
+    // And it actually selects.
+    await page.getByRole("option", { name: /Cirrus SR22T/ }).tap();
+    await expect(trigger).toContainText("Cirrus SR22T");
+  });
+
   test("tapping an airport pins its info popup (hover has no touch path)", async ({
     page,
   }) => {
