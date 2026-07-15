@@ -292,12 +292,36 @@ test.describe("trip planner smoke", () => {
     const downloadPromise = page.waitForEvent("download");
     await page.getByRole("button", { name: "GPX" }).click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toMatch(/\.gpx$/);
+    // Named for the route (origin-…-destination), not "untitled".
+    expect(download.suggestedFilename()).toBe("KSEA-KBOI.gpx");
     const stream = await download.createReadStream();
     const chunks: Buffer[] = [];
     for await (const chunk of stream) chunks.push(chunk as Buffer);
     const body = Buffer.concat(chunks).toString("utf8");
     expect(body).toContain("<gpx");
+    expect(body).toContain("KSEA");
+    expect(body).toContain("KBOI");
+  });
+
+  test("Garmin FPL export downloads a named flight-plan file", async ({
+    page,
+  }) => {
+    await page.getByTestId("plan-trip").click();
+    await expect(
+      page.getByRole("button", { name: /Total time · \d+ stop/ }).first(),
+    ).toBeVisible({ timeout: 30_000 });
+
+    // A real download must fire (not open inline in the tab), named for
+    // the route.
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Garmin FPL" }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe("KSEA-KBOI.fpl");
+    const stream = await download.createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    const body = Buffer.concat(chunks).toString("utf8");
+    expect(body).toContain("<flight-plan");
     expect(body).toContain("KSEA");
     expect(body).toContain("KBOI");
   });
