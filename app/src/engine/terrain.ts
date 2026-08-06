@@ -28,6 +28,74 @@ export interface DEMSampler {
 
 export const nullDEMSampler: DEMSampler = { elevationFt: () => null };
 
+/**
+ * Optional fast path for "how high can the ground be along this leg".
+ *
+ * Implementations must return a value that is never *below* the true
+ * peak, so a caller can treat "bound + buffer ≤ altitude" as proof of
+ * clearance. null means "unknown" — the path left the covered area or
+ * the data isn't loaded — and must never be read as "clear".
+ *
+ * Kept separate from DEMSampler so test doubles and nullDEMSampler stay
+ * valid samplers without having to implement it.
+ */
+export interface TerrainBoundSampler {
+  maxTerrainAlongFt(a: LatLon, b: LatLon): number | null;
+}
+
+export function hasTerrainBound(
+  dem: DEMSampler,
+): dem is DEMSampler & TerrainBoundSampler {
+  return typeof (dem as Partial<TerrainBoundSampler>).maxTerrainAlongFt === "function";
+}
+
+export interface LegTerrainPeak {
+  /** Highest terrain MSL found along the leg, or null if the DEM had
+   *  nothing to say about any of it. */
+  peakFt: number | null;
+  /** True when at least one sample fell outside the DEM's coverage.
+   *  Callers that gate on terrain must fail closed on this. */
+  offGrid: boolean;
+}
+
+/**
+ * Samples the great circle between two points and returns the highest
+ * terrain along it, ignoring the endpoints' own field elevations.
+ *
+ * This is the raw measurement behind `legMinSafeCruiseAltFt`, split out
+ * so callers that need the peak itself (rather than a hemispherically
+ * rounded altitude) don't have to round-trip through the cruise-level
+ * rules to get it back.
+ */
+export function legTerrainPeakFt(input: {
+  from: LatLon;
+  to: LatLon;
+  dem: DEMSampler;
+  /** Sample spacing in nm; defaults to SAMPLE_SPACING_NM. */
+  spacing_nm?: number;
+}): LegTerrainPeak {
+  const { from, to, dem } = input;
+  const spacing = input.spacing_nm ?? SAMPLE_SPACING_NM;
+  const dist = greatCircleNM(from, to);
+  if (dist <= 0) {
+    const e = dem.elevationFt(from);
+    return { peakFt: e, offGrid: e === null };
+  }
+  const segments = Math.max(1, Math.ceil(dist / spacing));
+  const path = interpolateGreatCircle(from, to, segments);
+  let peak: number | null = null;
+  let offGrid = false;
+  for (const p of path) {
+    const e = dem.elevationFt(p);
+    if (e === null) {
+      offGrid = true;
+      continue;
+    }
+    if (peak === null || e > peak) peak = e;
+  }
+  return { peakFt: peak, offGrid };
+}
+
 export interface TerrainSample {
   point: LatLon;
   elevation_ft: number;
@@ -97,13 +165,9 @@ export function legMinSafeCruiseAltFt(input: {
   const buffer = input.buffer_ft ?? TERRAIN_BUFFER_FT;
   const dist = greatCircleNM(from, to);
   if (dist <= 0) return 0;
-  const segments = Math.max(1, Math.ceil(dist / SAMPLE_SPACING_NM));
-  const path = interpolateGreatCircle(from, to, segments);
+  const { peakFt } = legTerrainPeakFt({ from, to, dem });
   let worst = Math.max(from.elevation_ft ?? 0, to.elevation_ft ?? 0);
-  for (const p of path) {
-    const e = dem.elevationFt(p);
-    if (e !== null && e > worst) worst = e;
-  }
+  if (peakFt !== null && peakFt > worst) worst = peakFt;
   if (worst <= 0) return 0;
   const trueCourse = initialTrueCourseDeg(from, to);
   const varDeg = variation?.(from) ?? null;
