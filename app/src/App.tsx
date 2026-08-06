@@ -67,6 +67,7 @@ import { ExportPanel } from "./ui/ExportPanel";
 import { ExcludedAirports } from "./ui/ExcludedAirports";
 import { InteractivePanel } from "./ui/InteractivePanel";
 import { PinnedStops } from "./ui/PinnedStops";
+import { suggestDetours, type DetourSuggestion } from "./engine/detours";
 import type { LatLon } from "./engine/geo";
 import { RunwayPanel } from "./ui/RunwayPanel";
 import { RouteIssuesPanel } from "./ui/RouteIssuesPanel";
@@ -135,6 +136,11 @@ export function App() {
   // deliberately turns it on.
   const [capAltitude, setCapAltitude] = useState(false);
   const [maxAltFt, setMaxAltFt] = useState(9000);
+  // Detour suggestions are opt-in: computing them means re-running the
+  // altitude gate over thousands of candidate fixes, and a pilot who
+  // meant to raise the ceiling shouldn't pay for a search they didn't
+  // ask for.
+  const [detours, setDetours] = useState<DetourSuggestion[] | null>(null);
   const [pinnedStopIds, setPinnedStopIds] = useState<readonly string[]>([]);
   // Nav points keyed by their prefixed id ("nav:SEA" / "fix:HAROB"),
   // for labelling pins and resolving them back to positions at plan
@@ -688,6 +694,7 @@ export function App() {
 
   function runPlan(targetFt: number, overrides: PlanOverrides = {}) {
     setError(null);
+    setDetours(null);
     const o = airportByIdent(datasets.airports, origin);
     const d = airportByIdent(datasets.airports, destination);
     if (!o) {
@@ -1100,6 +1107,26 @@ export function App() {
     setSelectedRoute(u.selectedRoute);
     setPlanSnapshot(u.planSnapshot);
     setToast(null);
+  }
+
+  /** Fixes that would make the direct origin→destination leg flyable
+   *  under the current ceiling. Run on demand from the failure message. */
+  function findDetours() {
+    const o = airportByIdent(datasets.airports, origin);
+    const d = airportByIdent(datasets.airports, destination);
+    if (!o || !d) return;
+    setDetours(
+      suggestDetours({
+        from: o,
+        to: d,
+        navPoints: datasets.navPoints,
+        band: { minFt: targetAltFt, maxFt: capAltitude ? maxAltFt : null },
+        flightRule,
+        aircraft: selectedAircraft,
+        dem: demReady ? demSampler : undefined,
+        variation: variationFn,
+      }),
+    );
   }
 
   function identOf(id: string): string {
@@ -1576,6 +1603,46 @@ export function App() {
                   Build interactively →
                 </button>
                 {error && <p className="text-xs text-danger">{error}</p>}
+              {error && capAltitude && detours === null && (
+                <button
+                  type="button"
+                  onClick={findDetours}
+                  className="mt-1 rounded border border-hairline-input bg-card px-2 py-1 text-xs text-ink hover:bg-surface"
+                >
+                  Find a way around
+                </button>
+              )}
+              {detours !== null && (
+                <div className="mt-1 text-xs">
+                  {detours.length === 0 ? (
+                    <p className="text-muted">
+                      No nav point makes this leg work under the ceiling
+                      without a large detour.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {detours.map((s) => (
+                        <li key={s.navPoint.id} className="flex items-center gap-2">
+                          <span className="font-mono text-ink">
+                            {s.navPoint.ident}
+                          </span>
+                          <span className="text-muted">
+                            +{Math.round(s.addedNm)} nm ·{" "}
+                            {s.altFt.toLocaleString()} ft
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleAddPins([s.navPoint.id])}
+                            className="rounded border border-hairline-input bg-card px-1.5 py-0.5 text-ink hover:bg-surface"
+                          >
+                            Pin
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               </>
             ) : (
               <p className="text-center text-xs text-muted">
