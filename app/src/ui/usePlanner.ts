@@ -14,6 +14,7 @@ export interface PlanRequest {
   destinationId: string;
   aircraft: Aircraft;
   targetAltFt: number;
+  maxAltFt?: number | null;
   flightRule: FlightRule;
   reserveHr: number;
   maxLegHr?: number;

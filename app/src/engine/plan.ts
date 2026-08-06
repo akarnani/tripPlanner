@@ -21,6 +21,11 @@ export interface PlanInput {
   /** Pilot's chosen target altitude. Each leg flies the lowest legal
    *  hemispheric altitude at or above this for its own course. */
   targetAltFt: number;
+  /** Optional hard ceiling. Legs round *down* to the highest legal
+   *  level under it, and legs with nothing flyable underneath are
+   *  dropped from the graph. null / undefined is the no-ceiling
+   *  behaviour the app had before. */
+  maxAltFt?: number | null;
   flightRule: FlightRule;
   reserveHr: number;
   variation?: VariationFn;
@@ -90,6 +95,7 @@ export function plan(input: PlanInput): PlannedRoute[] {
     destination,
     aircraft,
     targetAltFt,
+    maxAltFt: input.maxAltFt ?? null,
     flightRule,
     reserveHr,
     variation: input.variation,

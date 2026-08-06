@@ -26,6 +26,7 @@ export interface PlanWorkerParams {
   destinationId: string;
   aircraft: Aircraft;
   targetAltFt: number;
+  maxAltFt?: number | null;
   flightRule: FlightRule;
   reserveHr: number;
   maxLegHr?: number;
@@ -120,6 +121,7 @@ self.onmessage = async (event: MessageEvent<PlanWorkerRequest>) => {
       destination: params.destinationId,
       aircraft: params.aircraft,
       targetAltFt: params.targetAltFt,
+      maxAltFt: params.maxAltFt ?? null,
       flightRule: params.flightRule,
       reserveHr: params.reserveHr,
       maxLegHr: params.maxLegHr,

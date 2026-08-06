@@ -15,6 +15,11 @@ import {
 } from "./hemispheric";
 import type { DEMSampler } from "./terrain";
 import { computeTerrainPenalty } from "./terrainPenalty";
+import {
+  decideLegAltitude,
+  type AltitudeBand,
+  type LegAltitudeRejection,
+} from "./altitudeBand";
 
 /** East-positive magnetic variation in degrees at a point, or null if
  *  unavailable. v1 routes that fall outside the WMM grid silently use
@@ -79,8 +84,19 @@ export interface BuildGraphInput {
   /** Pilot's chosen target altitude. Each leg flies the lowest legal
    *  hemispheric altitude at or above this for its own course. */
   targetAltFt: number;
+  /** Optional ceiling on top of `targetAltFt`. With one set, legs round
+   *  *down* to the highest legal level under it and are dropped from the
+   *  graph outright when terrain, the POH cruise table, or the
+   *  cruising-level rules leave nothing flyable — the same
+   *  drop-before-any-objective-sees-it treatment the fuel and
+   *  maxLegHr constraints already get. */
+  maxAltFt?: number | null;
   flightRule: FlightRule;
   reserveHr: number;
+  /** Called for each edge the altitude band rejects. Lets a failed
+   *  search explain which leg blocked it rather than returning a bare
+   *  empty result. */
+  onReject?: (r: EdgeRejection) => void;
   /** Optional magnetic-variation provider. When omitted or returning
    *  null at the leg origin, true course is used in place of magnetic
    *  course for the hemispheric rule. */
@@ -114,6 +130,14 @@ export interface BuildGraphInput {
   shapePoints?: readonly NavPoint[];
 }
 
+export interface EdgeRejection {
+  from: string;
+  to: string;
+  rejection: LegAltitudeRejection;
+  /** Lowest altitude that would have worked, when that is knowable. */
+  requiredAltFt?: number;
+}
+
 export interface Graph {
   byId: Map<string, Airport>;
   origin: string;
@@ -145,7 +169,12 @@ export function buildGraph(input: BuildGraphInput): Graph {
     excludedAirportIds,
     dem,
     shapePoints,
+    onReject,
   } = input;
+  const band: AltitudeBand = {
+    minFt: targetAltFt,
+    maxFt: input.maxAltFt ?? null,
+  };
   const capacityGal = aircraft.fuel.usable_capacity_gal;
   const originFuelGal =
     startingFuelGal !== undefined
@@ -238,17 +267,48 @@ export function buildGraph(input: BuildGraphInput): Graph {
           ? magneticCourseDeg(true_course_deg, variation_deg)
           : true_course_deg;
       const segmentCourses: number[] = [];
-      let cruise_alt_ft = 0;
       for (let s = 0; s < track.length - 1; s++) {
         const segTrue = initialTrueCourseDeg(track[s], track[s + 1]);
-        const segMag =
+        segmentCourses.push(
           variation_deg !== null
             ? magneticCourseDeg(segTrue, variation_deg)
-            : segTrue;
-        segmentCourses.push(segMag);
-        const segAlt = hemisphericAltitude(targetAltFt, segMag, flightRule);
-        if (segAlt > cruise_alt_ft) cruise_alt_ft = segAlt;
+            : segTrue,
+        );
       }
+      // Terminal legs are exempt from a ceiling: a field at 9,078 ft
+      // cannot be served by an 8,500 ft cap, and refusing outright makes
+      // the mode useless exactly where pilots most want it. The leg
+      // still draws its ordinary terrain warning after planning, so the
+      // exemption relaxes the gate without hiding the hazard.
+      const terminal = fromId === origin || to.id === destination;
+      const decision = decideLegAltitude({
+        from,
+        to,
+        segmentCoursesDeg: segmentCourses,
+        band,
+        flightRule,
+        aircraft,
+        dem,
+        via: via.length > 0 ? via : undefined,
+        exemptFromCeiling: terminal,
+      });
+      if (decision.altFt === null) {
+        // Record why, so a failed search can tell the pilot which leg
+        // blocked it and how high it would have to go — "no route found"
+        // on its own is a dead end when refusing is the normal outcome.
+        if (decision.requiredAltFt !== undefined) {
+          onReject?.({
+            from: fromId,
+            to: to.id,
+            rejection: decision.rejection!,
+            requiredAltFt: decision.requiredAltFt,
+          });
+        } else {
+          onReject?.({ from: fromId, to: to.id, rejection: decision.rejection! });
+        }
+        continue;
+      }
+      const cruise_alt_ft = decision.altFt;
       // A segment is non-compliant when the lowest level it accepts at
       // or above the chosen altitude isn't the chosen altitude itself.
       const hemisphericConflict = segmentCourses.some(

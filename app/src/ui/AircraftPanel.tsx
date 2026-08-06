@@ -7,6 +7,13 @@ interface Props {
   onSelect: (slug: string) => void;
   targetAltFt: number;
   onTargetAltChange: (alt: number) => void;
+  /** Optional hard ceiling: for pilots who can't climb higher because
+   *  of icing, oxygen, or a layer, and would rather be told no route
+   *  exists than be handed one they can't fly. */
+  capAltitude: boolean;
+  onCapAltitudeChange: (on: boolean) => void;
+  maxAltFt: number;
+  onMaxAltChange: (ft: number) => void;
   reserveMin: number;
   onReserveChange: (min: number) => void;
   startingFuelGal: number;
@@ -21,6 +28,10 @@ export function AircraftPanel({
   onSelect,
   targetAltFt,
   onTargetAltChange,
+  capAltitude,
+  onCapAltitudeChange,
+  maxAltFt,
+  onMaxAltChange,
   reserveMin,
   onReserveChange,
   startingFuelGal,
@@ -105,9 +116,36 @@ export function AircraftPanel({
           className="w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-sm text-ink"
         />
       </div>
+      <div className="flex items-center gap-2">
+        <input
+          id="cap-altitude"
+          type="checkbox"
+          checked={capAltitude}
+          onChange={(e) => onCapAltitudeChange(e.target.checked)}
+        />
+        <label htmlFor="cap-altitude" className="text-xs text-ink">
+          Stay at or below
+        </label>
+        <input
+          id="max-altitude"
+          type="number"
+          aria-label="Maximum altitude (ft)"
+          min={0}
+          max={45000}
+          step={500}
+          disabled={!capAltitude}
+          value={maxAltFt}
+          onChange={(e) =>
+            onMaxAltChange(Number.parseInt(e.target.value, 10) || 0)
+          }
+          className="w-24 rounded border border-hairline-input bg-card px-2 py-1 font-mono text-sm text-ink disabled:opacity-40"
+        />
+        <span className="text-xs text-muted">ft</span>
+      </div>
       <p className="text-xs text-muted">
-        Each leg flies the next legal hemispheric altitude at or above
-        target altitude for its course.
+        {capAltitude
+          ? "Each leg flies the highest legal hemispheric altitude at or below the ceiling. Legs that can't clear terrain underneath it are dropped, so a route may not exist \u2014 which is the point."
+          : "Each leg flies the next legal hemispheric altitude at or above target altitude for its course."}
       </p>
       <p className="text-xs text-muted">
         Fuel onboard at departure. Capped at {capacityGal} gal (full

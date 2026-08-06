@@ -130,6 +130,11 @@ export function App() {
   const [excludedIds, setExcludedIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  // Optional hard ceiling on cruise altitude. Off by default, so every
+  // saved trip and the existing behaviour are untouched until a pilot
+  // deliberately turns it on.
+  const [capAltitude, setCapAltitude] = useState(false);
+  const [maxAltFt, setMaxAltFt] = useState(9000);
   const [pinnedStopIds, setPinnedStopIds] = useState<readonly string[]>([]);
   // Nav points keyed by their prefixed id ("nav:SEA" / "fix:HAROB"),
   // for labelling pins and resolving them back to positions at plan
@@ -668,6 +673,7 @@ export function App() {
       destination,
       aircraftSlug: selectedAircraft.slug,
       targetAltFt: targetFt,
+      maxAltFt: capAltitude ? maxAltFt : null,
       reserveMin,
       startingFuelGal,
       flightRule,
@@ -755,6 +761,7 @@ export function App() {
         destinationId: d.id,
         aircraft: selectedAircraft,
         targetAltFt: targetFt,
+        maxAltFt: capAltitude ? maxAltFt : null,
         flightRule,
         reserveHr: reserveMin / 60,
         maxLegHr: capLegTime ? maxLegHr : undefined,
@@ -766,7 +773,15 @@ export function App() {
       {
         onResult: (result, meta) => {
           if (result.length === 0) {
-            setError("no route found — try relaxing constraints");
+            // With a ceiling in force, "no route" is an ordinary
+            // answer rather than a malfunction, and the generic
+            // message reads like something broke. Name the constraint
+            // that is actually doing the work.
+            setError(
+              capAltitude
+                ? `no route at or below ${maxAltFt.toLocaleString()} ft — raise the ceiling, or pin a nav point to route around the terrain`
+                : "no route found — try relaxing constraints",
+            );
             setRoutes([]);
             setPlanSnapshot(null);
             return;
@@ -1485,6 +1500,10 @@ export function App() {
                 onSelect={setAircraftSlug}
                 targetAltFt={targetAltFt}
                 onTargetAltChange={setTargetAltFt}
+                capAltitude={capAltitude}
+                onCapAltitudeChange={setCapAltitude}
+                maxAltFt={maxAltFt}
+                onMaxAltChange={setMaxAltFt}
                 reserveMin={reserveMin}
                 onReserveChange={setReserveMin}
                 startingFuelGal={startingFuelGal}

@@ -82,3 +82,39 @@ export function nextValidAltitudeAtOrAbove(
 ): number {
   return hemisphericAltitude(minSafeFt, courseDeg, rule);
 }
+
+/**
+ * Highest valid hemispheric cruise altitude at or *below* `capFt`, or
+ * null when no legal level fits under the cap.
+ *
+ * The mirror image of `hemisphericAltitude`, and the reason a ceiling
+ * is expressible at all: every other altitude path in the engine
+ * rounds up, so a pilot asking to stay at or under 8,500 ft because of
+ * icing, oxygen, or a layer had no way to say so. Searching downward
+ * means the answer is a level the pilot may legally cruise at, not the
+ * raw number they typed — 8,500 westbound VFR isn't legal, 8,500
+ * eastbound VFR is.
+ *
+ * Returns `capFt` unchanged below `floorFt`, matching
+ * `hemisphericAltitude`: the hemispheric rule simply doesn't apply
+ * down there.
+ */
+export function hemisphericAltitudeAtOrBelow(
+  capFt: number,
+  courseDeg: number,
+  rule: FlightRule,
+  floorFt = 3000,
+): number | null {
+  if (capFt < floorFt) return capFt;
+  const eastbound = courseDeg >= 0 && courseDeg < 180;
+  const firstThousand = eastbound ? 3 : 4;
+  let best: number | null = null;
+  for (let k = 0; k < 30; k++) {
+    const thousands = (firstThousand + k * 2) * 1000;
+    const offset = rule === "VFR" && thousands < CLASS_A_FLOOR_FT ? 500 : 0;
+    const candidate = thousands + offset;
+    if (candidate > capFt) break;
+    if (candidate >= floorFt) best = candidate;
+  }
+  return best;
+}

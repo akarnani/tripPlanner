@@ -45,6 +45,73 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+/**
+ * Highest altitude the POH actually publishes cruise numbers for.
+ *
+ * `cruiseAt` clamps above this rather than failing, which is fine when
+ * the number only feeds a cost estimate — but not when it decides
+ * whether a route is *possible*. A C172S asked for 15,000 ft silently
+ * gets its 12,000 ft row back, and a planner gating on that would
+ * cheerfully report a route works at an altitude the aeroplane has no
+ * published performance for. Callers that treat cruise numbers as a
+ * feasibility input must reject a request above this instead.
+ *
+ * Precedent: `interactive.ts` already caps its altitude search here for
+ * the same reason ("POH-verbatim: never search above the published
+ * cruise table"), and CLAUDE.md forbids extrapolating beyond the chart.
+ */
+export function maxPublishedCruiseAltFt(aircraft: Aircraft): number {
+  const rows = aircraft.cruise;
+  if (rows.length === 0) {
+    throw new Error(`aircraft ${aircraft.slug} has no cruise rows`);
+  }
+  return rows[rows.length - 1].altitude_ft;
+}
+
+/**
+ * Cruise numbers for feasibility decisions, taken as the worst case of
+ * the two published rows bracketing `altitude_ft`: the lower row's TAS
+ * and the higher row's fuel burn.
+ *
+ * `cruiseAt` interpolates, which invents a cell the POH never printed.
+ * That is tolerable for ranking candidate routes and not tolerable for
+ * deciding one is flyable. Note that rounding altitude *up* to the next
+ * published row — the rule runway.ts follows — is the optimistic
+ * direction here, not the conservative one: higher rows carry faster
+ * TAS and usually lower burn. Both numbers returned here come from real
+ * published cells; nothing is interpolated or extrapolated.
+ *
+ * Throws when `altitude_ft` is above the published table, because there
+ * is no honest answer to give.
+ */
+export function cruiseAtConservative(
+  aircraft: Aircraft,
+  altitude_ft: number,
+): CruiseAtAltitude {
+  const rows = aircraft.cruise;
+  const ceiling = maxPublishedCruiseAltFt(aircraft);
+  if (altitude_ft > ceiling) {
+    throw new Error(
+      `${aircraft.slug} publishes no cruise data above ${ceiling} ft (asked for ${altitude_ft} ft)`,
+    );
+  }
+  if (altitude_ft <= rows[0].altitude_ft) return pick(rows[0]);
+  for (let i = 0; i < rows.length - 1; i++) {
+    const lo = rows[i];
+    const hi = rows[i + 1];
+    if (altitude_ft > lo.altitude_ft && altitude_ft <= hi.altitude_ft) {
+      // Exactly on a published row: use it verbatim.
+      if (altitude_ft === hi.altitude_ft) return pick(hi);
+      return {
+        tas_kt: Math.min(lo.tas_kt, hi.tas_kt),
+        fuel_gph: Math.max(lo.fuel_gph, hi.fuel_gph),
+        power_pct: Math.min(lo.power_pct, hi.power_pct),
+      };
+    }
+  }
+  return pick(rows[rows.length - 1]);
+}
+
 export interface RangeInput {
   aircraft: Aircraft;
   altitude_ft: number;
