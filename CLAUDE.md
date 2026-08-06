@@ -45,7 +45,8 @@ Performance-sensitive UI detail: `handlePlan` in `App.tsx` uses `flushSync` + do
 
 Static datasets live in `data/` and are produced by:
 
-- `pipelines/swift/` — SwiftNASR / SwiftCIFP / SwiftDOF, runs on `macos-latest` via `.github/workflows/data-refresh.yml` (weekly cron + manual dispatch). Outputs `airports.json`, `runways.json`, `approaches.json`, `obstacles.json` and commits back to `main`.
+- `pipelines/swift/` — SwiftNASR / SwiftCIFP / SwiftDOF, runs on `macos-26` via `.github/workflows/data-refresh.yml` (weekly Thursday cron + manual dispatch). Outputs `airports.json`, `runways.json`, `navaids.json`, `fixes.json`, `approaches.json`, `obstacles.json` and commits back to `main`. The cron is Thursday because FAA NASR/CIFP cycles go effective on Thursdays.
+- `navaids.json` and `fixes.json` are objects (`{cycle, navaids|fixes}`) rather than bare arrays — they carry the NASR cycle they were built from, because nav data goes stale in a way airport data doesn't (VOR decommissioning; fix idents written into exports that a panel GPS on another AIRAC cycle may not resolve). `.github/scripts/check_counts.py` fails the run if a committed cycle has already expired. Optional fields are **omitted** by Swift's `encodeIfPresent`, not written as `null`, so TS consumers must treat them as `undefined`.
 - `pipelines/dem_build.py` and `pipelines/magnetic_build.py` — produce the gzipped binary `terrain_grid.bin.gz` and `magnetic_grid.bin.gz`. Manual dispatch only.
 
 Aircraft performance YAML lives under `aircraft/<slug>/performance.yaml` and is validated in CI by `pipelines/validate_perf.mjs`. The `/poh-extract` Claude Code skill (`.claude/skills/poh-extract/`) generates these files from a POH PDF placed in the aircraft directory.
