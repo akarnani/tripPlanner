@@ -144,7 +144,7 @@ export function AircraftPanel({
       </div>
       <p className="text-xs text-muted">
         {capAltitude
-          ? "Each leg flies the highest legal hemispheric altitude at or below the ceiling. Legs that can't clear terrain underneath it are dropped, so a route may not exist \u2014 which is the point."
+          ? "Each leg flies the highest legal hemispheric altitude at or below the ceiling. Legs that can't clear terrain underneath it are dropped, so a route may not exist \u2014 which is the point. A leg into a field higher than the ceiling is flown above it and flagged."
           : "Each leg flies the next legal hemispheric altitude at or above target altitude for its course."}
       </p>
       <p className="text-xs text-muted">

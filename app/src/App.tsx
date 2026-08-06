@@ -953,6 +953,7 @@ export function App() {
         toIdent: l.toAirport.icao ?? l.toAirport.lid,
         cruise_alt_ft: l.cruise_alt_ft,
         hemisphericConflict: l.extra?.hemispheric_conflict === 1,
+        ceilingExceeded: l.extra?.ceiling_exceeded === 1,
       })),
     });
     // Surfaced first among cautions: an auto-planned route whose

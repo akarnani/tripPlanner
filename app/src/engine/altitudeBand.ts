@@ -51,6 +51,11 @@ export interface LegAltitudeDecision {
   /** Altitude to fly, or null when the leg is infeasible in the band. */
   altFt: number | null;
   rejection?: LegAltitudeRejection;
+  /** True when a terminal leg was allowed above the pilot's ceiling
+   *  because its own field elevation left no alternative. Surfaced as a
+   *  route issue: relaxing the gate is defensible, doing it silently
+   *  is not. */
+  exceededCeiling?: boolean;
   /** For a terrain rejection, the lowest altitude that *would* clear —
    *  what the caller reports as "this leg needs 10,300 ft". */
   requiredAltFt?: number;
@@ -68,12 +73,19 @@ export interface LegAltitudeInput {
   dem?: DEMSampler;
   via?: readonly LatLon[];
   bufferFt?: number;
-  /** Terminal legs may be exempted from the ceiling — a field at 9,078
-   *  ft cannot be served by an 8,500 ft cap, and refusing outright
-   *  makes the mode useless in the mountain west. The leg still gets
-   *  its ordinary terrain warning post-plan, so the exemption relaxes
-   *  the gate without hiding the hazard. */
-  exemptFromCeiling?: boolean;
+  /** True for a leg touching the origin or destination.
+   *
+   *  Such a leg is relaxed ONLY where the airport's own field elevation
+   *  makes the band arithmetically impossible — a field at 9,078 ft
+   *  cannot be served by an 8,500 ft cap, and refusing outright would
+   *  make the mode useless in the mountain west.
+   *
+   *  It is deliberately NOT a blanket exemption from the ceiling. A
+   *  nonstop route has exactly one leg and it touches both ends; a
+   *  one-stop route has two. Exempting every terminal leg would switch
+   *  the ceiling off entirely for the overwhelming majority of GA
+   *  flights while the UI went on claiming it was enforced. */
+  terminalLeg?: boolean;
 }
 
 /**
@@ -86,33 +98,45 @@ export interface LegAltitudeInput {
  * common case — plenty of clearance, or obviously none — must not pay
  * for a full-resolution terrain walk.
  */
+/** Sample spacing when terrain clearance is a verdict rather than a
+ *  warning. Half the grid's ~0.5 nm cell size, so the walk cannot step
+ *  over a cell. */
+const GATE_SAMPLE_SPACING_NM = 0.25;
+
 export function decideLegAltitude(
   input: LegAltitudeInput,
 ): LegAltitudeDecision {
   const { band, flightRule, aircraft, segmentCoursesDeg } = input;
   const buffer = input.bufferFt ?? TERRAIN_BUFFER_FT;
-  const ceiling = input.exemptFromCeiling ? null : band.maxFt;
+  const ceiling = band.maxFt;
 
-  // The POH limit is not a preference and the terminal-leg exemption
-  // doesn't reach it: exempting a leg from the pilot's ceiling is a
-  // routing choice, but no exemption makes an aeroplane cruise above
-  // the highest altitude its manufacturer published numbers for.
-  const pohCeiling = maxPublishedCruiseAltFt(aircraft);
-  if (band.minFt > pohCeiling) {
-    return { altFt: null, rejection: "above-poh-ceiling" };
-  }
-
-  // No ceiling: the pre-existing behaviour, verbatim. Highest of the
-  // per-segment levels, because a bent leg's segments can disagree.
-  if (ceiling === null) {
+  /** Lowest legal level at or above `floorFt` — the no-ceiling rule. */
+  const unceilinged = (floorFt: number): number => {
     let alt = 0;
     for (const c of segmentCoursesDeg) {
-      const a = hemisphericAltitude(band.minFt, c, flightRule);
+      const a = hemisphericAltitude(floorFt, c, flightRule);
       if (a > alt) alt = a;
     }
-    return alt > pohCeiling
-      ? { altFt: null, rejection: "above-poh-ceiling" }
-      : { altFt: alt };
+    return alt;
+  };
+
+  const pohCeiling = maxPublishedCruiseAltFt(aircraft);
+
+  // No ceiling: the pre-existing behaviour, byte for byte. Highest of
+  // the per-segment levels, because a bent leg's segments can disagree.
+  //
+  // The POH cruise-table limit is deliberately NOT enforced here.
+  // Enforcing it would silently delete every westbound edge for, say, a
+  // C172S targeting 11,500 ft (which rounds to 12,500, past its 12,000
+  // ft table) and report only "no route found — try relaxing
+  // constraints". Refusing to plan above the published table is
+  // defensible, but not as an undisclosed change to the default path
+  // with a misattributed error. It applies where the pilot has opted
+  // into a band, and where the number is load-bearing for feasibility.
+  if (ceiling === null) return { altFt: unceilinged(band.minFt) };
+
+  if (band.minFt > pohCeiling) {
+    return { altFt: null, rejection: "above-poh-ceiling" };
   }
 
   // Highest legal level under the ceiling that every segment accepts.
@@ -136,6 +160,16 @@ export function decideLegAltitude(
     input.to.elevation_ft ?? 0,
   );
   if (fieldFt + buffer > alt) {
+    // The one case the terminal relaxation covers: you cannot serve a
+    // 9,078 ft field under an 8,500 ft cap by routing differently.
+    if (input.terminalLeg) {
+      // Must clear the field that forced the relaxation, not merely the
+      // pilot's floor -- otherwise a 9,078 ft field "relaxes" to 4,000.
+      const relaxed = unceilinged(Math.max(band.minFt, fieldFt + buffer));
+      return relaxed > pohCeiling
+        ? { altFt: null, rejection: "above-poh-ceiling" }
+        : { altFt: relaxed, exceededCeiling: true };
+    }
     return {
       altFt: null,
       rejection: "field-elevation",
@@ -161,6 +195,14 @@ export function decideLegAltitude(
     to: input.to,
     dem,
     via: input.via,
+    // Finer than the 1 nm the advisory analyser uses. The DEM is 30"
+    // (~0.5 nm), so a 1 nm walk steps over cells and under-reports the
+    // peak -- measured at a mean 167 ft low across mountain-west legs
+    // and over 500 ft low on 9% of them. Tolerable when the number only
+    // raises a warning; not when it certifies a specific altitude as
+    // clear. This path is reached only when the coarse bound was
+    // inconclusive, so the extra samples are not on the common path.
+    spacing_nm: GATE_SAMPLE_SPACING_NM,
   });
   // Fail closed. The DEM is CONUS-only and ~500 airports in the
   // dataset sit outside it, nearly all of them Alaskan; treating "no

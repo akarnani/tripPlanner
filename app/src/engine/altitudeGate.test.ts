@@ -152,7 +152,7 @@ describe("altitude band gate", () => {
     expect(d.requiredAltFt).toBe(11078);
   });
 
-  it("lets a terminal leg out of the ceiling when exempted", () => {
+  it("lets a terminal leg above the ceiling only when its field forces it", () => {
     const d = decideLegAltitude({
       from: { ...FROM, elevation_ft: 9078 },
       to: TO,
@@ -160,11 +160,45 @@ describe("altitude band gate", () => {
       band: band(4000, 8000),
       flightRule: "IFR",
       aircraft: ac,
-      exemptFromCeiling: true,
+      terminalLeg: true,
     });
-    // Falls back to the no-ceiling behaviour: round up from the floor.
-    expect(d.altFt).toBe(4000);
-    expect(d.rejection).toBeUndefined();
+    // A 9,078 ft field cannot be served under an 8,500 ft cap by any
+    // amount of rerouting, so the leg is allowed up -- and says so.
+    expect(d.altFt).toBe(12000);
+    expect(d.exceededCeiling).toBe(true);
+  });
+
+  it("still gates a terminal leg whose field elevation is not the problem", () => {
+    // The bug this replaced: a blanket terminal exemption switched the
+    // ceiling off for every nonstop and one-stop route, because those
+    // routes consist entirely of terminal legs.
+    const d = decideLegAltitude({
+      from: FROM,
+      to: TO,
+      segmentCoursesDeg: WESTBOUND,
+      band: band(4000, 8000),
+      flightRule: "IFR",
+      aircraft: ac,
+      dem: flatDEM(7000),
+      terminalLeg: true,
+    });
+    expect(d.altFt).toBeNull();
+    expect(d.rejection).toBe("terrain");
+  });
+
+  it("holds a terminal leg to the ceiling when terrain permits", () => {
+    const d = decideLegAltitude({
+      from: FROM,
+      to: TO,
+      segmentCoursesDeg: WESTBOUND,
+      band: band(4000, 8000),
+      flightRule: "IFR",
+      aircraft: ac,
+      dem: flatDEM(3000),
+      terminalLeg: true,
+    });
+    expect(d.altFt).toBe(8000);
+    expect(d.exceededCeiling).toBeUndefined();
   });
 
   it("takes the lowest level every segment of a bent leg accepts", () => {

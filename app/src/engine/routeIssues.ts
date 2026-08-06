@@ -74,6 +74,7 @@ export function collectRouteIssues(input: {
     toIdent: string;
     cruise_alt_ft: number;
     hemisphericConflict?: boolean;
+    ceilingExceeded?: boolean;
   }[];
 }): RouteIssue[] {
   const {
@@ -94,6 +95,16 @@ export function collectRouteIssues(input: {
   // the one who has to answer for the altitude, so say it plainly
   // rather than let the leg render as though it complies.
   for (const [i, leg] of (legs ?? []).entries()) {
+    if (leg.ceilingExceeded) {
+      issues.push({
+        legIndex: i,
+        phase: "cruise",
+        severity: "caution",
+        ident: `${leg.fromIdent}\u2192${leg.toIdent}`,
+        message: `${leg.fromIdent}\u2192${leg.toIdent} flies ${leg.cruise_alt_ft.toLocaleString()} ft, above your ceiling \u2014 the field elevation leaves no lower option`,
+        detail: "terminal leg",
+      });
+    }
     if (!leg.hemisphericConflict) continue;
     issues.push({
       legIndex: i,

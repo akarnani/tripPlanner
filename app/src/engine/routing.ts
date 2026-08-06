@@ -275,11 +275,11 @@ export function buildGraph(input: BuildGraphInput): Graph {
             : segTrue,
         );
       }
-      // Terminal legs are exempt from a ceiling: a field at 9,078 ft
-      // cannot be served by an 8,500 ft cap, and refusing outright makes
-      // the mode useless exactly where pilots most want it. The leg
-      // still draws its ordinary terrain warning after planning, so the
-      // exemption relaxes the gate without hiding the hazard.
+      // Legs touching origin or destination get a narrow relaxation --
+      // only where the airport's own elevation makes the band
+      // impossible. Not a blanket exemption: a nonstop route's single
+      // leg touches both ends, so exempting terminal legs outright
+      // would disable the ceiling for most flights entirely.
       const terminal = fromId === origin || to.id === destination;
       const decision = decideLegAltitude({
         from,
@@ -290,7 +290,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
         aircraft,
         dem,
         via: via.length > 0 ? via : undefined,
-        exemptFromCeiling: terminal,
+        terminalLeg: terminal,
       });
       if (decision.altFt === null) {
         // Record why, so a failed search can tell the pilot which leg
@@ -342,6 +342,10 @@ export function buildGraph(input: BuildGraphInput): Graph {
       if (maxLegHr !== undefined && time_hr > maxLegHr) continue;
       const extra: Record<string, number> = {};
       if (hemisphericConflict) extra.hemispheric_conflict = 1;
+      // A terminal leg that had to go above the pilot's ceiling because
+      // its own field elevation left no choice. Relaxing the gate there
+      // is defensible; doing it silently is not.
+      if (decision.exceededCeiling) extra.ceiling_exceeded = 1;
       if (dem) {
         const penalty = computeTerrainPenalty({
           from,
