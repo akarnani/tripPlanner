@@ -4,6 +4,7 @@ import type { Aircraft } from "@/data/aircraft";
 import { toGPX } from "@/exports/gpx";
 import { toFPL } from "@/exports/fpl";
 import { toPDF } from "@/exports/pdf";
+import { routePointIdent, routeSequence } from "@/exports/routePoints";
 
 interface Props {
   route: PlannedRoute;
@@ -42,12 +43,15 @@ function download(name: string, type: string, content: BlobPart) {
 }
 
 export function ExportPanel({ route, aircraft, terrain }: Props) {
-  const seq = [
-    route.legs[0].fromAirport,
-    ...route.legs.map((l) => l.toAirport),
-  ];
+  // Airports only. A nav point has no ICAO or LID to name a file with,
+  // and a route bent through half a dozen fixes would produce a name
+  // nobody can pick out of a save dialog — the places you land are what
+  // identifies the trip.
   const baseName =
-    seq.map((a) => a.icao ?? a.lid).join("-") || "trip";
+    routeSequence(route)
+      .filter((p) => p.kind === "airport")
+      .map(routePointIdent)
+      .join("-") || "trip";
 
   return (
     <div className="flex gap-2 border-t border-hairline bg-surface p-3">

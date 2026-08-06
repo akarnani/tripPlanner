@@ -355,6 +355,24 @@ describe("computeTerrainPenalty", () => {
     expect(r.departure_shortfall_ft).toBeGreaterThan(0);
   });
 
+  test("an empty via list is not a shape", () => {
+    const args = {
+      from: FROM,
+      to: TO,
+      cruise_alt_ft: 6500,
+      climb_speed_kt: 78,
+      climb_rate_fpm: 700,
+      dem: peakAroundPoint(
+        pointAtFraction(TO, FROM, 10 / greatCircleNM(TO, FROM)),
+        5000,
+        CORRIDOR_SAMPLE_NM,
+      ),
+    };
+    expect(computeTerrainPenalty({ ...args, via: [] })).toEqual(
+      computeTerrainPenalty(args),
+    );
+  });
+
   test("corridor never exceeds MAX_CORRIDOR_NM even with very high cruise altitudes", () => {
     // Cruise alt 30,000 would otherwise stretch the descent corridor
     // to (30000-0) / (1000/3) = 90 nm. The cap should clip it. A peak
@@ -371,5 +389,103 @@ describe("computeTerrainPenalty", () => {
       dem,
     });
     expect(r.arrival_shortfall_ft).toBe(0);
+  });
+});
+
+describe("computeTerrainPenalty on a leg shaped through nav points", () => {
+  // A bend ~40 nm south of the direct FROM→TO line. Both of its
+  // segments are ~62 nm, comfortably longer than the 30 nm corridors,
+  // so each corridor lives on one segment of the bent track.
+  const BEND: LatLon = { lat: 39.3, lon: -119 };
+  const base = {
+    from: FROM,
+    to: TO,
+    cruise_alt_ft: 6500,
+    climb_speed_kt: 78,
+    climb_rate_fpm: 700,
+  };
+
+  test("the departure corridor climbs out along the bend", () => {
+    // 4,000 ft peak 5 nm out along the bent track, where a 350 ft/nm
+    // climb has only reached ~1,750 ft. It blocks the leg that turns
+    // toward it and no other.
+    const blocker = pointAtFraction(FROM, BEND, 5 / greatCircleNM(FROM, BEND));
+    const dem = peakAroundPoint(blocker, 4000, CORRIDOR_SAMPLE_NM);
+    expect(
+      computeTerrainPenalty({ ...base, dem, via: [BEND] })
+        .departure_shortfall_ft,
+    ).toBeGreaterThan(1000);
+    expect(computeTerrainPenalty({ ...base, dem }).departure_shortfall_ft).toBe(
+      0,
+    );
+  });
+
+  test("the arrival corridor descends in on the final segment", () => {
+    const blocker = pointAtFraction(TO, BEND, 10 / greatCircleNM(TO, BEND));
+    const dem = peakAroundPoint(blocker, 5000, CORRIDOR_SAMPLE_NM);
+    expect(
+      computeTerrainPenalty({ ...base, dem, via: [BEND] }).arrival_shortfall_ft,
+    ).toBeGreaterThan(1000);
+    expect(computeTerrainPenalty({ ...base, dem }).arrival_shortfall_ft).toBe(0);
+  });
+
+  test("terrain the bend steers around stops being charged for", () => {
+    // The reason a pilot shapes a leg at all: a mountain 10 nm off the
+    // arrival end of the direct line. Scoring the direct course would
+    // keep charging the detour for the very terrain it exists to miss,
+    // and the router would then reject its own shaped route.
+    const blocker = pointAtFraction(TO, FROM, 10 / greatCircleNM(TO, FROM));
+    const dem = peakAroundPoint(blocker, 5000, CORRIDOR_SAMPLE_NM);
+    expect(
+      computeTerrainPenalty({ ...base, dem }).arrival_shortfall_ft,
+    ).toBeGreaterThan(1000);
+    const shaped = computeTerrainPenalty({ ...base, dem, via: [BEND] });
+    expect(shaped.arrival_shortfall_ft).toBe(0);
+    expect(shaped.hr).toBe(0);
+  });
+
+  test("a corridor that outlives its first segment turns with the track", () => {
+    // Bend only 10 nm out of FROM, so the 30 nm departure corridor has
+    // to cross the nav point and carry on down the next segment — a
+    // ~42° turn, which puts the straight-ahead sample 7 nm from where
+    // the aircraft actually is at 20 nm out.
+    const southeast = mkAirport("SE", 38.5, -117.5);
+    const bend = pointAtFraction(
+      FROM,
+      southeast,
+      10 / greatCircleNM(FROM, southeast),
+    );
+    const blocker = pointAtFraction(bend, TO, 10 / greatCircleNM(bend, TO));
+    const dem = peakAroundPoint(blocker, 9000, CORRIDOR_SAMPLE_NM);
+    expect(
+      computeTerrainPenalty({ ...base, dem, via: [bend] })
+        .departure_shortfall_ft,
+    ).toBeGreaterThan(1000);
+    expect(computeTerrainPenalty({ ...base, dem }).departure_shortfall_ft).toBe(
+      0,
+    );
+  });
+
+  test("a via point on the direct line leaves both corridors untouched", () => {
+    // Shaping through a point that's already on the great circle is a
+    // no-op geometrically, so it has to be a no-op numerically: same
+    // corridor length, same samples, same shortfalls.
+    const onLine = pointAtFraction(FROM, TO, 0.5);
+    const dem = peakAroundPoint(
+      pointAtFraction(TO, FROM, 10 / greatCircleNM(TO, FROM)),
+      5000,
+      CORRIDOR_SAMPLE_NM,
+    );
+    const shaped = computeTerrainPenalty({ ...base, dem, via: [onLine] });
+    const direct = computeTerrainPenalty({ ...base, dem });
+    expect(shaped.departure_shortfall_ft).toBeCloseTo(
+      direct.departure_shortfall_ft,
+      6,
+    );
+    expect(shaped.arrival_shortfall_ft).toBeCloseTo(
+      direct.arrival_shortfall_ft,
+      6,
+    );
+    expect(shaped.hr).toBeCloseTo(direct.hr, 9);
   });
 });

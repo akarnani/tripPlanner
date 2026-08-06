@@ -1,5 +1,5 @@
 import type { Airport } from "@/data/loaders";
-import { greatCircleNM } from "./geo";
+import { greatCircleNM, polylineLengthNM, type LatLon } from "./geo";
 import { initialTrueCourseDeg } from "./hemispheric";
 import type { DEMSampler } from "./terrain";
 import type { PlannedRoute } from "./plan";
@@ -62,12 +62,22 @@ export interface TerrainPenaltyInput {
   /** Aircraft climb rate (ft/min). */
   climb_rate_fpm: number;
   dem: DEMSampler;
-  /** Precomputed great-circle distance from→to (nm). The routing
-   *  graph already has this for every edge — passing it in skips a
-   *  redundant sqrt + 4 trig on the hot path. */
+  /** Nav points the leg is shaped through, if any. Both corridors then
+   *  follow the shaped track — outward along its first segments, inward
+   *  along its last — because a leg bent to dodge terrain leaves and
+   *  arrives on headings the direct course knows nothing about, and
+   *  scoring the direct course would charge it for terrain it avoids
+   *  while missing the terrain it turned toward. */
+  via?: readonly LatLon[];
+  /** Precomputed length of the leg's ground track (nm) — the polyline
+   *  length when `via` is present, the great circle otherwise. The
+   *  routing graph already has this for every edge, so passing it in
+   *  skips a redundant sqrt + 4 trig on the hot path. */
   distance_nm?: number;
-  /** Precomputed initial true course from→to (degrees). Same
-   *  hot-path optimization as `distance_nm`. */
+  /** Precomputed initial true course out of `from` (degrees) — along
+   *  the first shaped segment when `via` is present, which is what the
+   *  departure corridor wants either way. Same hot-path optimization as
+   *  `distance_nm`. */
   true_course_deg?: number;
 }
 
@@ -95,24 +105,22 @@ const ZERO: TerrainPenalty = {
 export function computeTerrainPenalty(
   input: TerrainPenaltyInput,
 ): TerrainPenalty {
-  const { from, to, cruise_alt_ft, climb_speed_kt, climb_rate_fpm, dem } = input;
-  const total_nm = input.distance_nm ?? greatCircleNM(from, to);
+  const { from, to, cruise_alt_ft, climb_speed_kt, climb_rate_fpm, dem, via } =
+    input;
+  const shaped = via !== undefined && via.length > 0;
+  const outbound: LatLon[] = shaped ? [from, ...via, to] : [from, to];
+  const total_nm = input.distance_nm ?? polylineLengthNM(outbound);
   if (total_nm === 0) return ZERO;
-  // Bearings out from each terminal. The leg bends very little over a
-  // 30 nm corridor, so using the initial true course out of each airport
-  // (rather than reinterpolating along the great-circle) introduces
-  // negligible spatial error and saves hundreds of trig calls per edge.
-  const from_to_bearing_deg =
-    input.true_course_deg ?? initialTrueCourseDeg(from, to);
-  const to_from_bearing_deg = initialTrueCourseDeg(to, from);
 
   const climb_ft_per_nm =
     climb_speed_kt > 0 ? (climb_rate_fpm * 60) / climb_speed_kt : Infinity;
 
   const departure_shortfall_ft = corridorShortfall({
-    near: from,
+    track: outbound,
     total_nm,
-    bearing_deg: from_to_bearing_deg,
+    // The caller's precomputed course is the one out of `from` along
+    // the track's first segment, shaped or not, so it still applies.
+    first_bearing_deg: input.true_course_deg,
     airport_elev_ft: from.elevation_ft ?? 0,
     cruise_alt_ft,
     gradient_ft_per_nm: climb_ft_per_nm,
@@ -122,9 +130,15 @@ export function computeTerrainPenalty(
     min_aircraft_agl_ft: 0,
   });
   const arrival_shortfall_ft = corridorShortfall({
-    near: to,
+    // Same track walked from the far end: the arrival corridor is the
+    // last 30 nm of the leg, which on a shaped leg is the inbound
+    // segment out of the final nav point, not the direct course.
+    // Walked by index rather than a reversed copy — this runs for every
+    // candidate edge in the graph, and two array allocations per edge
+    // is measurably worse than the scalar code this replaced.
+    track: outbound,
+    reversed: true,
     total_nm,
-    bearing_deg: to_from_bearing_deg,
     airport_elev_ft: to.elevation_ft ?? 0,
     cruise_alt_ft,
     gradient_ft_per_nm: STANDARD_DESCENT_FT_PER_NM,
@@ -143,12 +157,18 @@ export function computeTerrainPenalty(
 }
 
 interface CorridorInput {
-  /** Airport the corridor anchors on (origin for departure, destination
-   *  for arrival). Sampling proceeds outward from here along the leg. */
-  near: Airport;
+  /** The leg's ground track, ordered from the airport the corridor
+   *  anchors on (origin for departure, destination for arrival) outward
+   *  through any nav points the leg is shaped through. Sampling
+   *  proceeds from `track[0]` along it. */
+  track: readonly LatLon[];
   total_nm: number;
-  /** Initial true course leaving `near` along the leg, in degrees. */
-  bearing_deg: number;
+  /** Walk `track` from its last element backwards, for the arrival
+   *  corridor. Avoids materialising a reversed copy per edge. */
+  reversed?: boolean;
+  /** Initial true course along the first walked pair, when the caller
+   *  already has it. Omitted, the corridor computes its own. */
+  first_bearing_deg?: number;
   airport_elev_ft: number;
   cruise_alt_ft: number;
   gradient_ft_per_nm: number;
@@ -163,6 +183,23 @@ interface CorridorInput {
 /** Degrees of latitude per nautical mile. */
 const DEG_PER_NM = 1 / 60;
 
+/** Per-nm lat/lon step along `a`→`b` in a flat-earth frame anchored at
+ *  `a`. `bearing_deg` short-circuits the course computation for callers
+ *  that already have it. */
+function stepPerNm(
+  a: LatLon,
+  b: LatLon,
+  bearing_deg?: number,
+): { dlat: number; dlon: number } {
+  const bearing_rad =
+    ((bearing_deg ?? initialTrueCourseDeg(a, b)) * Math.PI) / 180;
+  const cos_lat = Math.cos((a.lat * Math.PI) / 180);
+  return {
+    dlat: Math.cos(bearing_rad) * DEG_PER_NM,
+    dlon: cos_lat !== 0 ? (Math.sin(bearing_rad) * DEG_PER_NM) / cos_lat : 0,
+  };
+}
+
 function corridorShortfall(c: CorridorInput): number {
   if (c.gradient_ft_per_nm <= 0) return 0;
   // Defensive: cruise altitude at or below the airport itself is a
@@ -175,22 +212,60 @@ function corridorShortfall(c: CorridorInput): number {
   const corridor_nm = Math.min(c.total_nm, MAX_CORRIDOR_NM);
   if (corridor_nm <= 0) return 0;
   const samples = Math.max(1, Math.ceil(corridor_nm / CORRIDOR_SAMPLE_NM));
-  // Equirectangular projection. At 30 nm scales the great-circle path
-  // differs from a straight line by sub-arcminute — using a flat-earth
-  // step here skips the per-sample trig the full geodesic needs and
-  // makes the hot loop a few-multiplies-per-sample affair.
-  const bearing_rad = (c.bearing_deg * Math.PI) / 180;
-  const lat_rad = (c.near.lat * Math.PI) / 180;
-  const cos_lat = Math.cos(lat_rad);
-  const dlat_per_nm = Math.cos(bearing_rad) * DEG_PER_NM;
-  const dlon_per_nm =
-    cos_lat !== 0 ? (Math.sin(bearing_rad) * DEG_PER_NM) / cos_lat : 0;
+  // Equirectangular projection, re-anchored wherever the track bends. At
+  // 30 nm scales the great-circle path differs from a straight line by
+  // sub-arcminute — using a flat-earth step here skips the per-sample
+  // trig the full geodesic needs and makes the hot loop a
+  // few-multiplies-per-sample affair. A shaped corridor pays that trig
+  // once per bend it actually reaches, never per sample.
+  // The frame lives in scalars, not in an object read per sample: this
+  // loop runs ~60 times for every candidate edge in the graph.
+  // Index math inlined rather than wrapped in a closure: this function
+  // is called twice for every candidate edge in the graph, and a
+  // per-call closure allocation shows up in the profile.
+  const track = c.track;
+  const last = track.length - 1;
+  const rev = c.reversed === true;
+  let seg = 0;
+  let seg_start_nm = 0;
+  // A corridor with only one segment can't advance off it, so it never
+  // needs the segment's length — and an unshaped leg is that case.
+  let seg_end_nm =
+    last > 1
+      ? greatCircleNM(track[rev ? last : 0], track[rev ? last - 1 : 1])
+      : Infinity;
+  let step = stepPerNm(
+    track[rev ? last : 0],
+    track[rev ? last - 1 : 1],
+    c.first_bearing_deg,
+  );
+  let anchor_lat = track[rev ? last : 0].lat;
+  let anchor_lon = track[rev ? last : 0].lon;
+  let dlat_per_nm = step.dlat;
+  let dlon_per_nm = step.dlon;
 
   let worst = 0;
   for (let i = 1; i <= samples; i++) {
     const d_from_airport = (i / samples) * corridor_nm;
-    const lat = c.near.lat + d_from_airport * dlat_per_nm;
-    const lon = c.near.lon + d_from_airport * dlon_per_nm;
+    // Walk onto the segment this sample falls in. Past the final vertex
+    // the last segment's heading is simply held — the corridor can only
+    // outrun the track if `total_nm` overstates it, and extrapolating on
+    // the final heading is what the unshaped case has always done.
+    while (d_from_airport > seg_end_nm && seg + 2 < c.track.length) {
+      seg_start_nm = seg_end_nm;
+      seg++;
+      const a = track[rev ? last - seg : seg];
+      const b = track[rev ? last - seg - 1 : seg + 1];
+      seg_end_nm += greatCircleNM(a, b);
+      step = stepPerNm(a, b);
+      anchor_lat = a.lat;
+      anchor_lon = a.lon;
+      dlat_per_nm = step.dlat;
+      dlon_per_nm = step.dlon;
+    }
+    const d_in_seg = d_from_airport - seg_start_nm;
+    const lat = anchor_lat + d_in_seg * dlat_per_nm;
+    const lon = anchor_lon + d_in_seg * dlon_per_nm;
     // Aircraft altitude profile from the airport outward: bounded
     // below by the AGL floor (pattern altitude on arrival, zero on
     // departure), rising along the descent / climb slope, capped at

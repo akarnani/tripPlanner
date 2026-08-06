@@ -87,6 +87,71 @@ export function geodesicCircle(
   return out;
 }
 
+/**
+ * Total length of a multi-segment path, summing each great-circle
+ * segment. A path of fewer than two points has zero length.
+ */
+export function polylineLengthNM(points: readonly LatLon[]): number {
+  let total = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    total += greatCircleNM(points[i], points[i + 1]);
+  }
+  return total;
+}
+
+/**
+ * Sample a multi-segment path at roughly `spacingNm`, following each
+ * segment's great circle. Vertices are always included, so a track that
+ * bends through a nav point is sampled *through* the bend rather than
+ * across it — which is the whole point of shaping a leg.
+ *
+ * Consecutive duplicate points are dropped so a shape point that
+ * coincides with an endpoint doesn't emit a zero-length segment.
+ */
+export function interpolatePolyline(
+  points: readonly LatLon[],
+  spacingNm: number,
+): LatLon[] {
+  if (points.length === 0) return [];
+  if (points.length === 1) return [{ ...points[0] }];
+  const out: LatLon[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const d = greatCircleNM(a, b);
+    if (d <= 0) continue;
+    const segments = Math.max(1, Math.ceil(d / spacingNm));
+    const leg = interpolateGreatCircle(a, b, segments);
+    // Drop the shared vertex except on the first segment.
+    out.push(...(out.length === 0 ? leg : leg.slice(1)));
+  }
+  // Degenerate path (every segment zero-length): still report the point.
+  return out.length === 0 ? [{ ...points[0] }] : out;
+}
+
+/**
+ * Where `p` falls along the great circle from `a` to `b`, as a fraction
+ * of that path's length. 0 is abeam `a`, 1 is abeam `b`; values outside
+ * [0, 1] mean `p` projects before or past the endpoints.
+ *
+ * Used to decide which leg of a multi-stop span a shape point belongs
+ * to. This is a flat-earth projection onto the chord, which is accurate
+ * enough for ordering points along a leg even though it is not a true
+ * geodesic cross-track solution.
+ */
+export function alongTrackFraction(a: LatLon, b: LatLon, p: LatLon): number {
+  // Work in a local equirectangular frame around `a`, scaling longitude
+  // by cos(lat) so degrees are comparable in both axes.
+  const latScale = Math.cos(toRad((a.lat + b.lat) / 2));
+  const bx = (b.lon - a.lon) * latScale;
+  const by = b.lat - a.lat;
+  const px = (p.lon - a.lon) * latScale;
+  const py = p.lat - a.lat;
+  const denom = bx * bx + by * by;
+  if (denom === 0) return 0;
+  return (px * bx + py * by) / denom;
+}
+
 /** Point at fractional great-circle distance from `a` toward `b`. f<=0
  *  returns a, f>=1 returns b. Useful when only one point is needed and
  *  building the full interpolated path would be wasteful. */

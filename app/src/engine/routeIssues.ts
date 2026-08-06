@@ -67,10 +67,43 @@ export function collectRouteIssues(input: {
    *  order, so this preserves the intended sort order even without an
    *  exact index. */
   legIndexByIdent?: (ident: string, kind: "departure" | "arrival") => number;
+  /** Legs of the selected route, for issues derived from the route
+   *  itself rather than from a terrain / runway analysis. */
+  legs?: readonly {
+    fromIdent: string;
+    toIdent: string;
+    cruise_alt_ft: number;
+    hemisphericConflict?: boolean;
+  }[];
 }): RouteIssue[] {
-  const { terrain, targetAltFt, corridor, runway, onReplanAt, legIndexByIdent } =
-    input;
+  const {
+    terrain,
+    targetAltFt,
+    corridor,
+    runway,
+    onReplanAt,
+    legIndexByIdent,
+    legs,
+  } = input;
   const issues: RouteIssue[] = [];
+
+  // A leg bent through a nav point can cross the 0/180 course boundary,
+  // and odd/even cruising levels are disjoint sets -- so no single
+  // altitude is legal on both halves. The router picks the higher one
+  // because that is the safe direction for terrain, but the pilot is
+  // the one who has to answer for the altitude, so say it plainly
+  // rather than let the leg render as though it complies.
+  for (const [i, leg] of (legs ?? []).entries()) {
+    if (!leg.hemisphericConflict) continue;
+    issues.push({
+      legIndex: i,
+      phase: "cruise",
+      severity: "caution",
+      ident: `${leg.fromIdent}→${leg.toIdent}`,
+      message: `${leg.fromIdent}→${leg.toIdent} turns through the hemispheric boundary — ${leg.cruise_alt_ft.toLocaleString()} ft is legal for part of the leg only`,
+      detail: "no single cruising level is legal for both halves",
+    });
+  }
 
   if (terrain) {
     const needsReplan = onReplanAt && terrain.replanTargetFt > targetAltFt;

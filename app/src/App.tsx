@@ -67,6 +67,7 @@ import { ExportPanel } from "./ui/ExportPanel";
 import { ExcludedAirports } from "./ui/ExcludedAirports";
 import { InteractivePanel } from "./ui/InteractivePanel";
 import { PinnedStops } from "./ui/PinnedStops";
+import type { LatLon } from "./engine/geo";
 import { RunwayPanel } from "./ui/RunwayPanel";
 import { RouteIssuesPanel } from "./ui/RouteIssuesPanel";
 import { SavedTripsPopover } from "./ui/SavedTripsPopover";
@@ -130,6 +131,13 @@ export function App() {
     () => new Set(),
   );
   const [pinnedStopIds, setPinnedStopIds] = useState<readonly string[]>([]);
+  // Nav points keyed by their prefixed id ("nav:SEA" / "fix:HAROB"),
+  // for labelling pins and resolving them back to positions at plan
+  // time. Rebuilt only when the dataset changes.
+  const navPointsById = useMemo(
+    () => new Map(datasets.navPoints.map((p) => [p.id, p])),
+    [datasets.navPoints],
+  );
   const [trips, setTrips] = useState<SavedTrip[]>(() => listTrips());
 
   // Snapshot of the inputs the current `routes` were planned with.
@@ -694,15 +702,47 @@ export function App() {
     const pinnedAirports = pinned
       .map((id) => datasets.airports.find((a) => a.id === id))
       .filter((a): a is NonNullable<typeof a> => !!a);
-    // Drop airports that are nowhere near the direct route. With ~5k
+    const pinnedNavPoints = pinned
+      .map((id) => datasets.navPoints.find((p) => p.id === id))
+      .filter((p): p is NonNullable<typeof p> => !!p);
+    // Drop airports that are nowhere near the route. With ~5k
     // public-use airports in CONUS, the unfiltered routing graph has
     // ~25M edges; an airport in Florida is never a useful fuel stop
     // for a Bay Area → Wisconsin flight, so culling them here turns
     // tens of seconds of planning into a fraction.
-    const onRoute = airportsInRouteCorridor(matches, o, d);
+    //
+    // The corridor follows the *pinned* path, not the direct
+    // origin→destination line. A nav point pinned 150 nm off-track to
+    // dodge terrain would otherwise put its own span's fuel stops
+    // outside the band — the planner would silently pick worse stops
+    // on exactly the routes this feature exists to create.
+    // Anchors in the order the pilot pinned them — concatenating the
+    // airport and nav-point lists separately would corridor a path
+    // nobody is flying.
+    const corridorAnchors: LatLon[] = [
+      o,
+      ...pinned
+        .map(
+          (id) =>
+            datasets.airports.find((a) => a.id === id) ??
+            datasets.navPoints.find((p) => p.id === id),
+        )
+        .filter((p): p is NonNullable<typeof p> => !!p),
+      d,
+    ];
+    const onRoute = new Map<string, (typeof matches)[number]>();
+    for (let i = 0; i < corridorAnchors.length - 1; i++) {
+      for (const a of airportsInRouteCorridor(
+        matches,
+        corridorAnchors[i],
+        corridorAnchors[i + 1],
+      )) {
+        onRoute.set(a.id, a);
+      }
+    }
     const candidates = Array.from(
       new Map(
-        [...onRoute, o, d, ...pinnedAirports].map((a) => [a.id, a]),
+        [...onRoute.values(), o, d, ...pinnedAirports].map((a) => [a.id, a]),
       ).values(),
     );
     // Snapshot the exact inputs this request runs with; committed
@@ -721,6 +761,7 @@ export function App() {
         startingFuelGal,
         excludedAirportIds: [...excluded],
         waypoints: [...pinned],
+        navPoints: pinnedNavPoints,
       },
       {
         onResult: (result, meta) => {
@@ -771,6 +812,13 @@ export function App() {
         fromIdent: l.fromAirport.icao ?? l.fromAirport.lid,
         toIdent: l.toAirport.icao ?? l.toAirport.lid,
         cruise_alt_ft: l.cruise_alt_ft,
+        // Without this the clearance analysis runs down the direct
+        // great circle while the map, the profile, and the router all
+        // follow the shaped track — the app would warn about a ridge
+        // the aircraft turned away from and stay silent about the one
+        // it turned toward. Every consumer of a leg's ground track has
+        // to agree on where the aeroplane actually is.
+        via: l.via,
       })),
       obstacles: routeObstacles,
       flightRule,
@@ -878,6 +926,12 @@ export function App() {
         // otherwise replan at the stale value.
         runPlan(ft);
       },
+      legs: (currentRoute?.legs ?? []).map((l) => ({
+        fromIdent: l.fromAirport.icao ?? l.fromAirport.lid,
+        toIdent: l.toAirport.icao ?? l.toAirport.lid,
+        cruise_alt_ft: l.cruise_alt_ft,
+        hemisphericConflict: l.extra?.hemispheric_conflict === 1,
+      })),
     });
     // Surfaced first among cautions: an auto-planned route whose
     // search ran without the terrain grid picked its fuel stops
@@ -903,6 +957,11 @@ export function App() {
     planTerrainBlind,
     planningMode,
     routes.length,
+    // The hemispheric-conflict issues read the route's legs directly.
+    // The terrain / corridor / runway inputs all derive from it too, so
+    // this is belt-and-braces — but an issue list that can go stale
+    // against the route it describes is not a thing to leave to luck.
+    currentRoute,
   ]);
 
   // Per-leg fuel-on-landing for the displayed route (T6). Shares the
@@ -1028,9 +1087,12 @@ export function App() {
     setToast(null);
   }
 
-  function identOf(airportId: string): string {
-    const a = datasets.airports.find((x) => x.id === airportId);
-    return a ? (a.icao ?? a.lid) : airportId;
+  function identOf(id: string): string {
+    const a = datasets.airports.find((x) => x.id === id);
+    if (a) return a.icao ?? a.lid;
+    const p = datasets.navPoints.find((x) => x.id === id);
+    if (p) return p.ident;
+    return id;
   }
 
   function handleExcludeStops(airportIds: string[]) {
@@ -1359,6 +1421,8 @@ export function App() {
                     <PinnedStops
                       pinnedIds={pinnedStopIds}
                       airports={datasets.airports}
+                      navPointsByIdent={datasets.navPointsByIdent}
+                      navPointsById={navPointsById}
                       aircraftFuelType={selectedAircraft.fuel.type}
                       originIdent={origin}
                       destinationIdent={destination}

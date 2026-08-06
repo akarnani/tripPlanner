@@ -11,6 +11,7 @@ import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
 import type { FlightRule } from "./hemispheric";
 import { planWithWaypoints, type PlannedRoute } from "./plan";
+import type { NavPoint } from "@/data/loaders";
 import { TerrainGridDEMSampler } from "./terrainGrid";
 import { MagneticVariationGrid } from "./magneticVariation";
 import terrainGridUrl from "@data/terrain_grid.bin.gz?url";
@@ -31,6 +32,10 @@ export interface PlanWorkerParams {
   startingFuelGal: number;
   excludedAirportIds: string[];
   waypoints: string[];
+  /** Positions for any nav point ids in `waypoints`. Passed across the
+   *  worker boundary as a plain array (Maps clone fine, but keeping the
+   *  message shape flat matches the rest of PlanWorkerParams). */
+  navPoints: NavPoint[];
 }
 
 export interface PlanWorkerRequest {
@@ -121,6 +126,7 @@ self.onmessage = async (event: MessageEvent<PlanWorkerRequest>) => {
       startingFuelGal: params.startingFuelGal,
       excludedAirportIds: new Set(params.excludedAirportIds),
       waypoints: params.waypoints,
+      navPointsById: new Map(params.navPoints.map((p) => [p.id, p])),
       dem: demSampler.ready() ? demSampler : undefined,
       variation: variationFn,
       onProgress: (p) => {

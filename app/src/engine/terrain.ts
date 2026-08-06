@@ -1,5 +1,10 @@
 import type { Airport, Obstacle } from "@/data/loaders";
-import { greatCircleNM, interpolateGreatCircle, type LatLon } from "./geo";
+import {
+  greatCircleNM,
+  interpolateGreatCircle,
+  interpolatePolyline,
+  type LatLon,
+} from "./geo";
 import {
   hemisphericAltitude,
   initialTrueCourseDeg,
@@ -71,18 +76,18 @@ export function legTerrainPeakFt(input: {
   from: LatLon;
   to: LatLon;
   dem: DEMSampler;
+  /** Nav points the leg is shaped through, if any. */
+  via?: readonly LatLon[];
   /** Sample spacing in nm; defaults to SAMPLE_SPACING_NM. */
   spacing_nm?: number;
 }): LegTerrainPeak {
-  const { from, to, dem } = input;
+  const { from, to, dem, via } = input;
   const spacing = input.spacing_nm ?? SAMPLE_SPACING_NM;
-  const dist = greatCircleNM(from, to);
-  if (dist <= 0) {
+  if (greatCircleNM(from, to) <= 0 && (!via || via.length === 0)) {
     const e = dem.elevationFt(from);
     return { peakFt: e, offGrid: e === null };
   }
-  const segments = Math.max(1, Math.ceil(dist / spacing));
-  const path = interpolateGreatCircle(from, to, segments);
+  const path = legGroundTrack(from, to, via, spacing);
   let peak: number | null = null;
   let offGrid = false;
   for (const p of path) {
@@ -141,6 +146,11 @@ export interface AnalyzeInput {
     toIdent: string;
     /** Planned cruise altitude on this leg. */
     cruise_alt_ft: number;
+    /** Nav points the leg is shaped through. When present the leg is
+     *  analysed along [from, ...via, to], not the direct great circle
+     *  — otherwise the app would warn about terrain on a path the
+     *  aircraft isn't flying, and miss terrain on the path it is. */
+    via?: readonly LatLon[];
   }>;
   obstacles: readonly Obstacle[];
   flightRule: FlightRule;
@@ -148,24 +158,49 @@ export interface AnalyzeInput {
   variation?: VariationFn;
 }
 
-/** Minimum hemispheric-correct cruise altitude that clears the
- *  terrain on a single great-circle leg, with the standard 2,000 ft
- *  buffer. Returns 0 when the DEM has no data for the leg. */
+/**
+ * The points a leg's ground track actually passes over, sampled at
+ * `SAMPLE_SPACING_NM`. A leg shaped through nav points follows the
+ * polyline through them; an unshaped leg is a plain great circle.
+ *
+ * Every consumer that reasons about what a leg overflies — terrain,
+ * obstacles, the vertical profile, the map — must go through here, so
+ * they can't disagree about where the aeroplane is.
+ */
+export function legGroundTrack(
+  from: LatLon,
+  to: LatLon,
+  via?: readonly LatLon[],
+  spacing_nm = SAMPLE_SPACING_NM,
+): LatLon[] {
+  if (via && via.length > 0) {
+    return interpolatePolyline([from, ...via, to], spacing_nm);
+  }
+  const dist = greatCircleNM(from, to);
+  const segments = Math.max(1, Math.ceil(dist / spacing_nm));
+  return interpolateGreatCircle(from, to, segments);
+}
+
+/** Minimum hemispheric-correct cruise altitude that clears the terrain
+ *  along a leg's ground track, with the standard 2,000 ft buffer.
+ *  Returns 0 when the DEM has no data for the leg. */
 export function legMinSafeCruiseAltFt(input: {
   from: Airport;
   to: Airport;
   flightRule: FlightRule;
   variation?: VariationFn;
   dem: DEMSampler;
+  /** Nav points the leg is shaped through, if any. */
+  via?: readonly LatLon[];
   /** Optional override for the vertical buffer above terrain. Defaults
    *  to TERRAIN_BUFFER_FT (2,000 ft). */
   buffer_ft?: number;
 }): number {
-  const { from, to, flightRule, variation, dem } = input;
+  const { from, to, flightRule, variation, dem, via } = input;
   const buffer = input.buffer_ft ?? TERRAIN_BUFFER_FT;
   const dist = greatCircleNM(from, to);
-  if (dist <= 0) return 0;
-  const { peakFt } = legTerrainPeakFt({ from, to, dem });
+  if (dist <= 0 && (!via || via.length === 0)) return 0;
+  const { peakFt } = legTerrainPeakFt({ from, to, dem, via });
   let worst = Math.max(from.elevation_ft ?? 0, to.elevation_ft ?? 0);
   if (peakFt !== null && peakFt > worst) worst = peakFt;
   if (worst <= 0) return 0;
@@ -183,9 +218,7 @@ export function analyzeTerrain(input: AnalyzeInput): TerrainAnalysis {
   const perLeg: PerLegAnalysis[] = [];
 
   input.legs.forEach((leg, i) => {
-    const dist = greatCircleNM(leg.from, leg.to);
-    const segments = Math.max(1, Math.ceil(dist / SAMPLE_SPACING_NM));
-    const path = interpolateGreatCircle(leg.from, leg.to, segments);
+    const path = legGroundTrack(leg.from, leg.to, leg.via);
 
     const legSamples: TerrainSample[] = [];
     legSamples.push({

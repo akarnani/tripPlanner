@@ -1,10 +1,10 @@
 import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
-import { greatCircleNM, interpolateGreatCircle } from "./geo";
+import { greatCircleNM, polylineLengthNM, type LatLon } from "./geo";
 import { climbFromTo } from "./performance";
 import {
-  SAMPLE_SPACING_NM,
   TERRAIN_BUFFER_FT,
+  legGroundTrack,
   type DEMSampler,
 } from "./terrain";
 import {
@@ -98,9 +98,10 @@ export interface LegProfileData {
   descent: LegProfileGradient;
 }
 
-/** One terrain sample along the leg's great-circle path, tagged with its
- *  distance from departure. Collected once and reused both to derive the
- *  required climb/descent gradients and to build the drawn points. */
+/** One terrain sample along the leg's ground track, tagged with its
+ *  distance from departure *along that track*. Collected once and reused
+ *  both to derive the required climb/descent gradients and to build the
+ *  drawn points. */
 interface RawSample {
   distNm: number;
   lat: number;
@@ -208,20 +209,39 @@ export function buildLegProfile(input: {
   cruiseAltFt: number;
   aircraft: Aircraft;
   dem: DEMSampler;
+  /** Nav points the leg is shaped through, if any. The profile then
+   *  follows [from, ...via, to]: a leg bent around terrain crosses
+   *  different ground than the direct line, and charting the line the
+   *  aircraft isn't flying is worse than not charting it at all. */
+  via?: readonly LatLon[];
 }): LegProfileData {
-  const { from, to, cruiseAltFt, aircraft, dem } = input;
-  const distanceNm = greatCircleNM(from, to);
+  const { from, to, cruiseAltFt, aircraft, dem, via } = input;
+  // Same two expressions routing.ts computes an edge's `distance_nm`
+  // with, so the profile's x-axis ends exactly where the leg does.
+  const distanceNm =
+    via && via.length > 0
+      ? polylineLengthNM([from, ...via, to])
+      : greatCircleNM(from, to);
   const fromElev = from.elevation_ft ?? 0;
   const toElev = to.elevation_ft ?? 0;
 
-  const segments = Math.max(1, Math.ceil(distanceNm / SAMPLE_SPACING_NM));
-  const path = interpolateGreatCircle(from, to, segments);
-  const rawSamples: RawSample[] = path.map((p, i) => ({
-    distNm: (i / segments) * distanceNm,
-    lat: p.lat,
-    lon: p.lon,
-    terrainFt: dem.elevationFt(p),
-  }));
+  const path = legGroundTrack(from, to, via);
+  // Distance is accumulated sample to sample rather than assumed to
+  // divide the leg evenly: a shaped track is only evenly sampled
+  // *within* each of its segments, and everything downstream — the
+  // gradients, the phase boundaries, the spans — is expressed in
+  // distance along the track.
+  const rawSamples: RawSample[] = [];
+  let alongNm = 0;
+  for (let i = 0; i < path.length; i++) {
+    if (i > 0) alongNm += greatCircleNM(path[i - 1], path[i]);
+    rawSamples.push({
+      distNm: alongNm,
+      lat: path[i].lat,
+      lon: path[i].lon,
+      terrainFt: dem.elevationFt(path[i]),
+    });
+  }
 
   const climbDistNm = climbFromTo(aircraft, fromElev, cruiseAltFt).distance_nm;
   const climbStdFtPerNm =

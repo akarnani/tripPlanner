@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { Airport, Datasets } from "@/data/loaders";
+import { EMPTY_DATASETS, type Airport, type Datasets } from "@/data/loaders";
 import {
   airportsInRouteCorridor,
   applyFilters,
@@ -46,16 +46,9 @@ function ap(id: string, fuels: string[], opts: Partial<Airport> = {}): Airport {
 }
 
 function datasets(airports: Airport[]): Datasets {
-  return {
-    airports,
-    runways: [],
-    approaches: [],
-    obstacles: [],
-    hasApproachData: false,
-    anyApproachAirports: new Set(),
-    precisionApproachAirports: new Set(),
-    rnavApproachAirports: new Set(),
-  };
+  // Spread the empty bundle so adding a Datasets field doesn't break
+  // every fixture that only cares about airports.
+  return { ...EMPTY_DATASETS, airports };
 }
 
 describe("applyFilters fuel matching", () => {

@@ -1,4 +1,4 @@
-import type { Airport } from "@/data/loaders";
+import { isNavPointId, type Airport, type NavPoint } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
 import {
   buildGraph,
@@ -42,6 +42,9 @@ export interface PlanInput {
   objectives?: string[];
   /** Optional per-objective parameters, keyed by objective id. */
   params?: Record<string, Record<string, number>>;
+  /** Ordered nav points this origin→destination span must be routed
+   *  through. Shapes the ground track without adding stops. */
+  shapePoints?: readonly NavPoint[];
   /** Optional progress callback for long searches (e.g. surfaced from
    *  a Web Worker). Invoked with a cumulative node-expansion count —
    *  across every objective (and, via `planWithWaypoints`, every
@@ -94,6 +97,7 @@ export function plan(input: PlanInput): PlannedRoute[] {
     startingFuelGal: input.startingFuelGal,
     excludedAirportIds: input.excludedAirportIds,
     dem: input.dem,
+    shapePoints: input.shapePoints,
   });
   // Practical full-tank cruise range at the chosen altitude. Used by
   // the built-in cost functions as the normalization constant for the
@@ -162,12 +166,60 @@ function makeRelayProgress(
 }
 
 export interface PlanWithWaypointsInput extends PlanInput {
-  /** Ordered list of airport ids the route MUST pass through, between
-   *  origin and destination. Each pinned waypoint is a refuel stop if
-   *  it stocks fuel compatible with `aircraft.fuel.type`, otherwise
-   *  it's a pass-through and fuel state carries through to the next
-   *  sub-leg. */
+  /** Ordered list of ids the route MUST pass through, between origin
+   *  and destination. Two kinds are accepted:
+   *
+   *  - **Airport ids** anchor a leg. A pinned airport is a refuel stop
+   *    if it stocks fuel compatible with `aircraft.fuel.type`,
+   *    otherwise a pass-through with fuel state carrying forward.
+   *  - **Nav point ids** ("nav:SEA", "fix:HAROB") shape the ground
+   *    track of whichever airport-anchored span they fall in, without
+   *    becoming a stop. The planner still searches that span for fuel
+   *    stops, so pinning a fix to dodge terrain doesn't force the leg
+   *    to be flown non-stop.
+   */
   waypoints: readonly string[];
+  /** Positions for any nav point ids appearing in `waypoints`.
+   *  Unresolvable ids are ignored rather than failing the plan — a
+   *  saved trip referencing a fix that a later AIRAC cycle retired
+   *  should still produce a route. */
+  navPointsById?: ReadonlyMap<string, NavPoint>;
+}
+
+interface WaypointSpan {
+  from: string;
+  to: string;
+  shapePoints: NavPoint[];
+}
+
+/**
+ * Splits a mixed waypoint list into airport-anchored spans, attaching
+ * each nav point to the span it falls inside.
+ *
+ * `[KSEA, fix:HAROB, KGEG, KBOI]` becomes KSEA→KGEG shaped through
+ * HAROB, then KGEG→KBOI unshaped.
+ */
+export function splitWaypointSpans(
+  origin: string,
+  waypoints: readonly string[],
+  destination: string,
+  navPointsById?: ReadonlyMap<string, NavPoint>,
+): WaypointSpan[] {
+  const spans: WaypointSpan[] = [];
+  let anchor = origin;
+  let pending: NavPoint[] = [];
+  for (const w of waypoints) {
+    if (isNavPointId(w)) {
+      const p = navPointsById?.get(w);
+      if (p) pending.push(p);
+      continue;
+    }
+    spans.push({ from: anchor, to: w, shapePoints: pending });
+    anchor = w;
+    pending = [];
+  }
+  spans.push({ from: anchor, to: destination, shapePoints: pending });
+  return spans;
 }
 
 /** Plans an origin→destination route that must pass through a fixed
@@ -180,7 +232,18 @@ export function planWithWaypoints(input: PlanWithWaypointsInput): PlannedRoute[]
   const { waypoints } = input;
   if (waypoints.length === 0) return plan(input);
 
-  const sequence = [input.origin, ...waypoints, input.destination];
+  const spans = splitWaypointSpans(
+    input.origin,
+    waypoints,
+    input.destination,
+    input.navPointsById,
+  );
+  // A list of nothing but nav points collapses to a single shaped span
+  // from origin to destination — no extra legs, which is exactly the
+  // difference between a shape point and a stop.
+  if (spans.length === 1 && spans[0].shapePoints.length === 0) {
+    return plan(input);
+  }
   const byId = new Map<string, Airport>(input.airports.map((a) => [a.id, a]));
   const fullTanks = input.aircraft.fuel.usable_capacity_gal;
   let startFuel = Math.min(input.startingFuelGal ?? fullTanks, fullTanks);
@@ -190,12 +253,13 @@ export function planWithWaypoints(input: PlanWithWaypointsInput): PlannedRoute[]
   const relayProgress = makeRelayProgress(input.onProgress);
 
   const subResults: PlannedRoute[][] = [];
-  for (let i = 0; i < sequence.length - 1; i++) {
+  for (let i = 0; i < spans.length; i++) {
     const subRoutes = plan({
       ...input,
-      origin: sequence[i],
-      destination: sequence[i + 1],
+      origin: spans[i].from,
+      destination: spans[i].to,
       startingFuelGal: startFuel,
+      shapePoints: spans[i].shapePoints,
       onProgress: relayProgress?.onProgress,
     });
     relayProgress?.advance();
@@ -205,8 +269,8 @@ export function planWithWaypoints(input: PlanWithWaypointsInput): PlannedRoute[]
     // Update fuel state for the next sub-leg's starting fuel based on
     // whether this waypoint can actually refuel us. The destination
     // (last leg) doesn't need this calculation.
-    if (i < sequence.length - 2) {
-      const arrival = byId.get(sequence[i + 1]);
+    if (i < spans.length - 1) {
+      const arrival = byId.get(spans[i].to);
       const refuels =
         !!arrival && airportSellsCompatibleFuel(arrival, input.aircraft.fuel.type);
       if (refuels) {

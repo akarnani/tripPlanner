@@ -12,7 +12,11 @@ A static-site trip planner for pilots of small GA aircraft. Given origin, destin
 npm install
 npm run dev              # vite dev server on http://localhost:5173
 npm run build            # tsc -b && vite build → dist/
-npm run lint             # tsc --noEmit (this repo has no ESLint)
+npm run lint             # tsc -b --force (this repo has no ESLint)
+                         # Must be build mode: the root tsconfig.json is a
+                         # solution file with "files": [] and project
+                         # references, so a plain `tsc --noEmit` type-checks
+                         # nothing at all and always passes.
 npm test                 # vitest run (unit tests, *.test.ts colocated)
 npm run test:watch       # vitest in watch mode
 npm run test:e2e         # playwright (tests/e2e/, spawns dev server)

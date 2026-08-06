@@ -3,7 +3,8 @@ import maplibregl from "maplibre-gl";
 import type { Airport } from "@/data/loaders";
 import type { PlannedRoute } from "@/engine/plan";
 import type { TerminalCorridorWarning } from "@/engine/terrainPenalty";
-import { geodesicCircle, interpolateGreatCircle } from "@/engine/geo";
+import { geodesicCircle } from "@/engine/geo";
+import { legGroundTrack } from "@/engine/terrain";
 import { useTheme, type ResolvedTheme } from "./theme";
 import { airnavUrl } from "./AirportLink";
 import statesUrl from "@data/us-states.geojson?url";
@@ -241,8 +242,17 @@ function routeToGeoJSON(
     type: "Feature",
     geometry: {
       type: "LineString",
-      coordinates: interpolateGreatCircle(leg.fromAirport, leg.toAirport, 32)
-        .map((p) => [p.lon, p.lat]),
+      // A leg shaped through nav points is drawn along its polyline.
+      // Drawing the direct great circle instead would put the map and
+      // the terrain analysis on different paths — the app would show a
+      // route bending around a ridge while warning about the ridge it
+      // isn't crossing any more.
+      coordinates: legGroundTrack(
+        leg.fromAirport,
+        leg.toAirport,
+        leg.via,
+        Math.max(1, leg.distance_nm / 32),
+      ).map((p) => [p.lon, p.lat]),
     },
     // legIndex feeds the hover-highlight layer's filter (T5).
     properties: { legIndex: i },

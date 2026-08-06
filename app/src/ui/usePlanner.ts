@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Airport } from "@/data/loaders";
+import type { Airport, NavPoint } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
 import type { FlightRule } from "@/engine/hemispheric";
 import type { PlannedRoute } from "@/engine/plan";
@@ -20,6 +20,7 @@ export interface PlanRequest {
   startingFuelGal: number;
   excludedAirportIds: string[];
   waypoints: string[];
+  navPoints: NavPoint[];
 }
 
 interface PlanCallbacks {

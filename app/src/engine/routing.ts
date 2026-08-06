@@ -1,6 +1,11 @@
-import type { Airport } from "@/data/loaders";
+import type { Airport, NavPoint } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
-import { greatCircleNM, type LatLon } from "./geo";
+import {
+  alongTrackFraction,
+  greatCircleNM,
+  polylineLengthNM,
+  type LatLon,
+} from "./geo";
 import { climbFromTo, cruiseAt } from "./performance";
 import {
   hemisphericAltitude,
@@ -30,8 +35,28 @@ export interface Edge {
   /** East-positive magnetic variation at the leg origin; null if the
    *  WMM grid didn't cover the point. */
   variation_deg: number | null;
-  /** Hemispheric-valid cruise altitude actually flown on this leg. */
+  /** Cruise altitude flown on this leg.
+   *
+   *  On an unshaped leg this is the lowest hemispheric-legal level at
+   *  or above the target for its course.
+   *
+   *  On a leg shaped through nav points it is the highest of the levels
+   *  its segments individually want. Note what that does *not* mean:
+   *  odd and even thousands are disjoint, so when a bent leg crosses
+   *  the 0/180 course boundary there is no single altitude that
+   *  complies on both sides, and the chosen one is non-compliant on the
+   *  segments of opposite parity. Taking the maximum is the
+   *  conservative choice for terrain, not a legal one — the conflict is
+   *  reported via `extra.hemispheric_conflict` so the pilot decides
+   *  rather than the app quietly asserting compliance. */
   cruise_alt_ft: number;
+  /** Ordered nav-point positions the leg is routed through. Absent (or
+   *  empty) means the leg is a plain great circle. When present, the
+   *  leg's ground track is [from, ...via, to] and `distance_nm` is that
+   *  polyline's length — every consumer that samples the track (terrain,
+   *  obstacles, profile, map) must follow the polyline, not the direct
+   *  great circle, or the app will analyse a path it isn't drawing. */
+  via?: NavPoint[];
   /** TAS and burn used to compute time/fuel, at `cruise_alt_ft`. */
   tas_kt: number;
   fuel_gph: number;
@@ -80,6 +105,13 @@ export interface BuildGraphInput {
    *  1,000/3 nm arrival descent; the equivalent-time cost lands in
    *  `edge.extra.terrain_penalty_hr` for cost functions to consume. */
   dem?: DEMSampler;
+  /** Ordered nav points the whole origin→destination span must be
+   *  routed through. They shape the ground track without becoming
+   *  stops: each is assigned to whichever edge spans its along-track
+   *  position, so the planner is still free to pick fuel stops inside a
+   *  shaped span. Bending the track this way is how a pilot steers a
+   *  leg around terrain the direct great circle would cross. */
+  shapePoints?: readonly NavPoint[];
 }
 
 export interface Graph {
@@ -112,6 +144,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
     startingFuelGal,
     excludedAirportIds,
     dem,
+    shapePoints,
   } = input;
   const capacityGal = aircraft.fuel.usable_capacity_gal;
   const originFuelGal =
@@ -123,6 +156,48 @@ export function buildGraph(input: BuildGraphInput): Graph {
   if (!byId.has(origin)) throw new Error(`origin ${origin} not in airport set`);
   if (!byId.has(destination))
     throw new Error(`destination ${destination} not in airport set`);
+
+  // Shape points are ordered along the span's own origin→destination
+  // axis once, up front. Each edge then claims the ones whose
+  // along-track position falls strictly inside its own span, which is
+  // what lets the planner insert fuel stops into a shaped leg without
+  // the caller having to say which side of the nav point they go.
+  const shaped: Array<{ point: NavPoint; f: number }> = [];
+  if (shapePoints && shapePoints.length > 0) {
+    const originAp = byId.get(origin)!;
+    const destAp = byId.get(destination)!;
+    for (const p of shapePoints) {
+      // Clamp into (0, 1]. A shape point that projects behind the
+      // origin or past the destination still has to be flown, and the
+      // half-open test below would otherwise drop it on the floor.
+      const raw = alongTrackFraction(originAp, destAp, p);
+      const f = Math.min(1, Math.max(Number.EPSILON, raw));
+      shaped.push({ point: p, f });
+    }
+    shaped.sort((a, b) => a.f - b.f);
+  }
+
+  /**
+   * Shape points lying between two airports, in track order.
+   *
+   * The interval is half-open — `(fFrom, fTo]` — and that matters more
+   * than it looks. Consecutive nodes on any path have increasing
+   * along-track fractions, so half-open intervals *tile* (0, 1] exactly:
+   * every shape point is claimed by exactly one leg of whatever route
+   * the planner picks, and no route can quietly avoid one. A closed or
+   * open-open test would either double-count a point that lands abeam a
+   * fuel stop or drop it entirely, and dropping it lets the optimiser
+   * route around the terrain the pilot was steering clear of.
+   */
+  function viaBetween(from: Airport, to: Airport): NavPoint[] {
+    if (shaped.length === 0) return [];
+    const originAp = byId.get(origin)!;
+    const destAp = byId.get(destination)!;
+    const fFrom = alongTrackFraction(originAp, destAp, from);
+    const fTo = alongTrackFraction(originAp, destAp, to);
+    if (fTo <= fFrom) return [];
+    return shaped.filter((s) => s.f > fFrom && s.f <= fTo).map((s) => s.point);
+  }
 
   const cache = new Map<string, Edge[]>();
 
@@ -143,16 +218,43 @@ export function buildGraph(input: BuildGraphInput): Graph {
       ) {
         continue;
       }
-      const distance_nm = greatCircleNM(from, to);
-      const true_course_deg = initialTrueCourseDeg(from, to);
+      const via = viaBetween(from, to);
+      const track: LatLon[] = via.length > 0 ? [from, ...via, to] : [from, to];
+      const distance_nm =
+        via.length > 0 ? polylineLengthNM(track) : greatCircleNM(from, to);
+      // Course reported for the leg is its initial course, matching the
+      // unshaped case.
+      //
+      // The altitude is the highest level any segment individually
+      // wants. On a bent leg that can be a compromise rather than a
+      // solution: the eastbound half wants odd thousands and the
+      // westbound half even, and those sets never intersect, so no
+      // single altitude is legal on both. Flying the higher one is the
+      // safe direction for terrain; the disagreement is recorded below
+      // so it reaches the pilot instead of being papered over.
+      const true_course_deg = initialTrueCourseDeg(track[0], track[1]);
       const magnetic_course_deg =
         variation_deg !== null
           ? magneticCourseDeg(true_course_deg, variation_deg)
           : true_course_deg;
-      const cruise_alt_ft = hemisphericAltitude(
-        targetAltFt,
-        magnetic_course_deg,
-        flightRule,
+      const segmentCourses: number[] = [];
+      let cruise_alt_ft = 0;
+      for (let s = 0; s < track.length - 1; s++) {
+        const segTrue = initialTrueCourseDeg(track[s], track[s + 1]);
+        const segMag =
+          variation_deg !== null
+            ? magneticCourseDeg(segTrue, variation_deg)
+            : segTrue;
+        segmentCourses.push(segMag);
+        const segAlt = hemisphericAltitude(targetAltFt, segMag, flightRule);
+        if (segAlt > cruise_alt_ft) cruise_alt_ft = segAlt;
+      }
+      // A segment is non-compliant when the lowest level it accepts at
+      // or above the chosen altitude isn't the chosen altitude itself.
+      const hemisphericConflict = segmentCourses.some(
+        (course) =>
+          hemisphericAltitude(cruise_alt_ft, course, flightRule) !==
+          cruise_alt_ft,
       );
       const c = cruiseAt(aircraft, cruise_alt_ft);
       // Decompose the leg into climb + cruise. Climb time/fuel/distance
@@ -179,6 +281,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
       if (fuel_gal + reserve_gal > tankGal) continue;
       if (maxLegHr !== undefined && time_hr > maxLegHr) continue;
       const extra: Record<string, number> = {};
+      if (hemisphericConflict) extra.hemispheric_conflict = 1;
       if (dem) {
         const penalty = computeTerrainPenalty({
           from,
@@ -190,6 +293,11 @@ export function buildGraph(input: BuildGraphInput): Graph {
               : climbSpeedKt(aircraft, c.tas_kt),
           climb_rate_fpm: aircraft.climb.rate_fpm,
           dem,
+          // `distance_nm` and `true_course_deg` are already the shaped
+          // track's, so the corridors need `via` too or they'd score a
+          // 30 nm climb-out down the direct course at a leg length that
+          // only the bent track has.
+          via: via.length > 0 ? via : undefined,
           distance_nm,
           true_course_deg,
         });
@@ -211,6 +319,7 @@ export function buildGraph(input: BuildGraphInput): Graph {
         cruise_alt_ft,
         tas_kt: c.tas_kt,
         fuel_gph: c.fuel_gph,
+        ...(via.length > 0 ? { via } : {}),
         ...(Object.keys(extra).length > 0 ? { extra } : {}),
       });
     }

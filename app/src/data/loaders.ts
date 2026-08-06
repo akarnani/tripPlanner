@@ -2,6 +2,8 @@ import airportsUrl from "@data/airports.json?url";
 import runwaysUrl from "@data/runways.json?url";
 import approachesUrl from "@data/approaches.json?url";
 import obstaclesUrl from "@data/obstacles.json.gz?url";
+import navaidsUrl from "@data/navaids.json?url";
+import fixesUrl from "@data/fixes.json?url";
 import { maybeGunzip } from "./gz";
 
 export interface Airport {
@@ -56,6 +58,69 @@ export interface Obstacle {
   height_msl_ft: number;
 }
 
+export type NavPointKind = "navaid" | "fix";
+
+/**
+ * A routable navigation point — a VOR-family or NDB station, or a
+ * published enroute RNAV waypoint. Nav points shape a leg's ground
+ * track; they are never landed at, so they carry none of an Airport's
+ * fuel / runway / elevation semantics.
+ */
+export interface NavPoint {
+  /** Namespaced id: "nav:SEA" / "fix:HAROB". Airports use bare NASR
+   *  site codes, which contain "." and "*" but never ":", so the two
+   *  id spaces can share one pinned-stop list without ambiguity. */
+  id: string;
+  ident: string;
+  kind: NavPointKind;
+  lat: number;
+  lon: number;
+  /** Navaids only. */
+  name?: string;
+  /** Navaids only: NASR facility type ("VORTAC", "VOR/DME", "NDB", …). */
+  type?: string;
+  /** Navaids only, kHz. VORs are MHz-scale (116800), NDBs kHz (365). */
+  freq_khz?: number;
+}
+
+/** AIRAC cycle a nav dataset was built from. */
+export interface NavCycle {
+  effective: string | null;
+  expires: string | null;
+}
+
+/** As written by the Swift pipeline, where nil optionals are *omitted*
+ *  by `encodeIfPresent` rather than serialised as null. */
+interface RawCycle {
+  effective?: string;
+  expires?: string;
+}
+
+interface NavaidFile {
+  cycle?: RawCycle;
+  navaids: Array<{
+    id: string;
+    name: string;
+    type: string;
+    lat: number;
+    lon: number;
+    elevation_ft?: number;
+    freq_khz?: number;
+    is_vor: boolean;
+  }>;
+}
+
+interface FixFile {
+  cycle?: RawCycle;
+  fixes: Array<{ id: string; lat: number; lon: number }>;
+}
+
+export const navPointId = (kind: NavPointKind, ident: string): string =>
+  `${kind === "navaid" ? "nav" : "fix"}:${ident}`;
+
+export const isNavPointId = (id: string): boolean =>
+  id.startsWith("nav:") || id.startsWith("fix:");
+
 /**
  * Bundle of everything `loadDatasets()` produces. The app keeps the
  * latest snapshot in React state, so consumers read from props/state
@@ -74,6 +139,14 @@ export interface Datasets {
   precisionApproachAirports: Set<string>;
   /** Airports with at least one RNAV/GPS-based approach. */
   rnavApproachAirports: Set<string>;
+  /** Navaids and enroute fixes, routable as VIA shape points. */
+  navPoints: NavPoint[];
+  /** Nav points by (uppercased) ident. The value is an array because
+   *  37 low-power NDBs share a 2-letter ident with another station —
+   *  callers disambiguate by proximity to the route. */
+  navPointsByIdent: Map<string, NavPoint[]>;
+  /** Cycle the nav datasets were built from, for the staleness banner. */
+  navCycle: NavCycle | null;
 }
 
 export const EMPTY_DATASETS: Datasets = {
@@ -85,6 +158,9 @@ export const EMPTY_DATASETS: Datasets = {
   anyApproachAirports: new Set(),
   precisionApproachAirports: new Set(),
   rnavApproachAirports: new Set(),
+  navPoints: [],
+  navPointsByIdent: new Map(),
+  navCycle: null,
 };
 
 const STRICT_PRECISION_TYPES = new Set(["I", "J", "H", "G", "M", "W", "Y"]);
@@ -167,19 +243,55 @@ let _loaded: Promise<Datasets> | null = null;
 export function loadDatasets(): Promise<Datasets> {
   if (_loaded) return _loaded;
   _loaded = (async () => {
-    const [airports, runways, approaches, obstacles] = await Promise.all([
-      fetch(airportsUrl).then((r) => r.json() as Promise<Airport[]>),
-      fetch(runwaysUrl).then((r) => r.json() as Promise<Runway[]>),
-      fetch(approachesUrl).then((r) => r.json() as Promise<Approach[]>),
-      // obstacles.json gzips to ~5 MB from ~25 MB raw, well under
-      // Cloudflare Pages' 25 MiB file cap and a meaningful wire
-      // savings for everyone. Servers may or may not transparently
-      // decompress before delivery; maybeGunzip handles both.
-      fetch(obstaclesUrl)
-        .then((r) => r.arrayBuffer())
-        .then(maybeGunzip)
-        .then((buf) => JSON.parse(new TextDecoder().decode(buf)) as Obstacle[]),
-    ]);
+    const [airports, runways, approaches, obstacles, navaidFile, fixFile] =
+      await Promise.all([
+        fetch(airportsUrl).then((r) => r.json() as Promise<Airport[]>),
+        fetch(runwaysUrl).then((r) => r.json() as Promise<Runway[]>),
+        fetch(approachesUrl).then((r) => r.json() as Promise<Approach[]>),
+        // obstacles.json gzips to ~5 MB from ~25 MB raw, well under
+        // Cloudflare Pages' 25 MiB file cap and a meaningful wire
+        // savings for everyone. Servers may or may not transparently
+        // decompress before delivery; maybeGunzip handles both.
+        fetch(obstaclesUrl)
+          .then((r) => r.arrayBuffer())
+          .then(maybeGunzip)
+          .then((buf) => JSON.parse(new TextDecoder().decode(buf)) as Obstacle[]),
+        // Nav data is small enough to ship uncompressed: 156 KB and
+        // 355 KB raw, both under runways.json, which already does.
+        fetch(navaidsUrl).then((r) => r.json() as Promise<NavaidFile>),
+        fetch(fixesUrl).then((r) => r.json() as Promise<FixFile>),
+      ]);
+
+    const navPoints: NavPoint[] = [];
+    for (const n of navaidFile.navaids) {
+      navPoints.push({
+        id: navPointId("navaid", n.id),
+        ident: n.id,
+        kind: "navaid",
+        lat: n.lat,
+        lon: n.lon,
+        name: n.name,
+        type: n.type,
+        ...(n.freq_khz === undefined ? {} : { freq_khz: n.freq_khz }),
+      });
+    }
+    for (const f of fixFile.fixes) {
+      navPoints.push({
+        id: navPointId("fix", f.id),
+        ident: f.id,
+        kind: "fix",
+        lat: f.lat,
+        lon: f.lon,
+      });
+    }
+    const navPointsByIdent = new Map<string, NavPoint[]>();
+    for (const p of navPoints) {
+      const key = p.ident.toUpperCase();
+      const bucket = navPointsByIdent.get(key);
+      if (bucket) bucket.push(p);
+      else navPointsByIdent.set(key, [p]);
+    }
+
     return {
       airports,
       runways,
@@ -187,6 +299,14 @@ export function loadDatasets(): Promise<Datasets> {
       obstacles,
       hasApproachData: approaches.length > 0,
       ...buildIndexes(airports, approaches),
+      navPoints,
+      navPointsByIdent,
+      // Normalise omitted keys to null so consumers have one shape to
+      // check rather than distinguishing undefined from null.
+      navCycle: {
+        effective: navaidFile.cycle?.effective ?? null,
+        expires: navaidFile.cycle?.expires ?? null,
+      },
     };
   })();
   return _loaded;
