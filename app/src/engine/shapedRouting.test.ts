@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
-import { buildGraph } from "./routing";
+import { buildGraph, type Graph } from "./routing";
 import { planWithWaypoints } from "./plan";
-import { greatCircleNM } from "./geo";
+import { greatCircleNM, polylineLengthNM } from "./geo";
+import { hemisphericAltitude, initialTrueCourseDeg } from "./hemispheric";
 import { navPointId, type NavPoint } from "@/data/loaders";
 
 function mkAirport(id: string, lat: number, lon: number): Airport {
@@ -130,10 +131,152 @@ describe("shape points in the routing graph", () => {
     expect(shaped.extra?.hemispheric_conflict).toBeUndefined();
   });
 
-  it("leaves unshaped graphs byte-for-byte unchanged", () => {
+  it("treats an empty shapePoints list as no shape points at all", () => {
+    // Both sides here are the current implementation, so this pins the
+    // two spellings to each other and nothing more. The behaviour an
+    // unshaped edge is supposed to have — the pre-shape-points contract
+    // — is pinned against first principles in the next test instead.
     const a = buildGraph(base).neighbors("A");
     const b = buildGraph({ ...base, shapePoints: [] }).neighbors("A");
     expect(b).toEqual(a);
+  });
+
+  it("leaves an unshaped edge a plain great circle at its own course's level", () => {
+    const e = buildGraph(base).neighbors("A").find((x) => x.to === "B")!;
+    // Absent, not an empty array: the map, the exporters and the
+    // terrain sampler all branch on whether the key is there.
+    expect("via" in e).toBe(false);
+    expect(e.distance_nm).toBeCloseTo(greatCircleNM(A, B), 9);
+    const course = initialTrueCourseDeg(A, B);
+    expect(e.true_course_deg).toBeCloseTo(course, 9);
+    expect(e.cruise_alt_ft).toBe(
+      hemisphericAltitude(base.targetAltFt, course, base.flightRule),
+    );
+    expect(e.extra?.hemispheric_conflict).toBeUndefined();
+  });
+});
+
+// Airports strung along the A→B line so their along-track fractions are
+// exact and easy to read: f = -(lon + 110) / 10.
+const F30 = mkAirport("F30", 45.0, -113.0); // f = 0.3
+const F60 = mkAirport("F60", 45.0, -116.0); // f = 0.6
+const F10 = mkAirport("F10", 45.0, -111.0); // f = 0.1
+const F20 = mkAirport("F20", 45.0, -112.0); // f = 0.2
+
+/** Every loop-free origin→destination path, as node-id lists. */
+function simplePaths(graph: Graph, ids: readonly string[]): string[][] {
+  const out: string[][] = [];
+  const walk = (at: string, seen: string[]) => {
+    if (at === graph.destination) {
+      out.push(seen);
+      return;
+    }
+    for (const id of ids) {
+      if (seen.includes(id)) continue;
+      if (!graph.neighbors(at).some((e) => e.to === id)) continue;
+      walk(id, [...seen, id]);
+    }
+  };
+  walk(graph.origin, [graph.origin]);
+  return out;
+}
+
+/** How many legs of a path carry each shape point. */
+function claimCounts(graph: Graph, path: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (let i = 0; i < path.length - 1; i++) {
+    const edge = graph.neighbors(path[i]).find((e) => e.to === path[i + 1])!;
+    for (const p of edge.via ?? []) {
+      counts.set(p.id, (counts.get(p.id) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+describe("a shape point rides exactly one leg", () => {
+  // A→F60→F30→B doubles back: F30 sits behind F60 along the span axis,
+  // and SOUTH (f = 0.5) falls in the stretch F60→F30 gives back. Both
+  // A→F60 (claiming (0, 0.6]) and F30→B (claiming (0.3, 1]) want it, so
+  // the pilot's fix would be flown twice, exported twice and counted
+  // twice — the corridor admits candidates like F30 quite legitimately,
+  // and nothing about Dijkstra keeps a path's fractions increasing.
+  const nonMonotone = {
+    ...base,
+    airports: [A, F10, F20, F30, F60, B],
+    shapePoints: [SOUTH],
+  };
+
+  it("refuses the edge that would hand the same point to two legs", () => {
+    const g = buildGraph(nonMonotone);
+    expect(g.neighbors("A").find((e) => e.to === "F60")!.via).toEqual([SOUTH]);
+    expect(g.neighbors("F30").find((e) => e.to === "B")!.via).toEqual([SOUTH]);
+    // The leg that un-flies SOUTH after A→F60 already flew it.
+    expect(g.neighbors("F60").some((e) => e.to === "F30")).toBe(false);
+  });
+
+  it("still allows backtracking that gives back no pinned point", () => {
+    // F20→F10 also runs backwards along the span axis, but over
+    // (0.1, 0.2], which holds no shape point. A stop just behind
+    // another one on a track that bends away is a legitimate fuel stop
+    // and must survive — the rule is about double-flying a pin, not
+    // about tidy monotone routes.
+    const g = buildGraph(nonMonotone);
+    expect(g.neighbors("F20").some((e) => e.to === "F10")).toBe(true);
+    expect(g.neighbors("F20").find((e) => e.to === "F10")!.via).toBeUndefined();
+  });
+
+  it("holds for every route the graph can produce, not just the direct one", () => {
+    const g = buildGraph(nonMonotone);
+    const ids = nonMonotone.airports.map((a) => a.id);
+    const paths = simplePaths(g, ids);
+    expect(paths.length).toBeGreaterThan(10);
+    for (const path of paths) {
+      const counts = claimCounts(g, path);
+      // Claimed at most once…
+      for (const [id, n] of counts) {
+        expect(n, `${id} flown ${n}× on ${path.join("→")}`).toBe(1);
+      }
+      // …and never skipped, which is the half the interval always got
+      // right and must keep getting right.
+      expect(counts.get(SOUTH.id), `SOUTH missing from ${path.join("→")}`).toBe(1);
+    }
+  });
+});
+
+describe("shape points are flown in the order they were pinned", () => {
+  // Pinned LATE-then-EARLY: a hairpin out to -117 and back to -113
+  // before continuing. Projection order would fly EARLY first, which is
+  // a different route from the one in the pilot's waypoint list — and
+  // the one the GPX, the map and the corridor filter all show.
+  const LATE = mkFix("LATE", 44.0, -117.0); // f = 0.7
+  const EARLY = mkFix("EARLY", 46.0, -113.0); // f = 0.3
+  const hairpin = { ...base, shapePoints: [LATE, EARLY] };
+
+  it("keeps the pinned order on a single leg", () => {
+    const e = buildGraph(hairpin).neighbors("A").find((x) => x.to === "B")!;
+    expect(e.via).toEqual([LATE, EARLY]);
+    expect(e.distance_nm).toBeCloseTo(polylineLengthNM([A, LATE, EARLY, B]), 9);
+  });
+
+  it("keeps the pinned order across a fuel stop in the middle", () => {
+    // MID sits at f = 0.5, between the two pins' projections. Assigning
+    // by projection alone would give EARLY to A→MID and LATE to MID→B
+    // — flying them in the opposite order to the pin, on two different
+    // legs, with nothing in the UI to say so.
+    const g = buildGraph(hairpin);
+    expect(g.neighbors("A").find((e) => e.to === "MID")!.via).toBeUndefined();
+    expect(g.neighbors("MID").find((e) => e.to === "B")!.via).toEqual([
+      LATE,
+      EARLY,
+    ]);
+  });
+
+  it("leaves pins that already run forward on the legs that span them", () => {
+    // The common case, and the one the projection was there to serve:
+    // pinned in track order, each pin still rides its own leg.
+    const g = buildGraph({ ...base, shapePoints: [EARLY, LATE] });
+    expect(g.neighbors("A").find((e) => e.to === "MID")!.via).toEqual([EARLY]);
+    expect(g.neighbors("MID").find((e) => e.to === "B")!.via).toEqual([LATE]);
   });
 });
 

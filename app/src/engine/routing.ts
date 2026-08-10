@@ -121,12 +121,14 @@ export interface BuildGraphInput {
    *  1,000/3 nm arrival descent; the equivalent-time cost lands in
    *  `edge.extra.terrain_penalty_hr` for cost functions to consume. */
   dem?: DEMSampler;
-  /** Ordered nav points the whole origin→destination span must be
-   *  routed through. They shape the ground track without becoming
-   *  stops: each is assigned to whichever edge spans its along-track
-   *  position, so the planner is still free to pick fuel stops inside a
-   *  shaped span. Bending the track this way is how a pilot steers a
-   *  leg around terrain the direct great circle would cross. */
+  /** Nav points the whole origin→destination span must be routed
+   *  through, in the order the pilot pinned them — that order is the
+   *  order they are flown, even where it doubles back. They shape the
+   *  ground track without becoming stops: each is assigned to whichever
+   *  edge spans its along-track position, so the planner is still free
+   *  to pick fuel stops inside a shaped span. Bending the track this
+   *  way is how a pilot steers a leg around terrain the direct great
+   *  circle would cross. */
   shapePoints?: readonly NavPoint[];
 }
 
@@ -186,45 +188,80 @@ export function buildGraph(input: BuildGraphInput): Graph {
   if (!byId.has(destination))
     throw new Error(`destination ${destination} not in airport set`);
 
-  // Shape points are ordered along the span's own origin→destination
-  // axis once, up front. Each edge then claims the ones whose
-  // along-track position falls strictly inside its own span, which is
-  // what lets the planner insert fuel stops into a shaped leg without
-  // the caller having to say which side of the nav point they go.
+  const originAp = byId.get(origin)!;
+  const destAp = byId.get(destination)!;
+
+  // Shape points get a position on the span's own origin→destination
+  // axis once, up front. Each edge then claims the ones whose position
+  // falls inside its own span, which is what lets the planner insert
+  // fuel stops into a shaped leg without the caller having to say which
+  // side of the nav point they go.
+  //
+  // The list is deliberately NOT sorted by that position. `waypoints`
+  // is an ordered list: the pilot said fly X then Y, and a Y that
+  // projects behind X is a hairpin they asked for, not a mistake to be
+  // tidied up. Sorting would quietly fly the other one first — a
+  // different track from the pinned one, drawn on the map and written
+  // into the GPX under the pilot's own waypoint list. Pinned order
+  // wins; the projection is only ever used to decide *which leg*
+  // carries a point, never in what order it is flown.
+  //
+  // What the position does need is monotonicity, so it is the running
+  // maximum rather than the raw projection. That keeps the claim
+  // intervals below in pinned order: a hairpin's second pin rides the
+  // same leg as its first instead of being handed to an earlier leg
+  // and flown out of order. Pins that already run forward along the
+  // span — the overwhelmingly common case — are unaffected, because
+  // for them the running maximum *is* the projection.
   const shaped: Array<{ point: NavPoint; f: number }> = [];
   if (shapePoints && shapePoints.length > 0) {
-    const originAp = byId.get(origin)!;
-    const destAp = byId.get(destination)!;
+    let maxSoFar = 0;
     for (const p of shapePoints) {
       // Clamp into (0, 1]. A shape point that projects behind the
       // origin or past the destination still has to be flown, and the
       // half-open test below would otherwise drop it on the floor.
       const raw = alongTrackFraction(originAp, destAp, p);
       const f = Math.min(1, Math.max(Number.EPSILON, raw));
-      shaped.push({ point: p, f });
+      maxSoFar = Math.max(maxSoFar, f);
+      shaped.push({ point: p, f: maxSoFar });
     }
-    shaped.sort((a, b) => a.f - b.f);
   }
 
   /**
-   * Shape points lying between two airports, in track order.
+   * Shape points lying between two airports, in the order the pilot
+   * pinned them — or null when the edge must not be offered at all.
    *
    * The interval is half-open — `(fFrom, fTo]` — and that matters more
-   * than it looks. Consecutive nodes on any path have increasing
-   * along-track fractions, so half-open intervals *tile* (0, 1] exactly:
-   * every shape point is claimed by exactly one leg of whatever route
-   * the planner picks, and no route can quietly avoid one. A closed or
-   * open-open test would either double-count a point that lands abeam a
-   * fuel stop or drop it entirely, and dropping it lets the optimiser
-   * route around the terrain the pilot was steering clear of.
+   * than it looks. For any path the fractions start at 0 (origin) and
+   * end at 1 (destination), so for every position x in (0, 1] some
+   * consecutive pair straddles it: no route can quietly avoid a pinned
+   * point. A closed or open-open test would drop a point that lands
+   * abeam a fuel stop, and dropping it lets the optimiser route around
+   * the terrain the pilot was steering clear of.
+   *
+   * The converse — claimed *at most* once — does not come free. Nothing
+   * makes a path's fractions increase: the corridor admits candidate
+   * stops behind the origin and past the destination, and Dijkstra will
+   * happily route A→C→D→B with D behind C. Two legs then overlap, a
+   * pinned fix rides both, and it is flown twice, exported twice in the
+   * GPX, and counted twice in the totals.
+   *
+   * So the one edge that can cause it is refused. A duplicate needs
+   * some leg to give back ground it had already covered *across* a
+   * pinned point (formally: claimed twice ⟹ some consecutive pair has
+   * fTo < f ≤ fFrom), which is this edge. Refusing it is not a loss:
+   * it is the edge that flies past the pilot's fix and then turns
+   * around behind it. Backtracking that clears no pinned point — a
+   * stop just behind the origin on a track that bends south, say — is
+   * still allowed.
    */
-  function viaBetween(from: Airport, to: Airport): NavPoint[] {
+  function viaBetween(from: Airport, to: Airport): NavPoint[] | null {
     if (shaped.length === 0) return [];
-    const originAp = byId.get(origin)!;
-    const destAp = byId.get(destination)!;
     const fFrom = alongTrackFraction(originAp, destAp, from);
     const fTo = alongTrackFraction(originAp, destAp, to);
-    if (fTo <= fFrom) return [];
+    if (fTo <= fFrom) {
+      return shaped.some((s) => s.f > fTo && s.f <= fFrom) ? null : [];
+    }
     return shaped.filter((s) => s.f > fFrom && s.f <= fTo).map((s) => s.point);
   }
 
@@ -248,6 +285,10 @@ export function buildGraph(input: BuildGraphInput): Graph {
         continue;
       }
       const via = viaBetween(from, to);
+      // Null means the edge would double-fly a pinned point; it is not
+      // an altitude rejection, so there is nothing useful to tell the
+      // pilot about it — drop it the way the fuel and maxLegHr caps do.
+      if (via === null) continue;
       const track: LatLon[] = via.length > 0 ? [from, ...via, to] : [from, to];
       const distance_nm =
         via.length > 0 ? polylineLengthNM(track) : greatCircleNM(from, to);
@@ -261,6 +302,21 @@ export function buildGraph(input: BuildGraphInput): Graph {
       // single altitude is legal on both. Flying the higher one is the
       // safe direction for terrain; the disagreement is recorded below
       // so it reaches the pilot instead of being papered over.
+      //
+      // KNOWN LIMITATION: this rule is not idempotent on a conflicted
+      // leg. Feed its own output back as `targetAltFt` and it climbs a
+      // level each time (7,000 -> 8,000 -> 9,000 ...), because whichever
+      // segment has the other parity always rounds up again. That
+      // matters because `replanTargetFt` is what the "Replan at N ft"
+      // button sends, so replanning a bent conflicted leg lands 1,000 ft
+      // above the label and clicking again climbs again. It is bounded
+      // by the aircraft's cruise table and only reachable on a leg that
+      // is already flagged `hemispheric_conflict`, but it is wrong.
+      // Fixing it means choosing a fixed point -- flying the floor when
+      // the floor is already legal for some segment -- which lowers the
+      // altitude on exactly the legs with the least parity slack, so it
+      // wants its own change with its own terrain testing rather than
+      // riding along here.
       const true_course_deg = initialTrueCourseDeg(track[0], track[1]);
       const magnetic_course_deg =
         variation_deg !== null

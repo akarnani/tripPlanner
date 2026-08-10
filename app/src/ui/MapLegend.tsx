@@ -41,6 +41,21 @@ const BASE_ROWS: Row[] = [
       <span className="h-[7px] w-[7px] flex-shrink-0 rounded-full border border-card bg-olive outline outline-1 outline-hairline" />
     ),
   },
+  // Chart shapes, matching the sprites MapView draws: hexagon for the
+  // VOR family, triangle for an intersection. Clip-path rather than a
+  // border trick so the swatch is the same silhouette as the map symbol.
+  {
+    label: "Navaid",
+    swatch: (
+      <span className="h-2.5 w-2.5 flex-shrink-0 bg-muted [clip-path:polygon(25%_0%,75%_0%,100%_50%,75%_100%,25%_100%,0%_50%)]" />
+    ),
+  },
+  {
+    label: "Fix",
+    swatch: (
+      <span className="h-2.5 w-2.5 flex-shrink-0 bg-muted [clip-path:polygon(50%_0%,100%_100%,0%_100%)]" />
+    ),
+  },
   {
     label: "Route",
     swatch: <span className="h-[3px] w-4 flex-shrink-0 bg-accent" />,
@@ -108,14 +123,21 @@ export function MapLegend({ interactiveMode, raised }: Props) {
         <span aria-hidden="true">{collapsed ? "+" : "–"}</span>
       </button>
       {!collapsed && (
-        <div className="mt-1.5 grid gap-1.5 text-xs text-ink">
-          {rows.map((row) => (
-            <div key={row.label} className="flex items-center gap-2">
-              {row.swatch}
-              {row.label}
-            </div>
-          ))}
-        </div>
+        <>
+          <div className="mt-1.5 grid gap-1.5 text-xs text-ink">
+            {rows.map((row) => (
+              <div key={row.label} className="flex items-center gap-2">
+                {row.swatch}
+                {row.label}
+              </div>
+            ))}
+          </div>
+          {/* Navaids and fixes are zoom-gated on the map, so without
+              this the legend promises symbols that aren't on screen. */}
+          <p className="mt-2 text-[10px] leading-snug text-muted">
+            Navaids and fixes appear as you zoom in.
+          </p>
+        </>
       )}
     </div>
   );

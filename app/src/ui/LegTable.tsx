@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { PlannedRoute } from "@/engine/plan";
 import { costFnById } from "@/engine/costFns";
 import { AirportLink } from "./AirportLink";
+import { navPointLabel } from "@/engine/navPoints";
 import { useMediaQuery } from "./useMediaQuery";
 
 interface Props {
@@ -182,7 +183,7 @@ function RouteDetail({
           </tr>
         </thead>
         <tbody>
-          {route.legs.map((leg, i) => {
+          {route.legs.flatMap((leg, i) => {
             const isLastLeg = i === route.legs.length - 1;
             const toIdent = leg.toAirport.icao ?? leg.toAirport.lid;
             const isEditing = editingLegIdx === i;
@@ -203,7 +204,7 @@ function RouteDetail({
                 ? `TC ${leg.true_course_deg.toFixed(0)}° · var ${leg.variation_deg >= 0 ? "+" : ""}${leg.variation_deg.toFixed(0)}°`
                 : "no variation data — true course") +
               ` · ${leg.time_hr.toFixed(1)} hr · ${leg.fuel_gal.toFixed(1)} gal`;
-            return (
+            return [
               <tr
                 key={i}
                 title={rowTitle}
@@ -304,8 +305,26 @@ function RouteDetail({
                     </div>
                   )}
                 </td>
-              </tr>
-            );
+              </tr>,
+              // A shaped leg is otherwise indistinguishable from a
+              // direct one here: same two airports, just a larger
+              // distance. Spell out what it routes through, so the
+              // pilot can see the track bends and why the mileage
+              // grew. Nav points are overflown, never landed at, so
+              // they get a continuation row rather than a leg row.
+              leg.via && leg.via.length > 0 ? (
+                <tr key={`${i}-via`} className="text-muted">
+                  <td />
+                  <td colSpan={5} className="py-0.5 pl-2 text-xs">
+                    via{" "}
+                    <span className="font-mono">
+                      {leg.via.map((p) => navPointLabel(p)).join(" · ")}
+                    </span>{" "}
+                    (overfly)
+                  </td>
+                </tr>
+              ) : null,
+            ];
           })}
         </tbody>
       </table>

@@ -45,7 +45,8 @@ const DEFAULT_MAX_ADDED_NM = 150;
 
 /**
  * Nav points that would make an otherwise-infeasible leg flyable
- * inside the altitude band, cheapest detour first.
+ * inside the altitude band, cheapest detour first. Empty when the
+ * direct leg is already flyable — see below.
  *
  * Ranked purely by added distance. In practice that tracks "fewest
  * extra fuel stops" closely enough — a detour long enough to add a stop
@@ -68,6 +69,25 @@ export function suggestDetours(input: SuggestDetoursInput): DetourSuggestion[] {
     input.maxAddedNm ?? DEFAULT_MAX_ADDED_NM,
   );
   const variation_deg = input.variation?.(from) ?? null;
+
+  // Nothing to fix, nothing to offer. Without this the suggester
+  // answers a question nobody asked: with a high enough ceiling — or
+  // none at all, which is what an unrestricted band looks like from
+  // here — every fix that projects onto the leg "works", so it would
+  // propose three arbitrary nearby fixes as the cure for a leg that
+  // was never blocked. The caller only ever reaches this from a
+  // failure message, and a detour list under a route that planned
+  // fine reads as "your route is wrong" when it isn't.
+  const directDecision = decideLegAltitude({
+    from,
+    to,
+    segmentCoursesDeg: [courseDeg(from, to, variation_deg)],
+    band,
+    flightRule,
+    aircraft,
+    dem,
+  });
+  if (directDecision.altFt !== null) return [];
 
   const out: DetourSuggestion[] = [];
   for (const p of navPoints) {

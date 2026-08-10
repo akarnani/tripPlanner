@@ -10,7 +10,7 @@
 import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
 import type { FlightRule } from "./hemispheric";
-import { planWithWaypoints, type PlannedRoute } from "./plan";
+import { diagnoseCeiling, planWithWaypoints, type PlannedRoute } from "./plan";
 import type { NavPoint } from "@/data/loaders";
 import { TerrainGridDEMSampler } from "./terrainGrid";
 import { MagneticVariationGrid } from "./magneticVariation";
@@ -40,7 +40,7 @@ export interface PlanWorkerParams {
 }
 
 export interface PlanWorkerRequest {
-  type: "plan";
+  type: "plan" | "diagnose";
   id: number;
   params: PlanWorkerParams;
 }
@@ -54,6 +54,14 @@ export type PlanWorkerResponse =
       /** False when the terrain grid wasn't available and the search
        *  ran terrain-blind — the UI surfaces this to the pilot. */
       demUsed: boolean;
+    }
+  | {
+      type: "diagnosis";
+      id: number;
+      lowestWorkableFt: number | null;
+      blockerFrom: string | null;
+      blockerTo: string | null;
+      blockerRequiredAltFt: number | null;
     }
   | { type: "error"; id: number; message: string };
 
@@ -106,12 +114,55 @@ let latestId = -1;
 
 self.onmessage = async (event: MessageEvent<PlanWorkerRequest>) => {
   const msg = event.data;
-  if (msg.type !== "plan") return;
+  if (msg.type !== "plan" && msg.type !== "diagnose") return;
   const { id, params } = msg;
   latestId = id;
 
   await loadGrids();
   if (id !== latestId) return; // superseded while the grids were loading
+
+  // Diagnosis re-plans several times to bracket the lowest workable
+  // ceiling, so it runs here rather than on the main thread for the
+  // same reason planning does.
+  if (msg.type === "diagnose") {
+    try {
+      const d = diagnoseCeiling({
+        airports: params.candidates,
+        origin: params.originId,
+        destination: params.destinationId,
+        aircraft: params.aircraft,
+        targetAltFt: params.targetAltFt,
+        maxAltFt: params.maxAltFt ?? null,
+        flightRule: params.flightRule,
+        reserveHr: params.reserveHr,
+        maxLegHr: params.maxLegHr,
+        startingFuelGal: params.startingFuelGal,
+        excludedAirportIds: new Set(params.excludedAirportIds),
+        waypoints: params.waypoints,
+        navPointsById: new Map(params.navPoints.map((p) => [p.id, p])),
+        dem: demSampler.ready() ? demSampler : undefined,
+        variation: variationFn,
+      });
+      if (id !== latestId) return;
+      const response: PlanWorkerResponse = {
+        type: "diagnosis",
+        id,
+        lowestWorkableFt: d.lowestWorkableFt,
+        blockerFrom: d.blocker?.from ?? null,
+        blockerTo: d.blocker?.to ?? null,
+        blockerRequiredAltFt: d.blocker?.requiredAltFt ?? null,
+      };
+      self.postMessage(response);
+    } catch (e) {
+      const response: PlanWorkerResponse = {
+        type: "error",
+        id,
+        message: e instanceof Error ? e.message : String(e),
+      };
+      self.postMessage(response);
+    }
+    return;
+  }
 
   let lastPostedAt = 0;
   try {

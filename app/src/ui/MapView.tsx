@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import type { Airport } from "@/data/loaders";
+import type { Airport, NavPoint } from "@/data/loaders";
 import type { PlannedRoute } from "@/engine/plan";
 import type { TerminalCorridorWarning } from "@/engine/terrainPenalty";
 import { geodesicCircle } from "@/engine/geo";
+import { navPointLabel } from "@/engine/navPoints";
 import { legGroundTrack } from "@/engine/terrain";
 import { useTheme, type ResolvedTheme } from "./theme";
 import { airnavUrl } from "./AirportLink";
@@ -67,6 +68,11 @@ const PALETTE: Record<
     caution: string;
     /** State borders / secondary linework (--muted). */
     muted: string;
+    /** Navaids and enroute fixes (--muted, same weight as the state
+     *  borders on purpose). Nav points are chart furniture the pilot
+     *  reads *past* to get to the airports the planner is choosing
+     *  between, so they must not compete with --data / --olive. */
+    navPoint: string;
     /** Map label text (--ink). */
     labelText: string;
     /** Label halos + marker strokes (--card). */
@@ -82,6 +88,7 @@ const PALETTE: Record<
     nontowered: "#7A8A3A",
     caution: "#A05E12",
     muted: "#8A8371",
+    navPoint: "#8A8371",
     labelText: "#2B2A26",
     card: "#FFFDF6",
     accent: "#B83280",
@@ -93,6 +100,7 @@ const PALETTE: Record<
     nontowered: "#6B8A5E",
     caution: "#FFB02E",
     muted: "#67737F",
+    navPoint: "#67737F",
     labelText: "#E8EDF2",
     card: "#1A2027",
     accent: "#D357C9",
@@ -106,6 +114,8 @@ const SRC_STATES = "us-states";
 const SRC_TERRAIN_WARN = "route-terrain-warnings";
 const SRC_RANGE_SOLID = "interactive-range-solid";
 const SRC_RANGE_DASHED = "interactive-range-dashed";
+const SRC_NAV_POINTS = "nav-points";
+const SRC_ROUTE_NAV = "route-nav-points";
 const LAYER_TOWERED = "airports-towered";
 const LAYER_NONTOWERED = "airports-nontowered";
 const LAYER_AIRPORT_HIGHLIGHT = "airport-highlight-ring";
@@ -119,12 +129,39 @@ const LAYER_TERRAIN_WARN = "route-terrain-warning-halo";
 const LAYER_RANGE_SOLID_FILL = "interactive-range-solid-fill";
 const LAYER_RANGE_SOLID_LINE = "interactive-range-solid-line";
 const LAYER_RANGE_DASHED_LINE = "interactive-range-dashed-line";
+const LAYER_NAV_NAVAIDS = "nav-points-navaids";
+const LAYER_NAV_FIXES = "nav-points-fixes";
+const LAYER_NAV_LABELS = "nav-points-labels";
+const LAYER_ROUTE_NAV_HALO = "route-nav-points-halo";
+const LAYER_ROUTE_NAV = "route-nav-points-sym";
+const LAYER_ROUTE_NAV_LABELS = "route-nav-points-labels";
 const IMG_TOWERED = "towered-square";
+const IMG_NAV_VOR = "navaid-vor-hex";
+const IMG_NAV_NDB = "navaid-ndb-dots";
+const IMG_NAV_FIX = "nav-fix-triangle";
+
+// Zoom gates for the nav-point layers. The datasets carry ~1,165 navaids
+// and ~6,955 fixes; drawn nationwide they bury the airports, which are
+// what the planner is actually choosing between. z7 is roughly a 500 nm
+// window on a desktop map — low-enroute-chart scale, where a few dozen
+// navaids read as the route-shaping anchors they are. Fixes are six
+// times denser and far less useful for picking a detour, so they wait
+// another zoom and a half. Labels wait until z9, the first zoom with
+// room for text between the symbols. Nav points on the current route
+// ignore all of this — see SRC_ROUTE_NAV.
+const NAVAID_MINZOOM = 7;
+const FIX_MINZOOM = 8.5;
+const NAV_LABEL_MINZOOM = 9;
 
 const EMPTY_FC: GeoJSON.FeatureCollection = {
   type: "FeatureCollection",
   features: [],
 };
+
+/** Stable identity for the default `navPoints` prop so the effect that
+ *  rebuilds the (large) nav-point GeoJSON doesn't re-run every render
+ *  while App is still loading its datasets. */
+const NO_NAV_POINTS: readonly NavPoint[] = [];
 
 /** Leg-highlight filter (T5). `null` maps to -1, which matches no
  *  feature since legIndex is always ≥ 0. */
@@ -152,6 +189,13 @@ export interface MapViewApi {
 
 interface Props {
   airports: readonly Airport[];
+  /** Navaids and enroute fixes to draw as chart reference, zoom-gated
+   *  (NAVAID_MINZOOM / FIX_MINZOOM) because the full set is ~8,120
+   *  points. Pass `datasets.navPoints` straight through; nav points
+   *  that the current `route` is shaped through are drawn from `route`
+   *  itself and stay visible at every zoom, so omitting this prop only
+   *  costs the browsing layer, not the pilot's own waypoints. */
+  navPoints?: readonly NavPoint[];
   route: PlannedRoute | null;
   /** T1: dim the rendered route when the plan is stale (inputs changed
    *  since it was computed). Drops line-opacity 0.85 → 0.4 (dark-mode
@@ -232,6 +276,64 @@ function airportsToGeoJSON(
       },
     })),
   };
+}
+
+/** Sprite id for a nav point's chart symbol. Resolved here rather than
+ *  with a `match` expression in the layer because the shape belongs to
+ *  the facility, not to the layer drawing it — the browsing layers and
+ *  the always-on route layer then share one rule. */
+function navPointIcon(p: NavPoint): string {
+  if (p.kind === "fix") return IMG_NAV_FIX;
+  return p.type?.startsWith("NDB") ? IMG_NAV_NDB : IMG_NAV_VOR;
+}
+
+function navPointFeature(p: NavPoint): GeoJSON.Feature {
+  return {
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+    properties: {
+      id: p.id,
+      ident: p.ident,
+      kind: p.kind,
+      icon: navPointIcon(p),
+      // Carried so the popup names a facility exactly the way the leg
+      // table and the exports do. name/type/freq_khz are omitted (not
+      // null) by the Swift pipeline for fixes, and JSON.stringify drops
+      // undefined keys, so the popup reads them as absent.
+      label: navPointLabel(p),
+      name: p.name,
+      type: p.type,
+      freq_khz: p.freq_khz,
+    },
+  };
+}
+
+function navPointsToGeoJSON(
+  points: readonly NavPoint[],
+): GeoJSON.FeatureCollection {
+  return { type: "FeatureCollection", features: points.map(navPointFeature) };
+}
+
+/** Nav points the current route is shaped through. These get their own
+ *  source so they can be drawn with no minzoom: a pilot who pinned a fix
+ *  needs to see where their route bends even at a whole-country view,
+ *  and a browsing gate that hides the pilot's own waypoints is worse
+ *  than clutter. Consecutive legs can name the same point, hence the
+ *  dedupe. */
+function routeNavPointsToGeoJSON(
+  route: PlannedRoute | null,
+): GeoJSON.FeatureCollection {
+  if (!route) return { type: "FeatureCollection", features: [] };
+  const features: GeoJSON.Feature[] = [];
+  const seen = new Set<string>();
+  for (const leg of route.legs) {
+    for (const p of leg.via ?? []) {
+      if (seen.has(p.id)) continue;
+      seen.add(p.id);
+      features.push(navPointFeature(p));
+    }
+  }
+  return { type: "FeatureCollection", features };
 }
 
 function routeToGeoJSON(
@@ -340,6 +442,104 @@ function buildToweredSquareIcon(
   // width so the stroke stays fully inside the bitmap.
   ctx.strokeRect(ratio / 2, ratio / 2, size - ratio, size - ratio);
   return { data: ctx.getImageData(0, 0, size, size), pixelRatio: ratio };
+}
+
+/** Nav-point sprites, drawn to canvas like the towered square (same 2×
+ *  ratio, same null-on-no-canvas contract for jsdom).
+ *
+ *  Shapes follow the sectional chart so a pilot doesn't have to learn a
+ *  second symbol set: hexagon for the VOR family, a ring of dots for an
+ *  NDB, triangle for an intersection. None of them is a square or a
+ *  plain filled dot, which is what keeps them from reading as towered /
+ *  non-towered airports at a glance. */
+function buildNavPointIcon(
+  shape: "hexagon" | "ndb" | "triangle",
+  color: string,
+  halo: string,
+): { data: ImageData; pixelRatio: number } | null {
+  const ratio = 2;
+  const size = 11 * ratio;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const c = size / 2;
+  // Leave a pixel of margin so the halo stroke stays inside the bitmap.
+  const r = c - ratio;
+  ctx.fillStyle = color;
+  ctx.strokeStyle = halo;
+  ctx.lineWidth = ratio; // 1px at icon scale
+  ctx.lineJoin = "round";
+  if (shape === "ndb") {
+    // Solid centre inside a dotted ring. Real chart NDBs are a dense
+    // stipple; at 11px eight dots is as much as survives.
+    ctx.beginPath();
+    ctx.arc(c, c, r * 0.3, 0, 2 * Math.PI);
+    ctx.fill();
+    for (let i = 0; i < 8; i++) {
+      const a = (Math.PI / 4) * i;
+      const x = c + r * 0.85 * Math.cos(a);
+      const y = c + r * 0.85 * Math.sin(a);
+      ctx.beginPath();
+      ctx.arc(x, y, ratio * 0.6, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    return { data: ctx.getImageData(0, 0, size, size), pixelRatio: ratio };
+  }
+  ctx.beginPath();
+  if (shape === "hexagon") {
+    // Vertices at 0°/60°/… put the points left and right with flat top
+    // and bottom edges — the orientation of the VOR compass rose.
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 3) * i;
+      const x = c + r * Math.cos(a);
+      const y = c + r * Math.sin(a);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  } else {
+    // Point-up triangle, nudged down so its visual centre (nearer the
+    // base than the centroid) sits on the actual coordinate.
+    ctx.moveTo(c, c - r);
+    ctx.lineTo(c + r * 0.95, c + r * 0.75);
+    ctx.lineTo(c - r * 0.95, c + r * 0.75);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  return { data: ctx.getImageData(0, 0, size, size), pixelRatio: ratio };
+}
+
+/** NASR stores every navaid frequency in kHz, so a VOR arrives as
+ *  116800 and an NDB as 365 — but a pilot tunes the first in MHz off
+ *  the chart and reads the second in kHz. Splitting at 10 MHz separates
+ *  the VOR band (108–118 MHz) from the NDB band (190–1750 kHz) with two
+ *  decades to spare. */
+function formatNavFrequency(khz: number): string {
+  return khz >= 10_000
+    ? `${(khz / 1000).toFixed(2)} MHz`
+    : `${Math.round(khz)} kHz`;
+}
+
+/** Click-popup body for a nav point. Fixes have nothing but an ident —
+ *  saying so outright is better than an empty card that reads as a
+ *  failed lookup. */
+function navPointInfoHtml(p: Record<string, unknown>): string {
+  const ident = String(p.ident ?? "");
+  if (p.kind !== "navaid") {
+    return `<strong>${ident}</strong><br/>Enroute waypoint`;
+  }
+  // navPointLabel already reads "SEA VORTAC" — ident plus facility type
+  // in the same words the leg table and the exports use.
+  const lines = [
+    `<strong>${typeof p.label === "string" ? p.label : ident}</strong>`,
+  ];
+  if (typeof p.name === "string" && p.name) lines.push(p.name);
+  if (typeof p.freq_khz === "number") {
+    lines.push(formatNavFrequency(p.freq_khz));
+  }
+  return lines.join("<br/>");
 }
 
 /** Standard airport info fragment shared by the hover popup and the
@@ -464,6 +664,7 @@ function rangeRingToGeoJSON(
 
 export function MapView({
   airports,
+  navPoints = NO_NAV_POINTS,
   route,
   routeDimmed,
   hoveredLegIndex,
@@ -613,13 +814,21 @@ export function MapView({
     // would fire twice once re-bound below.
     for (const unbind of layerHandlerUnbindsRef.current) unbind();
     layerHandlerUnbindsRef.current = [];
+    // Several layers can share one registration: maplibre dispatches a
+    // multi-layer delegated listener once per event with the hit
+    // features merged. That's what stops a nav point drawn by both its
+    // always-on route layer and the zoom-gated browsing layer from
+    // opening two popups on a single click. (maplibre normalises a
+    // lone string to [string] internally, so the array form is exactly
+    // equivalent for the single-layer callers below.)
     const bind = <T extends keyof maplibregl.MapLayerEventType>(
       type: T,
-      layerId: string,
+      layers: string | string[],
       fn: (e: maplibregl.MapLayerEventType[T]) => void,
     ) => {
-      map.on(type, layerId, fn);
-      layerHandlerUnbindsRef.current.push(() => map.off(type, layerId, fn));
+      const ids = typeof layers === "string" ? [layers] : layers;
+      map.on(type, ids, fn);
+      layerHandlerUnbindsRef.current.push(() => map.off(type, ids, fn));
     };
 
     // Towered-airport square sprite, regenerated per theme (setStyle
@@ -630,6 +839,18 @@ export function MapView({
       map.addImage(IMG_TOWERED, square.data, {
         pixelRatio: square.pixelRatio,
       });
+    }
+
+    // Nav-point sprites, same per-theme regeneration as the square.
+    const navShapes = [
+      [IMG_NAV_VOR, "hexagon"],
+      [IMG_NAV_NDB, "ndb"],
+      [IMG_NAV_FIX, "triangle"],
+    ] as const;
+    for (const [id, shape] of navShapes) {
+      if (map.hasImage(id)) map.removeImage(id);
+      const icon = buildNavPointIcon(shape, pal.navPoint, pal.card);
+      if (icon) map.addImage(id, icon.data, { pixelRatio: icon.pixelRatio });
     }
 
     // State borders under everything else — visual SA without
@@ -661,6 +882,57 @@ export function MapView({
           console.warn("state borders failed to load:", e);
         });
     }
+
+    // Nav points draw above the state borders but below the airports:
+    // 479 navaids share an ident with a co-located airport, and when
+    // the two symbols land on the same pixel the airport is what the
+    // pilot is choosing between — same precedence resolveWaypointIdent
+    // applies to a typed ident.
+    map.addSource(SRC_NAV_POINTS, {
+      type: "geojson",
+      data: data(SRC_NAV_POINTS),
+    });
+    map.addLayer({
+      id: LAYER_NAV_NAVAIDS,
+      type: "symbol",
+      source: SRC_NAV_POINTS,
+      filter: ["==", ["get", "kind"], "navaid"],
+      minzoom: NAVAID_MINZOOM,
+      layout: {
+        // No icon-allow-overlap here (the airports set it): letting
+        // maplibre's default collision culling drop symbols is how a
+        // chart thins a crowded terminal area, and these are reference
+        // marks — losing one to its neighbour costs the pilot nothing.
+        "icon-image": ["get", "icon"],
+      },
+    });
+    map.addLayer({
+      id: LAYER_NAV_FIXES,
+      type: "symbol",
+      source: SRC_NAV_POINTS,
+      filter: ["==", ["get", "kind"], "fix"],
+      minzoom: FIX_MINZOOM,
+      layout: {
+        "icon-image": ["get", "icon"],
+      },
+    });
+    map.addLayer({
+      id: LAYER_NAV_LABELS,
+      type: "symbol",
+      source: SRC_NAV_POINTS,
+      minzoom: NAV_LABEL_MINZOOM,
+      layout: {
+        "text-field": ["get", "ident"],
+        "text-size": 10,
+        "text-offset": [0, 0.85],
+        "text-anchor": "top",
+      },
+      paint: {
+        "text-color": pal.labelText,
+        "text-halo-color": pal.card,
+        "text-halo-width": 1.2,
+      },
+    });
 
     map.addSource(SRC_AIRPORTS, {
       type: "geojson",
@@ -814,6 +1086,61 @@ export function MapView({
         "line-opacity": 0.85,
       },
     });
+    // Nav points the route is shaped through, drawn a second time above
+    // the route line with no minzoom so they survive the browsing gate
+    // (the double-draw against the zoom-gated layers is pixel-identical
+    // and cheaper than filtering 8,120 features on every re-plan). The
+    // accent ring is what says "this one is yours" — same accent the
+    // route line and the fuel stops use.
+    map.addSource(SRC_ROUTE_NAV, {
+      type: "geojson",
+      data: data(SRC_ROUTE_NAV),
+    });
+    map.addLayer({
+      id: LAYER_ROUTE_NAV_HALO,
+      type: "circle",
+      source: SRC_ROUTE_NAV,
+      paint: {
+        "circle-radius": 9,
+        "circle-opacity": 0,
+        "circle-stroke-color": pal.accent,
+        "circle-stroke-width": 2,
+        "circle-stroke-opacity": routeDimmedRef.current ? 0.35 : 1,
+      },
+    });
+    map.addLayer({
+      id: LAYER_ROUTE_NAV,
+      type: "symbol",
+      source: SRC_ROUTE_NAV,
+      layout: {
+        "icon-image": ["get", "icon"],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+      },
+      paint: {
+        "icon-opacity": routeDimmedRef.current ? 0.35 : 1,
+      },
+    });
+    map.addLayer({
+      id: LAYER_ROUTE_NAV_LABELS,
+      type: "symbol",
+      source: SRC_ROUTE_NAV,
+      layout: {
+        "text-field": ["get", "ident"],
+        "text-size": 11,
+        "text-offset": [0, 1.1],
+        "text-anchor": "top",
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+      },
+      paint: {
+        "text-color": pal.labelText,
+        "text-halo-color": pal.card,
+        "text-halo-width": 1.5,
+        "text-opacity": routeDimmedRef.current ? 0.4 : 1,
+      },
+    });
+
     map.addSource(SRC_STOPS, { type: "geojson", data: data(SRC_STOPS) });
     map.addLayer({
       id: LAYER_STOPS,
@@ -965,6 +1292,52 @@ export function MapView({
         scheduleHoverClose();
       });
     }
+    // Nav points are click-only — no hover popup. A VOR sitting under
+    // the cursor while the pilot reads an airport card shouldn't steal
+    // it, and click is the one interaction that also works with a
+    // finger. One registration across all four layers, so the popup
+    // opens once however many layers drew the point.
+    const navLayers = [
+      LAYER_NAV_NAVAIDS,
+      LAYER_NAV_FIXES,
+      LAYER_ROUTE_NAV,
+      LAYER_ROUTE_NAV_HALO,
+    ];
+    bind("click", navLayers, (e) => {
+      const f = e.features?.[0];
+      if (!f || f.geometry.type !== "Point") return;
+      // Co-located navaid and airport (BOI VORTAC on the field at KBOI):
+      // the airport handler owns the click, and it has already pinned
+      // its own popup by the time this runs.
+      const airportLayers = [LAYER_TOWERED, LAYER_NONTOWERED].filter((id) =>
+        map.getLayer(id),
+      );
+      if (
+        airportLayers.length > 0 &&
+        map.queryRenderedFeatures(e.point, { layers: airportLayers }).length > 0
+      ) {
+        return;
+      }
+      const [lon, lat] = f.geometry.coordinates as [number, number];
+      popup.remove();
+      pinnedPopupRef.current?.remove();
+      pinnedPopupRef.current = new maplibregl.Popup({
+        closeButton: true,
+        closeOnClick: true,
+      })
+        .setLngLat([lon, lat])
+        .setHTML(
+          `<div class="text-xs" style="color:var(--ink)">${navPointInfoHtml(f.properties ?? {})}</div>`,
+        )
+        .addTo(map);
+    });
+    bind("mouseenter", navLayers, () => {
+      map.getCanvas().style.cursor = "pointer";
+    });
+    bind("mouseleave", navLayers, () => {
+      map.getCanvas().style.cursor = "";
+    });
+
     // Terrain-warning halo popup: shows the shortfall summary for the
     // hovered stop. Falls through to the route-stop tooltip if both
     // layers cover the same pixel.
@@ -1042,6 +1415,12 @@ export function MapView({
       // fully loaded — a setStyle() during initial load would make the
       // pending `load` handler register layers a second time.
       mapRef.current = map;
+      // The map is a canvas: its layers, zoom gating and feature counts
+      // are invisible to DOM-based assertions. Expose the instance so
+      // the e2e suite can query rendered features directly — there is
+      // no other way to prove the nav-point zoom gate actually gates.
+      (window as unknown as { __tripPlannerMap?: maplibregl.Map })
+        .__tripPlannerMap = map;
       registerLayers(map, resolvedRef.current);
       setStyleReady(true);
       ensureStopMarkers(map, route);
@@ -1086,6 +1465,8 @@ export function MapView({
       if (mapApiRefRef.current) mapApiRefRef.current.current = null;
       map.remove();
       mapRef.current = null;
+      delete (window as unknown as { __tripPlannerMap?: maplibregl.Map })
+        .__tripPlannerMap;
     };
   }, []); // mount-only
 
@@ -1130,16 +1511,30 @@ export function MapView({
       ?.setData(fc);
   }, [airports, styleReady]);
 
+  // ~8,120 features, so this runs off the dataset prop's identity and
+  // not on every render — hence NO_NAV_POINTS as the default.
+  useEffect(() => {
+    const fc = navPointsToGeoJSON(navPoints);
+    sourceDataRef.current[SRC_NAV_POINTS] = fc;
+    if (!mapRef.current || !styleReady) return;
+    (mapRef.current.getSource(SRC_NAV_POINTS) as maplibregl.GeoJSONSource)
+      ?.setData(fc);
+  }, [navPoints, styleReady]);
+
   useEffect(() => {
     const routeFC = routeToGeoJSON(route);
     const stopsFC = stopsToGeoJSON(route);
+    const routeNavFC = routeNavPointsToGeoJSON(route);
     sourceDataRef.current[SRC_ROUTE] = routeFC;
     sourceDataRef.current[SRC_STOPS] = stopsFC;
+    sourceDataRef.current[SRC_ROUTE_NAV] = routeNavFC;
     if (!mapRef.current || !styleReady) return;
     (mapRef.current.getSource(SRC_ROUTE) as maplibregl.GeoJSONSource)
       ?.setData(routeFC);
     (mapRef.current.getSource(SRC_STOPS) as maplibregl.GeoJSONSource)
       ?.setData(stopsFC);
+    (mapRef.current.getSource(SRC_ROUTE_NAV) as maplibregl.GeoJSONSource)
+      ?.setData(routeNavFC);
     ensureStopMarkers(mapRef.current, route);
     // Fit only when the route object itself changed — this effect also
     // re-runs when styleReady cycles around a theme swap, and yanking
@@ -1214,6 +1609,31 @@ export function MapView({
     if (m.getLayer(LAYER_STOPS_LABELS)) {
       m.setPaintProperty(
         LAYER_STOPS_LABELS,
+        "text-opacity",
+        routeDimmed ? 0.4 : 1,
+      );
+    }
+    // Route nav points dim with the rest of the route rendering — they
+    // are part of the plan being questioned, not chart furniture. The
+    // browsing layers keep full opacity: those points are still there
+    // whatever the plan's state.
+    if (m.getLayer(LAYER_ROUTE_NAV_HALO)) {
+      m.setPaintProperty(
+        LAYER_ROUTE_NAV_HALO,
+        "circle-stroke-opacity",
+        routeDimmed ? 0.35 : 1,
+      );
+    }
+    if (m.getLayer(LAYER_ROUTE_NAV)) {
+      m.setPaintProperty(
+        LAYER_ROUTE_NAV,
+        "icon-opacity",
+        routeDimmed ? 0.35 : 1,
+      );
+    }
+    if (m.getLayer(LAYER_ROUTE_NAV_LABELS)) {
+      m.setPaintProperty(
+        LAYER_ROUTE_NAV_LABELS,
         "text-opacity",
         routeDimmed ? 0.4 : 1,
       );

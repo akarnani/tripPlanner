@@ -6,7 +6,12 @@ import type { Aircraft } from "@/data/aircraft";
 import { TerrainGridDEMSampler } from "./terrainGrid";
 import { suggestDetours } from "./detours";
 import { decideLegAltitude } from "./altitudeBand";
-import { greatCircleNM } from "./geo";
+import { alongTrackFraction, greatCircleNM, polylineLengthNM } from "./geo";
+import {
+  hemisphericAltitudeAtOrBelow,
+  initialTrueCourseDeg,
+} from "./hemispheric";
+import { legTerrainPeakFt, TERRAIN_BUFFER_FT } from "./terrain";
 
 function ap(id: string, lat: number, lon: number, elev: number): Airport {
   return {
@@ -30,6 +35,11 @@ const turbo: Aircraft = {
 
 const KSJC = ap("KSJC", 37.3626, -121.929, 62);
 const KRNO = ap("KRNO", 39.4991, -119.768, 4415);
+
+/** Sampling fine enough that the walk can't step over a DEM cell —
+ *  matches what the altitude gate uses, so "peak" here means the same
+ *  thing it means to the code under test. */
+const FINE_NM = 0.25;
 
 let dem: TerrainGridDEMSampler;
 let realFixes: NavPoint[];
@@ -56,6 +66,44 @@ beforeAll(async () => {
     lon: f.lon,
   }));
 }, 60_000);
+
+/** Highest terrain along `from → p → to`, measured from the DEM without
+ *  going anywhere near the code that picks detours. */
+function shapedPeakFt(from: Airport, to: Airport, p: NavPoint): number {
+  const { peakFt, offGrid } = legTerrainPeakFt({
+    from, to, dem, via: [p], spacing_nm: FINE_NM,
+  });
+  expect(offGrid, `${p.ident}: DEM coverage gap`).toBe(false);
+  expect(peakFt).not.toBeNull();
+  return peakFt!;
+}
+
+function segmentCourses(from: Airport, to: Airport, p: NavPoint): number[] {
+  return [initialTrueCourseDeg(from, p), initialTrueCourseDeg(p, to)];
+}
+
+/**
+ * The altitude a bent leg is entitled to under a ceiling: the highest
+ * legal cruising level below it that every segment accepts. Spelled out
+ * from the cruising-level primitives on purpose — restating the
+ * contract is an independent check; calling `decideLegAltitude` again
+ * would only ask the suggester's own oracle whether it agreed with
+ * itself.
+ */
+function ceilingAltFt(
+  from: Airport,
+  to: Airport,
+  p: NavPoint,
+  ceilingFt: number,
+): number {
+  const levels = segmentCourses(from, to, p).map((c) => {
+    const a = hemisphericAltitudeAtOrBelow(ceilingFt, c, "IFR");
+    expect(a, `no legal level under ${ceilingFt} on a ${c.toFixed(0)}° segment`)
+      .not.toBeNull();
+    return a!;
+  });
+  return Math.min(...levels);
+}
 
 describe("detour suggestions against the real terrain grid and fix set", () => {
   const band = { minFt: 6000, maxFt: 11000 };
@@ -89,81 +137,132 @@ describe("detour suggestions against the real terrain grid and fix set", () => {
     expect(got.length).toBeGreaterThan(0);
     expect(got.length).toBeLessThanOrEqual(3);
 
-    // Every suggestion must actually be feasible — this is the whole
-    // contract, and it's checked independently of the suggester.
+    // Every suggestion must actually be flyable, and that is checked
+    // against the DEM and the cruising-level rules directly — not by
+    // asking `decideLegAltitude` again, which is the same oracle the
+    // suggester consulted and would agree with itself no matter how
+    // wrong it was.
     for (const s of got) {
-      const verify = decideLegAltitude({
-        from: KSJC,
-        to: KRNO,
-        segmentCoursesDeg: [38, 38],
-        band,
-        flightRule: "IFR",
-        aircraft: turbo,
-        dem,
-        via: [s.navPoint],
-      });
-      expect(verify.altFt, `${s.navPoint.ident} should be flyable`).not.toBeNull();
+      const label = s.navPoint.ident;
+      expect(s.altFt, `${label} below the floor`).toBeGreaterThanOrEqual(6000);
+      expect(s.altFt, `${label} altitude`).toBe(
+        ceilingAltFt(KSJC, KRNO, s.navPoint, band.maxFt),
+      );
+      // And it clears the ground along the track it would actually fly.
+      const peak = shapedPeakFt(KSJC, KRNO, s.navPoint);
+      expect(peak + TERRAIN_BUFFER_FT, `${label} clearance`).toBeLessThanOrEqual(
+        s.altFt,
+      );
+      // The quoted price is the polyline, not a guess.
+      const direct = greatCircleNM(KSJC, KRNO);
+      expect(s.addedNm, `${label} addedNm`).toBeCloseTo(
+        polylineLengthNM([KSJC, s.navPoint, KRNO]) - direct,
+        6,
+      );
     }
 
-    // Cheapest first, and cheap in absolute terms.
+    // Cheapest first.
     const added = got.map((s) => s.addedNm);
     expect([...added].sort((a, b) => a - b)).toEqual(added);
-    const direct = greatCircleNM(KSJC, KRNO);
-    expect(got[0].addedNm).toBeLessThan(direct * 0.35);
-
-    // eslint-disable-next-line no-console
-    console.log(
-      "KSJC→KRNO detours:",
-      got.map((s) => `${s.navPoint.ident} +${s.addedNm.toFixed(0)}nm @${s.altFt}`).join("  "),
-    );
   });
 
   it("offers nothing when the direct leg already works", () => {
-    // A ceiling high enough for the Sierra: no detour is warranted, and
-    // the suggester must not invent one.
-    const got = suggestDetours({
-      from: KSJC,
-      to: KRNO,
-      navPoints: realFixes,
-      band: { minFt: 6000, maxFt: 13000 },
-      flightRule: "IFR",
-      aircraft: turbo,
-      dem,
-      limit: 3,
-    });
-    // It may still find some, but none should be needed — assert the
-    // caller's guard instead: the direct leg is feasible.
+    // A ceiling high enough for the Sierra. The leg has no problem, so
+    // there is nothing to route around — and a list of "fixes" under a
+    // route that planned fine reads as a warning about a route that is
+    // fine. Plenty of these fixes would be perfectly flyable; that is
+    // exactly why the emptiness has to be deliberate.
+    const roomy = { minFt: 6000, maxFt: 13000 };
     const direct = decideLegAltitude({
       from: KSJC,
       to: KRNO,
       segmentCoursesDeg: [38],
-      band: { minFt: 6000, maxFt: 13000 },
+      band: roomy,
       flightRule: "IFR",
       aircraft: turbo,
       dem,
     });
     expect(direct.altFt).toBe(13000);
-    expect(Array.isArray(got)).toBe(true);
+
+    expect(
+      suggestDetours({
+        from: KSJC,
+        to: KRNO,
+        navPoints: realFixes,
+        band: roomy,
+        flightRule: "IFR",
+        aircraft: turbo,
+        dem,
+        limit: 3,
+      }),
+    ).toEqual([]);
   });
 
   it("rejects a detour that costs more than it is worth", () => {
-    // The negative control. KFAT→KBIH is 74 nm; its only real terrain
-    // win is a 150 nm offset costing +235 nm. Distance ranking must
-    // never surface that.
+    // The negative control, and the case that motivated the cost cap.
+    // KFAT→KBIH is 74 nm of Sierra; the terrain only really relents if
+    // you go 150 nm south into the Mojave and come back up the Owens
+    // Valley. This fix stands in for that: a genuine, verified, huge
+    // altitude win at a price no pilot would pay.
     const KFAT = ap("KFAT", 36.7762, -119.718, 336);
     const KBIH = ap("KBIH", 37.3731, -118.364, 4124);
-    const got = suggestDetours({
-      from: KFAT,
-      to: KBIH,
-      navPoints: realFixes,
-      band: { minFt: 6000, maxFt: 11000 },
-      flightRule: "IFR",
-      aircraft: turbo,
-      dem,
-    });
+    const MOJVE: NavPoint = {
+      id: "fix:MOJVE",
+      ident: "MOJVE",
+      kind: "fix",
+      lat: 34.9,
+      lon: -117.5,
+    };
     const direct = greatCircleNM(KFAT, KBIH);
-    for (const s of got) {
-      expect(s.addedNm).toBeLessThanOrEqual(direct * 0.35);
-    }
+
+    // Premise 1: the direct leg is blocked, so a detour is wanted at all.
+    const directDecision = decideLegAltitude({
+      from: KFAT, to: KBIH, segmentCoursesDeg: [initialTrueCourseDeg(KFAT, KBIH)],
+      band, flightRule: "IFR", aircraft: turbo, dem,
+    });
+    expect(directDecision.altFt).toBeNull();
+    expect(directDecision.rejection).toBe("terrain");
+
+    // Premise 2: MOJVE really would fix it. Measured off the DEM, not
+    // assumed — without this the test could "pass" on a fix that was
+    // dropped as unflyable, and prove nothing whatever about cost. The
+    // bent track needs over 4,000 ft less than the direct one, and what
+    // it needs fits under the ceiling.
+    const VIA_ALT_FT = ceilingAltFt(KFAT, KBIH, MOJVE, band.maxFt);
+    const viaPeak = shapedPeakFt(KFAT, KBIH, MOJVE);
+    expect(viaPeak + TERRAIN_BUFFER_FT).toBeLessThanOrEqual(VIA_ALT_FT);
+    expect(directDecision.requiredAltFt!).toBeGreaterThan(
+      viaPeak + TERRAIN_BUFFER_FT + 4000,
+    );
+
+    // Premise 3: it isn't skipped for projecting off the ends either.
+    const f = alongTrackFraction(KFAT, KBIH, MOJVE);
+    expect(f).toBeGreaterThan(0.05);
+    expect(f).toBeLessThan(0.95);
+
+    // And the price: +230-odd nm on a 74 nm leg — more than three times
+    // the trip again, to save 4,000 ft of climb.
+    const addedNm = polylineLengthNM([KFAT, MOJVE, KBIH]) - direct;
+    expect(addedNm).toBeGreaterThan(3 * direct);
+
+    // So: flyable, mid-leg, a real terrain win — and still not offered.
+    const got = suggestDetours({
+      from: KFAT, to: KBIH, navPoints: [MOJVE, ...realFixes],
+      band, flightRule: "IFR", aircraft: turbo, dem,
+    });
+    expect(got.map((s) => s.navPoint.ident)).not.toContain("MOJVE");
+
+    // Nothing but the price kept it out: raise the budget past it and
+    // back it comes, at the altitude the terrain says it should be.
+    const indulgent = suggestDetours({
+      from: KFAT, to: KBIH, navPoints: [MOJVE],
+      band, flightRule: "IFR", aircraft: turbo, dem,
+      maxAddedFraction: 10,
+      maxAddedNm: 1000,
+    });
+    expect(indulgent).toHaveLength(1);
+    expect(indulgent[0].navPoint.ident).toBe("MOJVE");
+    expect(indulgent[0].altFt).toBe(VIA_ALT_FT);
+    expect(indulgent[0].addedNm).toBeCloseTo(addedNm, 6);
   });
 });

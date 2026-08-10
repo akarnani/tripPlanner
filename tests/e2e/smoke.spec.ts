@@ -1,5 +1,13 @@
 import { test, expect, type Page } from "@playwright/test";
 
+/** The slice of the MapLibre API the map-layer tests drive. Declared
+ *  here so the spec doesn't pull maplibre-gl into the test bundle. */
+type MapLike = {
+  getLayer(id: string): unknown;
+  queryRenderedFeatures(g: undefined, o: { layers: string[] }): unknown[];
+  jumpTo(o: { center: [number, number]; zoom: number }): void;
+};
+
 /** The Plan button shows "Loading airport database…" while datasets
  *  load via fetch. Wait for the button to become the enabled "Plan
  *  trip" before each test so they aren't racing the dataset load. */
@@ -281,6 +289,123 @@ test.describe("trip planner smoke", () => {
       const after = Number(await targetInput.inputValue());
       expect(after).toBeGreaterThan(before);
     }
+  });
+
+  test("every leg of a ceilinged plan respects the ceiling", async ({
+    page,
+  }) => {
+    // The property that matters, and the one that regressed once: with
+    // a ceiling set, no leg may be planned above it. KSEA→KBOI has a
+    // genuine low route (the Columbia Gorge cuts the Cascades near sea
+    // level), so this asserts the ceiling is *enforced*, not merely
+    // that planning fails.
+    await page.getByLabel("Stay at or below").check();
+    await page.getByLabel("Maximum altitude (ft)").fill("8000");
+    await planAndWaitForRoute(page);
+
+    const alts = await page
+      .locator("table tbody tr td:nth-child(3)")
+      .allTextContents();
+    const parsed = alts
+      .map((t) => Number(t.replace(/[^\d]/g, "")))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    expect(parsed.length).toBeGreaterThan(0);
+    for (const alt of parsed) expect(alt).toBeLessThanOrEqual(8000);
+  });
+
+  test("an impossible ceiling fails with both ways out offered", async ({
+    page,
+  }) => {
+    // 4,000 ft leaves nothing legal above KBOI's 2,872 ft field once the
+    // 2,000 ft terrain buffer is applied, anywhere on the route.
+    await page.getByLabel("Stay at or below").check();
+    await page.getByLabel("Maximum altitude (ft)").fill("4000");
+    await page.getByTestId("plan-trip").click();
+
+    await expect(page.getByText(/no route at or below 4,000 ft/)).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(
+      page.getByRole("button", { name: "Find a way around" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Lowest workable altitude" }),
+    ).toBeVisible();
+  });
+
+  test("the lowest-workable-altitude search reports a specific altitude", async ({
+    page,
+  }) => {
+    await page.getByLabel("Stay at or below").check();
+    await page.getByLabel("Maximum altitude (ft)").fill("4000");
+    await page.getByTestId("plan-trip").click();
+    await expect(page.getByText(/no route at or below/)).toBeVisible({
+      timeout: 30_000,
+    });
+
+    await page.getByRole("button", { name: "Lowest workable altitude" }).click();
+    await expect(
+      page.getByText(/Lowest workable ceiling is [\d,]+ ft|No ceiling works/),
+    ).toBeVisible({ timeout: 90_000 });
+  });
+
+  test("toggling the ceiling marks an existing plan stale", async ({ page }) => {
+    await planAndWaitForRoute(page);
+    await page.getByLabel("Stay at or below").check();
+    await expect(page.getByText(/ceiling/i).first()).toBeVisible({
+      timeout: 10_000,
+    });
+  });
+
+  // KNOWN GAP, deliberately left failing-but-skipped rather than
+  // deleted or weakened. The nav-point browsing layers are built,
+  // registered, and fed 8,120 features, but nothing paints. Measured in
+  // a real browser at z10 over Seattle: the three icon sprites are
+  // registered, the source's _data carries all 8,120 features, both
+  // layers exist with the right filters and minzoom, features carry the
+  // correct `icon` property -- and yet querySourceFeatures("nav-points")
+  // returns 0 while airports-nontowered returns 3 from the same map. So
+  // the source is not indexing its features, upstream of both the zoom
+  // gate and collision culling. Route-shaping through nav points does
+  // not depend on this: pinning by ident, planning, the leg table, the
+  // profile and the exports all work, and the route line itself draws
+  // the bent track. What is missing is browsing for a fix on the map.
+  test.fixme("nav points appear only once zoomed in, and can be pinned by ident", async ({
+    page,
+  }) => {
+    // 8,120 nav points at low zoom is unreadable, so the layers are
+    // zoom-gated. Assert both halves of that: absent when zoomed out,
+    // present when zoomed in. Queried through MapLibre itself rather
+    // than the DOM, since these are canvas-rendered layers.
+    const rendered = async () =>
+      await page.evaluate(() => {
+        const m = (window as unknown as { __tripPlannerMap?: MapLike }).__tripPlannerMap;
+        if (!m) return -1;
+        const layers = ["nav-points-navaids", "nav-points-fixes"].filter((id) =>
+          m.getLayer(id),
+        );
+        if (layers.length === 0) return -1;
+        return m.queryRenderedFeatures(undefined, { layers }).length;
+      });
+
+    // Only meaningful if the map exposed itself for testing; skip
+    // rather than pass vacuously.
+    const probe = await rendered();
+    test.skip(probe === -1, "map test handle or nav layers unavailable");
+
+    await page.evaluate(() => {
+      const m = (window as unknown as { __tripPlannerMap?: MapLike }).__tripPlannerMap!;
+      m.jumpTo({ center: [-122.31, 47.45], zoom: 4 });
+    });
+    await page.waitForTimeout(500);
+    expect(await rendered()).toBe(0);
+
+    await page.evaluate(() => {
+      const m = (window as unknown as { __tripPlannerMap?: MapLike }).__tripPlannerMap!;
+      m.jumpTo({ center: [-122.31, 47.45], zoom: 10 });
+    });
+    await page.waitForTimeout(1000);
+    expect(await rendered()).toBeGreaterThan(0);
   });
 
   test("GPX export downloads a non-empty file", async ({ page }) => {

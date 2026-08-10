@@ -123,7 +123,9 @@ export interface PerLegAnalysis {
   legIndex: number;
   /** Highest single sample (terrain or obstacle MSL) along the leg. */
   worst: TerrainSample;
-  /** Minimum safe altitude on this leg, hemispheric-rounded for its course. */
+  /** Minimum safe altitude on this leg: hemispheric-rounded for every
+   *  segment of its ground track, then the highest of those — the same
+   *  rule routing.ts uses to pick the altitude the leg actually flies. */
   minSafeAltFt: number;
 }
 
@@ -181,6 +183,48 @@ export function legGroundTrack(
   return interpolateGreatCircle(from, to, segments);
 }
 
+/**
+ * Lowest hemispheric-legal level at or above `floorFt` that a leg can
+ * be flown at, taking parity from every segment of its ground track
+ * rather than from the straight line between its endpoints.
+ *
+ * A leg flies one altitude, and routing.ts picks it as the highest
+ * level any individual segment wants (see `Edge.cruise_alt_ft`). The
+ * advisory side has to answer with the same rule or the two disagree
+ * on exactly the legs this matters for: bend a leg across the 0/180
+ * course boundary and its segments want opposite parities, so the
+ * endpoint course names a level the router would never fly. That
+ * number is not cosmetic — it is what the "Replan at N ft" button
+ * hands back to the planner, and a target the planner immediately
+ * rounds somewhere else is worse than no target.
+ *
+ * Variation is sampled once at the leg origin, matching how routing.ts
+ * builds the same segment courses; sampling per segment would make the
+ * two disagree on legs long enough to cross an isogonic line.
+ */
+function legHemisphericAltitudeFt(input: {
+  floorFt: number;
+  from: LatLon;
+  to: LatLon;
+  via?: readonly LatLon[];
+  flightRule: FlightRule;
+  variation?: VariationFn;
+}): number {
+  const { floorFt, from, to, via, flightRule } = input;
+  const varDeg = input.variation?.(from) ?? null;
+  const track: LatLon[] =
+    via && via.length > 0 ? [from, ...via, to] : [from, to];
+  let alt = 0;
+  for (let i = 0; i < track.length - 1; i++) {
+    const trueCourse = initialTrueCourseDeg(track[i], track[i + 1]);
+    const course =
+      varDeg !== null ? magneticCourseDeg(trueCourse, varDeg) : trueCourse;
+    const a = hemisphericAltitude(floorFt, course, flightRule);
+    if (a > alt) alt = a;
+  }
+  return alt;
+}
+
 /** Minimum hemispheric-correct cruise altitude that clears the terrain
  *  along a leg's ground track, with the standard 2,000 ft buffer.
  *  Returns 0 when the DEM has no data for the leg. */
@@ -204,11 +248,14 @@ export function legMinSafeCruiseAltFt(input: {
   let worst = Math.max(from.elevation_ft ?? 0, to.elevation_ft ?? 0);
   if (peakFt !== null && peakFt > worst) worst = peakFt;
   if (worst <= 0) return 0;
-  const trueCourse = initialTrueCourseDeg(from, to);
-  const varDeg = variation?.(from) ?? null;
-  const magCourse =
-    varDeg !== null ? magneticCourseDeg(trueCourse, varDeg) : trueCourse;
-  return hemisphericAltitude(worst + buffer, magCourse, flightRule);
+  return legHemisphericAltitudeFt({
+    floorFt: worst + buffer,
+    from,
+    to,
+    via,
+    flightRule,
+    variation,
+  });
 }
 
 export function analyzeTerrain(input: AnalyzeInput): TerrainAnalysis {
@@ -260,17 +307,14 @@ export function analyzeTerrain(input: AnalyzeInput): TerrainAnalysis {
     for (const s of legSamples)
       if (s.elevation_ft > worst.elevation_ft) worst = s;
 
-    const trueCourse = initialTrueCourseDeg(leg.from, leg.to);
-    const variation = input.variation?.(leg.from) ?? null;
-    const magneticCourse =
-      variation !== null
-        ? magneticCourseDeg(trueCourse, variation)
-        : trueCourse;
-    const minSafeAltFt = hemisphericAltitude(
-      worst.elevation_ft + TERRAIN_BUFFER_FT,
-      magneticCourse,
-      input.flightRule,
-    );
+    const minSafeAltFt = legHemisphericAltitudeFt({
+      floorFt: worst.elevation_ft + TERRAIN_BUFFER_FT,
+      from: leg.from,
+      to: leg.to,
+      via: leg.via,
+      flightRule: input.flightRule,
+      variation: input.variation,
+    });
     perLeg.push({ legIndex: i, worst, minSafeAltFt });
 
     const clearance = leg.cruise_alt_ft - worst.elevation_ft;
