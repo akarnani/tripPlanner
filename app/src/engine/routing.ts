@@ -6,7 +6,7 @@ import {
   polylineLengthNM,
   type LatLon,
 } from "./geo";
-import { climbFromTo, cruiseAt } from "./performance";
+import { climbFromTo, cruiseAt, cruiseAtConservative } from "./performance";
 import {
   hemisphericAltitude,
   initialTrueCourseDeg,
@@ -372,7 +372,21 @@ export function buildGraph(input: BuildGraphInput): Graph {
           hemisphericAltitude(cruise_alt_ft, course, flightRule) !==
           cruise_alt_ft,
       );
-      const c = cruiseAt(aircraft, cruise_alt_ft);
+      // With a ceiling in force the cruise numbers stop being a way to
+      // rank routes and start deciding whether one is flyable at all:
+      // they set the range that determines which edges survive. So take
+      // the worst of the two published rows bracketing the altitude
+      // (slowest TAS, highest burn) rather than interpolating a cell the
+      // POH never printed. Without a ceiling this is the pre-existing
+      // cost-only path and stays interpolated, because changing it there
+      // would silently move every existing user's fuel stops.
+      //
+      // Safe to call: decideLegAltitude has already rejected anything
+      // above the published table, so this can't throw here.
+      const c =
+        band.maxFt === null
+          ? cruiseAt(aircraft, cruise_alt_ft)
+          : cruiseAtConservative(aircraft, cruise_alt_ft);
       // Decompose the leg into climb + cruise. Climb time/fuel/distance
       // come from the aircraft's POH climb table when available, else
       // from the scalar climb rate + burn fallback. Climb is pro-rated

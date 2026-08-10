@@ -5,6 +5,7 @@ import {
   hemisphericAltitudeAtOrBelow,
 } from "./hemispheric";
 import { cruiseAtConservative, maxPublishedCruiseAltFt } from "./performance";
+import { buildGraph } from "./routing";
 
 const EASTBOUND = 90;
 const WESTBOUND = 270;
@@ -128,5 +129,44 @@ describe("POH cruise data as a feasibility input", () => {
       expect(ac.cruise.map((r) => r.tas_kt)).toContain(got.tas_kt);
       expect(ac.cruise.map((r) => r.fuel_gph)).toContain(got.fuel_gph);
     }
+  });
+});
+
+describe("POH numbers reach the routing graph under a ceiling", () => {
+  const ac = mkAircraft(); // rows at 2,000 / 8,000 / 12,000
+  const A = {
+    id: "A", lid: "A", icao: "A", name: "A", city: "", state: null,
+    lat: 45, lon: -110, elevation_ft: 0, has_control_tower: false,
+    public_use: true, runway_count: 1, max_runway_ft: 5000,
+    fuels: ["100LL"],
+  };
+  const B = { ...A, id: "B", lid: "B", icao: "B", lon: -115 };
+  const graph = (targetAltFt: number, maxAltFt: number | null) =>
+    buildGraph({
+      airports: [A, B], origin: "A", destination: "B", aircraft: ac,
+      targetAltFt, maxAltFt, flightRule: "IFR", reserveHr: 0.75,
+    }).neighbors("A").find((e) => e.to === "B")!;
+
+  it("uses worst-case bracketing rows, not an interpolated cell", () => {
+    // Westbound IFR under a 10,000 ft ceiling flies 10,000, which sits
+    // between the 8,000 and 12,000 published rows. The numbers must be
+    // cells the POH actually printed: slowest TAS, highest burn.
+    const e = graph(4000, 10000);
+    expect(e.cruise_alt_ft).toBe(10000);
+    expect(e.tas_kt).toBe(108); // the 12,000 ft row
+    expect(e.fuel_gph).toBe(7.6); // the 8,000 ft row
+    expect(ac.cruise.map((r) => r.tas_kt)).toContain(e.tas_kt);
+    expect(ac.cruise.map((r) => r.fuel_gph)).toContain(e.fuel_gph);
+  });
+
+  it("leaves the no-ceiling path interpolating, as it always did", () => {
+    // Changing this would silently move every existing user's fuel
+    // stops, so the cost-only path keeps its old behaviour.
+    // Westbound IFR rounds 9,500 up to 10,000 — the same altitude the
+    // ceiling case lands on, so only the numbers differ.
+    const e = graph(9500, null);
+    expect(e.cruise_alt_ft).toBe(10000);
+    expect(e.tas_kt).toBeGreaterThan(108);
+    expect(e.tas_kt).toBeLessThan(117);
   });
 });
