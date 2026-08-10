@@ -110,12 +110,32 @@ const PALETTE: Record<
 const SRC_AIRPORTS = "airports";
 const SRC_ROUTE = "route";
 const SRC_STOPS = "route-stops";
+/** The stop labels get their own source for the same reason the nav
+ *  labels do: a symbol layer with `text-field` blocks its tile parse on
+ *  glyph loading, and when the glyph endpoint is unreachable the tile
+ *  never leaves "loading" — taking every other layer on that source down
+ *  with it. Sharing SRC_STOPS meant the origin/destination dots
+ *  disappeared entirely in any keyless or offline build, which is the
+ *  documented local-dev and CI path. Do not re-merge these. */
+const SRC_STOPS_LABELS = "route-stop-labels";
 const SRC_STATES = "us-states";
 const SRC_TERRAIN_WARN = "route-terrain-warnings";
 const SRC_RANGE_SOLID = "interactive-range-solid";
 const SRC_RANGE_DASHED = "interactive-range-dashed";
 const SRC_NAV_POINTS = "nav-points";
 const SRC_ROUTE_NAV = "route-nav-points";
+// The label layers get their own copy of each nav-point source rather
+// than sharing one. A tile parse that has to resolve glyphs blocks on
+// the style's glyphs endpoint, and if that endpoint never answers (the
+// keyless fallback style points at demotiles, which is unreachable
+// offline and in CI) the parse never completes: the tile sits in
+// "loading" forever and EVERY layer on that source renders nothing —
+// icon-only layers included. Splitting the text onto its own source
+// contains that failure to the labels, so a font outage costs the pilot
+// the idents but never the symbols. Costs a second geojson-vt index in
+// the worker; the feature objects themselves are shared by reference.
+const SRC_NAV_LABELS = "nav-point-labels";
+const SRC_ROUTE_NAV_LABELS = "route-nav-point-labels";
 const LAYER_TOWERED = "airports-towered";
 const LAYER_NONTOWERED = "airports-nontowered";
 const LAYER_AIRPORT_HIGHLIGHT = "airport-highlight-ring";
@@ -916,10 +936,14 @@ export function MapView({
         "icon-image": ["get", "icon"],
       },
     });
+    map.addSource(SRC_NAV_LABELS, {
+      type: "geojson",
+      data: data(SRC_NAV_LABELS),
+    });
     map.addLayer({
       id: LAYER_NAV_LABELS,
       type: "symbol",
-      source: SRC_NAV_POINTS,
+      source: SRC_NAV_LABELS,
       minzoom: NAV_LABEL_MINZOOM,
       layout: {
         "text-field": ["get", "ident"],
@@ -1121,10 +1145,14 @@ export function MapView({
         "icon-opacity": routeDimmedRef.current ? 0.35 : 1,
       },
     });
+    map.addSource(SRC_ROUTE_NAV_LABELS, {
+      type: "geojson",
+      data: data(SRC_ROUTE_NAV_LABELS),
+    });
     map.addLayer({
       id: LAYER_ROUTE_NAV_LABELS,
       type: "symbol",
-      source: SRC_ROUTE_NAV,
+      source: SRC_ROUTE_NAV_LABELS,
       layout: {
         "text-field": ["get", "ident"],
         "text-size": 11,
@@ -1142,6 +1170,10 @@ export function MapView({
     });
 
     map.addSource(SRC_STOPS, { type: "geojson", data: data(SRC_STOPS) });
+    map.addSource(SRC_STOPS_LABELS, {
+      type: "geojson",
+      data: data(SRC_STOPS_LABELS),
+    });
     map.addLayer({
       id: LAYER_STOPS,
       type: "circle",
@@ -1156,7 +1188,7 @@ export function MapView({
     map.addLayer({
       id: LAYER_STOPS_LABELS,
       type: "symbol",
-      source: SRC_STOPS,
+      source: SRC_STOPS_LABELS,
       layout: {
         "text-field": ["get", "ident"],
         "text-size": 12,
@@ -1415,12 +1447,6 @@ export function MapView({
       // fully loaded — a setStyle() during initial load would make the
       // pending `load` handler register layers a second time.
       mapRef.current = map;
-      // The map is a canvas: its layers, zoom gating and feature counts
-      // are invisible to DOM-based assertions. Expose the instance so
-      // the e2e suite can query rendered features directly — there is
-      // no other way to prove the nav-point zoom gate actually gates.
-      (window as unknown as { __tripPlannerMap?: maplibregl.Map })
-        .__tripPlannerMap = map;
       registerLayers(map, resolvedRef.current);
       setStyleReady(true);
       ensureStopMarkers(map, route);
@@ -1438,9 +1464,11 @@ export function MapView({
       }
     });
 
-    // Dev-only handle so e2e tests can assert against the live map
-    // (e.g. that custom layers survive a theme swap). Never set in
-    // production builds.
+    // Dev-only handle so e2e tests can assert against the live map: the
+    // map is a canvas, so layer registration, the nav-point zoom gate
+    // and rendered-feature counts are invisible to DOM assertions.
+    // Never set in production builds — the e2e suite runs against the
+    // dev server (see playwright.config.ts webServer).
     if (import.meta.env.DEV) {
       (window as unknown as Record<string, unknown>).__tripPlannerMap = map;
     }
@@ -1465,8 +1493,6 @@ export function MapView({
       if (mapApiRefRef.current) mapApiRefRef.current.current = null;
       map.remove();
       mapRef.current = null;
-      delete (window as unknown as { __tripPlannerMap?: maplibregl.Map })
-        .__tripPlannerMap;
     };
   }, []); // mount-only
 
@@ -1512,13 +1538,18 @@ export function MapView({
   }, [airports, styleReady]);
 
   // ~8,120 features, so this runs off the dataset prop's identity and
-  // not on every render — hence NO_NAV_POINTS as the default.
+  // not on every render — hence NO_NAV_POINTS as the default. The same
+  // collection feeds the symbol source and the label source (see
+  // SRC_NAV_LABELS); they only differ in what a stalled glyph fetch
+  // can take down.
   useEffect(() => {
     const fc = navPointsToGeoJSON(navPoints);
     sourceDataRef.current[SRC_NAV_POINTS] = fc;
+    sourceDataRef.current[SRC_NAV_LABELS] = fc;
     if (!mapRef.current || !styleReady) return;
-    (mapRef.current.getSource(SRC_NAV_POINTS) as maplibregl.GeoJSONSource)
-      ?.setData(fc);
+    for (const id of [SRC_NAV_POINTS, SRC_NAV_LABELS]) {
+      (mapRef.current.getSource(id) as maplibregl.GeoJSONSource)?.setData(fc);
+    }
   }, [navPoints, styleReady]);
 
   useEffect(() => {
@@ -1527,14 +1558,20 @@ export function MapView({
     const routeNavFC = routeNavPointsToGeoJSON(route);
     sourceDataRef.current[SRC_ROUTE] = routeFC;
     sourceDataRef.current[SRC_STOPS] = stopsFC;
+    sourceDataRef.current[SRC_STOPS_LABELS] = stopsFC;
     sourceDataRef.current[SRC_ROUTE_NAV] = routeNavFC;
+    sourceDataRef.current[SRC_ROUTE_NAV_LABELS] = routeNavFC;
     if (!mapRef.current || !styleReady) return;
     (mapRef.current.getSource(SRC_ROUTE) as maplibregl.GeoJSONSource)
       ?.setData(routeFC);
-    (mapRef.current.getSource(SRC_STOPS) as maplibregl.GeoJSONSource)
-      ?.setData(stopsFC);
-    (mapRef.current.getSource(SRC_ROUTE_NAV) as maplibregl.GeoJSONSource)
-      ?.setData(routeNavFC);
+    for (const id of [SRC_STOPS, SRC_STOPS_LABELS]) {
+      (mapRef.current.getSource(id) as maplibregl.GeoJSONSource)
+        ?.setData(stopsFC);
+    }
+    for (const id of [SRC_ROUTE_NAV, SRC_ROUTE_NAV_LABELS]) {
+      (mapRef.current.getSource(id) as maplibregl.GeoJSONSource)
+        ?.setData(routeNavFC);
+    }
     ensureStopMarkers(mapRef.current, route);
     // Fit only when the route object itself changed — this effect also
     // re-runs when styleReady cycles around a theme swap, and yanking
