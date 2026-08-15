@@ -3,6 +3,7 @@ import type { Airport } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
 import type { PlannedRoute } from "./plan";
 import type { DEMSampler } from "./terrain";
+import { greatCircleNM, type LatLon } from "./geo";
 import { buildRouteProfile } from "./routeProfile";
 
 function ap(id: string, lat: number, lon: number, elev: number): Airport {
@@ -114,6 +115,53 @@ describe("buildRouteProfile", () => {
     });
     expect(p.segments[0].topAltFt).toBeLessThan(12000);
     expect(p.segments[0].topAltFt).toBeGreaterThan(100);
+  });
+
+  test("a shaped leg's detour pushes the rest of the axis right", () => {
+    const bend: LatLon = { lat: 38.5, lon: -108.5 };
+    const shapedRoute = {
+      legs: [
+        { fromAirport: a, toAirport: b, cruise_alt_ft: 6500, via: [bend] },
+        { fromAirport: b, toAirport: c, cruise_alt_ft: 6500 },
+      ],
+    } as unknown as PlannedRoute;
+    const plain = buildRouteProfile({
+      route: routeOf([a, b, c], 6500),
+      aircraft,
+      dem: flatDem,
+    });
+    const shaped = buildRouteProfile({
+      route: shapedRoute,
+      aircraft,
+      dem: flatDem,
+    });
+    const detourNm =
+      greatCircleNM(a, bend) + greatCircleNM(bend, b) - greatCircleNM(a, b);
+    expect(detourNm).toBeGreaterThan(50);
+    // B's tick — and the whole route — slide right by exactly the
+    // detour, so the chart is as long as the trip it describes.
+    expect(shaped.airports[1].distNm).toBeCloseTo(
+      plain.airports[1].distNm + detourNm,
+      6,
+    );
+    expect(shaped.totalNm).toBeCloseTo(plain.totalNm + detourNm, 6);
+    // The unshaped second leg keeps its own length.
+    expect(shaped.segments[1].endNm - shaped.segments[1].startNm).toBeCloseTo(
+      plain.segments[1].endNm - plain.segments[1].startNm,
+      6,
+    );
+    // Leg 0's samples are taken through the bend, and the joint between
+    // the legs still has exactly one sample.
+    expect(
+      Math.min(
+        ...shaped.points.filter((pt) => pt.legIndex === 0).map((pt) => pt.lat),
+      ),
+    ).toBeCloseTo(bend.lat, 6);
+    for (let i = 1; i < shaped.points.length; i++) {
+      expect(shaped.points[i].distNm).toBeGreaterThan(
+        shaped.points[i - 1].distNm,
+      );
+    }
   });
 
   test("points carry lat/lon for viewport windowing", () => {

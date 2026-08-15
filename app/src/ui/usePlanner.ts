@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Airport } from "@/data/loaders";
+import type { Airport, NavPoint } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
 import type { FlightRule } from "@/engine/hemispheric";
 import type { PlannedRoute } from "@/engine/plan";
@@ -14,17 +14,28 @@ export interface PlanRequest {
   destinationId: string;
   aircraft: Aircraft;
   targetAltFt: number;
+  maxAltFt?: number | null;
   flightRule: FlightRule;
   reserveHr: number;
   maxLegHr?: number;
   startingFuelGal: number;
   excludedAirportIds: string[];
   waypoints: string[];
+  navPoints: NavPoint[];
+}
+
+export interface CeilingDiagnosisResult {
+  lowestWorkableFt: number | null;
+  blockerFrom: string | null;
+  blockerTo: string | null;
+  blockerRequiredAltFt: number | null;
 }
 
 interface PlanCallbacks {
   onResult(routes: PlannedRoute[], meta: { demUsed: boolean }): void;
   onError(message: string): void;
+  /** Only fired for a `requestDiagnosis` call. */
+  onDiagnosis?(d: CeilingDiagnosisResult): void;
 }
 
 function spawnWorker(): Worker {
@@ -40,6 +51,7 @@ function spawnWorker(): Worker {
  *  so the only way to actually free the CPU is terminate + respawn. */
 export function usePlanner(): {
   requestPlan(req: PlanRequest, cb: PlanCallbacks): void;
+  requestDiagnosis(req: PlanRequest, cb: PlanCallbacks): void;
   cancel(): void;
   isPlanning: boolean;
   progress: { expanded: number; found: number } | null;
@@ -73,9 +85,18 @@ export function usePlanner(): {
     callbacksRef.current = null;
     setIsPlanning(false);
     setProgress(null);
-    if (msg.type === "result")
+    if (msg.type === "result") {
       cb?.onResult(msg.routes, { demUsed: msg.demUsed });
-    else cb?.onError(msg.message);
+    } else if (msg.type === "diagnosis") {
+      cb?.onDiagnosis?.({
+        lowestWorkableFt: msg.lowestWorkableFt,
+        blockerFrom: msg.blockerFrom,
+        blockerTo: msg.blockerTo,
+        blockerRequiredAltFt: msg.blockerRequiredAltFt,
+      });
+    } else {
+      cb?.onError(msg.message);
+    }
   }
 
   function ensureWorker(): Worker {
@@ -115,6 +136,23 @@ export function usePlanner(): {
     ensureWorker().postMessage(message);
   }
 
+  /** Asks the worker for the lowest ceiling that admits a route. Same
+   *  supersede semantics as requestPlan — it re-plans several times, so
+   *  it must not run alongside a live search. */
+  function requestDiagnosis(req: PlanRequest, cb: PlanCallbacks) {
+    if (callbacksRef.current) {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+      callbacksRef.current = null;
+    }
+    const id = ++idRef.current;
+    callbacksRef.current = cb;
+    setIsPlanning(true);
+    setProgress(null);
+    const message: PlanWorkerRequest = { type: "diagnose", id, params: req };
+    ensureWorker().postMessage(message);
+  }
+
   function cancel() {
     idRef.current++;
     callbacksRef.current = null;
@@ -124,5 +162,5 @@ export function usePlanner(): {
     setProgress(null);
   }
 
-  return { requestPlan, cancel, isPlanning, progress };
+  return { requestPlan, requestDiagnosis, cancel, isPlanning, progress };
 }

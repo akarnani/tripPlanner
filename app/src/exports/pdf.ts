@@ -2,6 +2,8 @@ import { jsPDF } from "jspdf";
 import type { PlannedRoute } from "@/engine/plan";
 import type { TerrainAnalysis } from "@/engine/terrain";
 import type { Aircraft } from "@/data/aircraft";
+import { navPointLabel } from "@/engine/navPoints";
+import { routePointLabel, routeSequence } from "./routePoints";
 
 interface Input {
   route: PlannedRoute;
@@ -27,11 +29,10 @@ export function toPDF(input: Input): Blob {
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(11);
-  const seq = airportSequence(route);
   // jsPDF's built-in Helvetica uses WinAnsi, which doesn't include the
   // U+2192 arrow or U+2265 greater-or-equal. Stick to ASCII glyphs in
   // the rendered text; the UI keeps the nicer Unicode characters.
-  const idents = seq.map((a) => a.icao ?? a.lid).join("  >  ");
+  const idents = routeSequence(route).map(routePointLabel).join("  >  ");
   doc.text(idents, m, y);
   y += 18;
 
@@ -82,6 +83,15 @@ export function toPDF(input: Input): Blob {
     });
     doc.text(leg.fuel_gal.toFixed(1), m + 370, y, { align: "right" });
     y += 14;
+    // Shape points get their own indented line under the leg instead of
+    // a From/To cell. They bend the ground track but are flown over,
+    // never landed at, and a row that reads like a stop is an invitation
+    // to plan fuel or a rest around one.
+    const via = leg.via ?? [];
+    if (via.length > 0) {
+      doc.text(`via ${via.map(navPointLabel).join(", ")} (overfly)`, m + 10, y);
+      y += 12;
+    }
   }
 
   if (terrain) {
@@ -111,10 +121,4 @@ export function toPDF(input: Input): Blob {
   }
 
   return doc.output("blob");
-}
-
-function airportSequence(route: PlannedRoute) {
-  const out = [route.legs[0].fromAirport];
-  for (const leg of route.legs) out.push(leg.toAirport);
-  return out;
 }

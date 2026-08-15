@@ -9,6 +9,7 @@ function snapshot(extra: Partial<PlanSnapshot> = {}): PlanSnapshot {
     destination: "KBOI",
     aircraftSlug: "c172s",
     targetAltFt: 6500,
+    maxAltFt: null,
     reserveMin: 45,
     startingFuelGal: 53,
     flightRule: "VFR",
@@ -170,5 +171,20 @@ describe("describePlanDiff", () => {
       "filters changed",
       "pinned stops changed",
     ]);
+  });
+
+  test("turning the altitude ceiling on makes an existing plan stale", () => {
+    // A route planned with no ceiling may contain legs that cannot be
+    // flown under one, so the plan must not keep reading as current.
+    const a = snapshot();
+    const b = snapshot({ maxAltFt: 9000 });
+    expect(snapshotsEqual(a, b)).toBe(false);
+    expect(describePlanDiff(a, b).length).toBeGreaterThan(0);
+  });
+
+  test("changing the ceiling value makes a plan stale too", () => {
+    expect(
+      snapshotsEqual(snapshot({ maxAltFt: 9000 }), snapshot({ maxAltFt: 11000 })),
+    ).toBe(false);
   });
 });

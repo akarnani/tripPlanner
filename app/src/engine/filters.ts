@@ -1,6 +1,6 @@
 import type { Airport, Datasets } from "@/data/loaders";
 import type { FuelType } from "@/data/aircraft";
-import { greatCircleNM } from "./geo";
+import { greatCircleNM, type LatLon } from "./geo";
 import { initialTrueCourseDeg } from "./hemispheric";
 
 const EARTH_NM = 3440.065;
@@ -110,6 +110,12 @@ export function applyFilters(
   });
 }
 
+/** Endpoint of a corridor. Only geometry is needed; `id` just lets the
+ *  endpoints short-circuit to "always kept". Loose enough to accept a
+ *  nav point, so a corridor can follow a pinned path rather than only
+ *  the direct origin→destination line. */
+type CorridorEnd = LatLon & { id?: string };
+
 /**
  * Drop airports more than `maxCrossTrackNM` from the great-circle line
  * between origin and destination, and airports whose along-track
@@ -128,8 +134,8 @@ export function applyFilters(
  */
 export function airportsInRouteCorridor(
   airports: readonly Airport[],
-  origin: Airport,
-  destination: Airport,
+  origin: CorridorEnd,
+  destination: CorridorEnd,
   maxCrossTrackNM = 100,
   alongTrackPaddingNM = 50,
 ): Airport[] {

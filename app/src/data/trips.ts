@@ -17,6 +17,10 @@ export interface SavedTrip {
   destination: string;
   aircraftSlug: string;
   targetAltFt: number;
+  /** Hard cruise ceiling in force when the trip was saved, if any.
+   *  Missing on trips saved before the altitude band shipped, which
+   *  load back with no ceiling — the behaviour they were planned under. */
+  maxAltFt?: number | null;
   reserveMin: number;
   startingFuelGal: number;
   flightRule: FlightRule;

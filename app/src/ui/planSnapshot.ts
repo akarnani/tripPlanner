@@ -18,6 +18,10 @@ export interface PlanSnapshot {
   destination: string;
   aircraftSlug: string;
   targetAltFt: number;
+  /** Ceiling in force when the plan ran, or null for none. Part of the
+   *  snapshot because toggling it changes which routes are even
+   *  feasible — a plan made without it is stale the moment it's on. */
+  maxAltFt: number | null;
   reserveMin: number;
   startingFuelGal: number;
   flightRule: FlightRule;
@@ -77,6 +81,11 @@ export function describePlanDiff(
     diffs.push(
       `altitude ${prev.targetAltFt.toLocaleString()} → ${next.targetAltFt.toLocaleString()} ft`,
     );
+  }
+  if (prev.maxAltFt !== next.maxAltFt) {
+    const label = (ft: number | null) =>
+      ft === null ? "no ceiling" : `${ft.toLocaleString()} ft`;
+    diffs.push(`ceiling ${label(prev.maxAltFt)} → ${label(next.maxAltFt)}`);
   }
   if (prev.aircraftSlug !== next.aircraftSlug) {
     diffs.push(`aircraft ${prev.aircraftSlug} → ${next.aircraftSlug}`);

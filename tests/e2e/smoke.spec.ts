@@ -1,5 +1,68 @@
 import { test, expect, type Page } from "@playwright/test";
 
+/** The slice of the MapLibre API the map-layer tests drive. Declared
+ *  here so the spec doesn't pull maplibre-gl into the test bundle. */
+type MapLike = {
+  getLayer(id: string): unknown;
+  queryRenderedFeatures(
+    g: undefined | { x: number; y: number },
+    o: { layers: string[] },
+  ): Array<{
+    geometry: { coordinates: number[] };
+    properties: Record<string, unknown>;
+  }>;
+  jumpTo(o: { center: [number, number]; zoom: number }): void;
+  project(lngLat: [number, number]): { x: number; y: number };
+};
+
+/** Rendered feature counts for the nav-point layers, or -1 when the map
+ *  handle isn't there (dev-build only) so callers can skip rather than
+ *  pass vacuously. */
+async function navCounts(page: Page): Promise<{
+  navaids: number;
+  fixes: number;
+  routeNav: number;
+  routeNavIdents: string[];
+}> {
+  return await page.evaluate(() => {
+    const m = (window as unknown as { __tripPlannerMap?: MapLike })
+      .__tripPlannerMap;
+    const miss = { navaids: -1, fixes: -1, routeNav: -1, routeNavIdents: [] };
+    if (!m || !m.getLayer("nav-points-navaids")) return miss;
+    const feats = (id: string) =>
+      m.getLayer(id) ? m.queryRenderedFeatures(undefined, { layers: [id] }) : [];
+    const routeNav = feats("route-nav-points-sym");
+    return {
+      navaids: feats("nav-points-navaids").length,
+      fixes: feats("nav-points-fixes").length,
+      routeNav: routeNav.length,
+      routeNavIdents: routeNav.map((f) => String(f.properties.ident)),
+    };
+  });
+}
+
+/** Move the camera and give MapLibre a beat to tile and paint. Can't
+ *  wait on the map's `idle` event here: the label sources deliberately
+ *  keep tiles pending whenever glyphs are unreachable (see the gate
+ *  test), so `idle` may never fire even though everything that can
+ *  draw has drawn. Positive assertions poll; this settle time only has
+ *  to be enough for the negative ones. */
+async function jumpTo(
+  page: Page,
+  zoom: number,
+  center: [number, number],
+): Promise<void> {
+  await page.evaluate(
+    ([z, lon, lat]) => {
+      const m = (window as unknown as { __tripPlannerMap?: MapLike })
+        .__tripPlannerMap!;
+      m.jumpTo({ center: [lon, lat], zoom: z });
+    },
+    [zoom, center[0], center[1]],
+  );
+  await page.waitForTimeout(1500);
+}
+
 /** The Plan button shows "Loading airport database…" while datasets
  *  load via fetch. Wait for the button to become the enabled "Plan
  *  trip" before each test so they aren't racing the dataset load. */
@@ -281,6 +344,237 @@ test.describe("trip planner smoke", () => {
       const after = Number(await targetInput.inputValue());
       expect(after).toBeGreaterThan(before);
     }
+  });
+
+  test("every leg of a ceilinged plan respects the ceiling", async ({
+    page,
+  }) => {
+    // The property that matters, and the one that regressed once: with
+    // a ceiling set, no leg may be planned above it. KSEA→KBOI has a
+    // genuine low route (the Columbia Gorge cuts the Cascades near sea
+    // level), so this asserts the ceiling is *enforced*, not merely
+    // that planning fails.
+    await page.getByLabel("Stay at or below").check();
+    await page.getByLabel("Maximum altitude (ft)").fill("8000");
+    await planAndWaitForRoute(page);
+
+    const alts = await page
+      .locator("table tbody tr td:nth-child(3)")
+      .allTextContents();
+    const parsed = alts
+      .map((t) => Number(t.replace(/[^\d]/g, "")))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    expect(parsed.length).toBeGreaterThan(0);
+    for (const alt of parsed) expect(alt).toBeLessThanOrEqual(8000);
+  });
+
+  test("an impossible ceiling fails with both ways out offered", async ({
+    page,
+  }) => {
+    // 4,000 ft leaves nothing legal above KBOI's 2,872 ft field once the
+    // 2,000 ft terrain buffer is applied, anywhere on the route.
+    await page.getByLabel("Stay at or below").check();
+    await page.getByLabel("Maximum altitude (ft)").fill("4000");
+    await page.getByTestId("plan-trip").click();
+
+    await expect(page.getByText(/no route at or below 4,000 ft/)).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(
+      page.getByRole("button", { name: "Find a way around" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Lowest workable altitude" }),
+    ).toBeVisible();
+  });
+
+  test("the lowest-workable-altitude search reports a specific altitude", async ({
+    page,
+  }) => {
+    await page.getByLabel("Stay at or below").check();
+    await page.getByLabel("Maximum altitude (ft)").fill("4000");
+    await page.getByTestId("plan-trip").click();
+    await expect(page.getByText(/no route at or below/)).toBeVisible({
+      timeout: 30_000,
+    });
+
+    await page.getByRole("button", { name: "Lowest workable altitude" }).click();
+    await expect(
+      page.getByText(/Lowest workable ceiling is [\d,]+ ft|No ceiling works/),
+    ).toBeVisible({ timeout: 90_000 });
+  });
+
+  test("toggling the ceiling marks an existing plan stale", async ({ page }) => {
+    await planAndWaitForRoute(page);
+    await page.getByLabel("Stay at or below").check();
+    await expect(page.getByText(/ceiling/i).first()).toBeVisible({
+      timeout: 10_000,
+    });
+  });
+
+  test("nav points are zoom-gated: navaids come in before fixes", async ({
+    page,
+  }) => {
+    // 8,120 nav points at low zoom is unreadable, so the browsing
+    // layers are gated: navaids from z7, the six-times-denser fixes
+    // from z8.5. Queried through MapLibre itself — these are canvas
+    // layers, invisible to the DOM.
+    //
+    // Every "must be zero" here is checked at a camera position where
+    // the same layer has just been proven to draw one zoom step up, so
+    // a zero means "the gate closed it", not "the data never arrived".
+    // That distinction is the whole test: the first version of these
+    // layers rendered nothing at any zoom because their labels shared
+    // a source with their icons, and a tile parse that has to resolve
+    // glyphs never completes while the style's glyph endpoint is
+    // unreachable — which is the normal state of a keyless build (the
+    // fallback style points at demotiles) and of CI. The stalled tiles
+    // took the icons down with the text. Labels now live on their own
+    // source; if anyone merges them back, this test goes to zero.
+    const probe = await navCounts(page);
+    test.skip(probe.navaids === -1, "map test handle or nav layers unavailable");
+
+    // An isolated VORTAC (nearest airport 22 nm away, so nothing else
+    // is competing for the pixel) and an enroute fix on the KSEA→KBOI
+    // great circle. Coordinates, not idents: the assertions below read
+    // whatever the current NASR cycle put there.
+    const NEAR_ACH: [number, number] = [-105.03993, 35.11171];
+    const NEAR_NIPPS: [number, number] = [-119.0487, 45.45468];
+
+    await jumpTo(page, 7.2, NEAR_ACH);
+    await expect
+      .poll(async () => (await navCounts(page)).navaids, { timeout: 20_000 })
+      .toBeGreaterThan(0);
+
+    await jumpTo(page, 6.8, NEAR_ACH);
+    expect((await navCounts(page)).navaids).toBe(0);
+
+    // Fixes: still gated where navaids already draw, in at z8.5+.
+    await jumpTo(page, 8.8, NEAR_NIPPS);
+    await expect
+      .poll(async () => (await navCounts(page)).fixes, { timeout: 20_000 })
+      .toBeGreaterThan(0);
+
+    await jumpTo(page, 8.3, NEAR_NIPPS);
+    const gated = await navCounts(page);
+    expect(gated.fixes).toBe(0);
+    expect(gated.navaids).toBeGreaterThan(0);
+
+    // And nothing at all at a whole-region view.
+    await jumpTo(page, 4, [-122.31, 47.45]);
+    const wide = await navCounts(page);
+    expect(wide.navaids).toBe(0);
+    expect(wide.fixes).toBe(0);
+  });
+
+  test("clicking a navaid pops up its ident, type and tuned frequency", async ({
+    page,
+  }) => {
+    // Picks whatever navaid the current cycle draws in an area with no
+    // airports under it, so the assertion survives a NASR refresh. The
+    // frequency check is the point: NASR stores kHz (117800), a pilot
+    // tunes MHz (117.80).
+    const probe = await navCounts(page);
+    test.skip(probe.navaids === -1, "map test handle or nav layers unavailable");
+
+    await jumpTo(page, 7.2, [-105.03993, 35.11171]);
+    await expect
+      .poll(async () => (await navCounts(page)).navaids, { timeout: 20_000 })
+      .toBeGreaterThan(0);
+
+    // Find a rendered navaid with a frequency and no airport symbol
+    // sharing its pixel (airports own the click when they overlap).
+    const target = await page.evaluate(() => {
+      const m = (window as unknown as { __tripPlannerMap?: MapLike })
+        .__tripPlannerMap!;
+      for (const f of m.queryRenderedFeatures(undefined, {
+        layers: ["nav-points-navaids"],
+      })) {
+        const at = m.project(f.geometry.coordinates as [number, number]);
+        const airports = ["airports-towered", "airports-nontowered"].filter(
+          (id) => m.getLayer(id),
+        );
+        if (m.queryRenderedFeatures(at, { layers: airports }).length > 0) {
+          continue;
+        }
+        if (typeof f.properties.freq_khz !== "number") continue;
+        return { ident: String(f.properties.ident), x: at.x, y: at.y };
+      }
+      return null;
+    });
+    expect(target).not.toBeNull();
+
+    const canvas = await page.locator("canvas.maplibregl-canvas").boundingBox();
+    expect(canvas).not.toBeNull();
+    await page.mouse.click(canvas!.x + target!.x, canvas!.y + target!.y);
+
+    const popup = page.locator(".maplibregl-popup-content").first();
+    await expect(popup).toBeVisible({ timeout: 5_000 });
+    await expect(popup).toContainText(target!.ident);
+    // Ident plus facility type, the way the leg table names it.
+    await expect(popup).toContainText(
+      new RegExp(`${target!.ident}\\s+(VOR|VORTAC|VOR/DME|NDB|NDB/DME)`),
+    );
+    // kHz on the wire, tunable units on screen.
+    await expect(popup).toContainText(/(\d{3}\.\d{2} MHz|\d{3,4} kHz)/);
+  });
+
+  test("a nav point on the route stays visible when zoomed out", async ({
+    page,
+  }) => {
+    // The zoom gate must never hide a waypoint the pilot chose: pinned
+    // nav points render from their own always-on layer. Pin a fix that
+    // sits on the KSEA→KBOI great circle, re-plan, then zoom out past
+    // every gate and assert it's still drawn while the browsing layers
+    // are dark.
+    const probe = await navCounts(page);
+    test.skip(probe.navaids === -1, "map test handle or nav layers unavailable");
+
+    await planAndWaitForRoute(page);
+    await page.getByPlaceholder("KICAO or KSEA KGEG KBOI").first().fill("NIPPS");
+    await page.getByRole("button", { name: "Add", exact: true }).first().click();
+    await page.getByTestId("plan-trip").click();
+    // The leg table naming the fix is the app's own statement that the
+    // route is shaped through it.
+    await expect(page.getByText(/via NIPPS/).first()).toBeVisible({
+      timeout: 30_000,
+    });
+
+    await jumpTo(page, 4, [-122.31, 47.45]);
+    await expect
+      .poll(async () => (await navCounts(page)).routeNav, { timeout: 20_000 })
+      .toBeGreaterThan(0);
+    const wide = await navCounts(page);
+    expect(wide.navaids).toBe(0);
+    expect(wide.fixes).toBe(0);
+    expect(wide.routeNavIdents).toContain("NIPPS");
+  });
+
+  test("origin and destination dots draw without a glyph server", async ({
+    page,
+  }) => {
+    // A symbol layer with text-field stalls its tile parse until glyphs
+    // load, and a stalled tile takes every other layer on that source
+    // down with it. The stop labels used to share the stops source, so
+    // in any keyless or offline build -- local dev and CI both -- the
+    // route drew but its endpoints silently did not.
+    await planAndWaitForRoute(page);
+    await page.waitForTimeout(1500);
+    const counts = await page.evaluate(() => {
+      const m = (window as unknown as { __tripPlannerMap?: MapLike })
+        .__tripPlannerMap;
+      if (!m) return null;
+      return {
+        stops: m.queryRenderedFeatures(undefined, {
+          layers: ["route-stops-pts"],
+        }).length,
+        route: m.queryRenderedFeatures(undefined, { layers: ["route-line"] })
+          .length,
+      };
+    });
+    test.skip(counts === null, "map test handle unavailable");
+    expect(counts!.route).toBeGreaterThan(0);
+    expect(counts!.stops).toBeGreaterThan(0);
   });
 
   test("GPX export downloads a non-empty file", async ({ page }) => {

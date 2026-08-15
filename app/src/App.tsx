@@ -67,6 +67,8 @@ import { ExportPanel } from "./ui/ExportPanel";
 import { ExcludedAirports } from "./ui/ExcludedAirports";
 import { InteractivePanel } from "./ui/InteractivePanel";
 import { PinnedStops } from "./ui/PinnedStops";
+import { suggestDetours, type DetourSuggestion } from "./engine/detours";
+import type { LatLon } from "./engine/geo";
 import { RunwayPanel } from "./ui/RunwayPanel";
 import { RouteIssuesPanel } from "./ui/RouteIssuesPanel";
 import { SavedTripsPopover } from "./ui/SavedTripsPopover";
@@ -109,7 +111,7 @@ export function App() {
   const [datasets, setDatasets] = useState<Datasets>(EMPTY_DATASETS);
   const [dataReady, setDataReady] = useState(false);
   const [demReady, setDemReady] = useState(false);
-  const { requestPlan, cancel, isPlanning, progress } = usePlanner();
+  const { requestPlan, requestDiagnosis, cancel, isPlanning, progress } = usePlanner();
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [aircraftSlug, setAircraftSlug] = useState(allAircraft[0]?.slug ?? "");
@@ -129,7 +131,41 @@ export function App() {
   const [excludedIds, setExcludedIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  // Optional hard ceiling on cruise altitude. Off by default, so every
+  // saved trip and the existing behaviour are untouched until a pilot
+  // deliberately turns it on.
+  const [capAltitude, setCapAltitude] = useState(false);
+  const [maxAltFt, setMaxAltFt] = useState(9000);
+  // Detour suggestions are opt-in: computing them means re-running the
+  // altitude gate over thousands of candidate fixes, and a pilot who
+  // meant to raise the ceiling shouldn't pay for a search they didn't
+  // ask for.
+  const [detours, setDetours] = useState<DetourSuggestion[] | null>(null);
+  // The inputs the most recent failed plan actually ran with. Reading
+  // live state instead would search against a different floor than the
+  // one that failed, which is exactly wrong after a "Replan at N ft".
+  const [failedPlan, setFailedPlan] = useState<{
+    targetFt: number;
+    maxAltFt: number | null;
+    pinned: readonly string[];
+  } | null>(null);
+  const [ceilingHint, setCeilingHint] = useState<string | null>(null);
   const [pinnedStopIds, setPinnedStopIds] = useState<readonly string[]>([]);
+  // Nav points keyed by their prefixed id ("nav:SEA" / "fix:HAROB"),
+  // for labelling pins and resolving them back to positions at plan
+  // time. Rebuilt only when the dataset changes.
+  // Cycle expiry is a date comparison against "today", so it is
+  // computed once per render rather than per route.
+  const navDataExpired = useMemo(() => {
+    const expires = datasets.navCycle?.expires;
+    if (!expires) return false;
+    return new Date(`${expires}T00:00:00Z`).getTime() <= Date.now();
+  }, [datasets.navCycle]);
+
+  const navPointsById = useMemo(
+    () => new Map(datasets.navPoints.map((p) => [p.id, p])),
+    [datasets.navPoints],
+  );
   const [trips, setTrips] = useState<SavedTrip[]>(() => listTrips());
 
   // Snapshot of the inputs the current `routes` were planned with.
@@ -660,6 +696,7 @@ export function App() {
       destination,
       aircraftSlug: selectedAircraft.slug,
       targetAltFt: targetFt,
+      maxAltFt: capAltitude ? maxAltFt : null,
       reserveMin,
       startingFuelGal,
       flightRule,
@@ -674,6 +711,9 @@ export function App() {
 
   function runPlan(targetFt: number, overrides: PlanOverrides = {}) {
     setError(null);
+    setDetours(null);
+    setCeilingHint(null);
+    setFailedPlan(null);
     const o = airportByIdent(datasets.airports, origin);
     const d = airportByIdent(datasets.airports, destination);
     if (!o) {
@@ -694,15 +734,47 @@ export function App() {
     const pinnedAirports = pinned
       .map((id) => datasets.airports.find((a) => a.id === id))
       .filter((a): a is NonNullable<typeof a> => !!a);
-    // Drop airports that are nowhere near the direct route. With ~5k
+    const pinnedNavPoints = pinned
+      .map((id) => datasets.navPoints.find((p) => p.id === id))
+      .filter((p): p is NonNullable<typeof p> => !!p);
+    // Drop airports that are nowhere near the route. With ~5k
     // public-use airports in CONUS, the unfiltered routing graph has
     // ~25M edges; an airport in Florida is never a useful fuel stop
     // for a Bay Area → Wisconsin flight, so culling them here turns
     // tens of seconds of planning into a fraction.
-    const onRoute = airportsInRouteCorridor(matches, o, d);
+    //
+    // The corridor follows the *pinned* path, not the direct
+    // origin→destination line. A nav point pinned 150 nm off-track to
+    // dodge terrain would otherwise put its own span's fuel stops
+    // outside the band — the planner would silently pick worse stops
+    // on exactly the routes this feature exists to create.
+    // Anchors in the order the pilot pinned them — concatenating the
+    // airport and nav-point lists separately would corridor a path
+    // nobody is flying.
+    const corridorAnchors: LatLon[] = [
+      o,
+      ...pinned
+        .map(
+          (id) =>
+            datasets.airports.find((a) => a.id === id) ??
+            datasets.navPoints.find((p) => p.id === id),
+        )
+        .filter((p): p is NonNullable<typeof p> => !!p),
+      d,
+    ];
+    const onRoute = new Map<string, (typeof matches)[number]>();
+    for (let i = 0; i < corridorAnchors.length - 1; i++) {
+      for (const a of airportsInRouteCorridor(
+        matches,
+        corridorAnchors[i],
+        corridorAnchors[i + 1],
+      )) {
+        onRoute.set(a.id, a);
+      }
+    }
     const candidates = Array.from(
       new Map(
-        [...onRoute, o, d, ...pinnedAirports].map((a) => [a.id, a]),
+        [...onRoute.values(), o, d, ...pinnedAirports].map((a) => [a.id, a]),
       ).values(),
     );
     // Snapshot the exact inputs this request runs with; committed
@@ -715,17 +787,32 @@ export function App() {
         destinationId: d.id,
         aircraft: selectedAircraft,
         targetAltFt: targetFt,
+        maxAltFt: capAltitude ? maxAltFt : null,
         flightRule,
         reserveHr: reserveMin / 60,
         maxLegHr: capLegTime ? maxLegHr : undefined,
         startingFuelGal,
         excludedAirportIds: [...excluded],
         waypoints: [...pinned],
+        navPoints: pinnedNavPoints,
       },
       {
         onResult: (result, meta) => {
           if (result.length === 0) {
-            setError("no route found — try relaxing constraints");
+            // With a ceiling in force, "no route" is an ordinary
+            // answer rather than a malfunction, and the generic
+            // message reads like something broke. Name the constraint
+            // that is actually doing the work.
+            setError(
+              capAltitude
+                ? `no route at or below ${maxAltFt.toLocaleString()} ft — raise the ceiling, or pin a nav point to route around the terrain`
+                : "no route found — try relaxing constraints",
+            );
+            setFailedPlan({
+              targetFt,
+              maxAltFt: capAltitude ? maxAltFt : null,
+              pinned: [...pinned],
+            });
             setRoutes([]);
             setPlanSnapshot(null);
             return;
@@ -771,6 +858,13 @@ export function App() {
         fromIdent: l.fromAirport.icao ?? l.fromAirport.lid,
         toIdent: l.toAirport.icao ?? l.toAirport.lid,
         cruise_alt_ft: l.cruise_alt_ft,
+        // Without this the clearance analysis runs down the direct
+        // great circle while the map, the profile, and the router all
+        // follow the shaped track — the app would warn about a ridge
+        // the aircraft turned away from and stay silent about the one
+        // it turned toward. Every consumer of a leg's ground track has
+        // to agree on where the aeroplane actually is.
+        via: l.via,
       })),
       obstacles: routeObstacles,
       flightRule,
@@ -871,14 +965,41 @@ export function App() {
       targetAltFt,
       corridor: terminalWarnings,
       runway: runwayWarnings,
-      onReplanAt: (ft) => {
-        setTargetAltFt(ft);
-        // Plan with the new altitude immediately — setTargetAltFt
-        // only takes effect next render, so the closure would
-        // otherwise replan at the stale value.
-        runPlan(ft);
-      },
+      // "Replan at N ft" raises the target altitude, which directly
+      // contradicts a ceiling the pilot just set. Offering it there
+      // invites them to silently undo their own constraint.
+      onReplanAt: capAltitude
+        ? undefined
+        : (ft) => {
+            setTargetAltFt(ft);
+            // Plan with the new altitude immediately — setTargetAltFt
+            // only takes effect next render, so the closure would
+            // otherwise replan at the stale value.
+            runPlan(ft);
+          },
+      legs: (currentRoute?.legs ?? []).map((l) => ({
+        fromIdent: l.fromAirport.icao ?? l.fromAirport.lid,
+        toIdent: l.toAirport.icao ?? l.toAirport.lid,
+        cruise_alt_ft: l.cruise_alt_ft,
+        hemisphericConflict: l.extra?.hemispheric_conflict === 1,
+        ceilingExceeded: l.extra?.ceiling_exceeded === 1,
+      })),
     });
+    // Nav data expires. The VOR MON programme is decommissioning
+    // stations, and fix identifiers written into a GPX/FPL export may
+    // not resolve on a panel GPS running a different AIRAC cycle -- so
+    // an out-of-date cycle is a flyable-consequences problem, not a
+    // housekeeping one. Only raised once the cycle has actually lapsed;
+    // the footer carries the date the rest of the time.
+    if (navDataExpired && routes.length > 0) {
+      issues.unshift({
+        legIndex: -1,
+        phase: "cruise",
+        severity: "caution",
+        ident: "nav data",
+        message: `Navaid and fix data expired ${datasets.navCycle?.expires ?? ""} \u2014 idents in exports may not resolve on a current database.`,
+      });
+    }
     // Surfaced first among cautions: an auto-planned route whose
     // search ran without the terrain grid picked its fuel stops
     // terrain-blind, even though per-leg terrain warnings (computed
@@ -903,6 +1024,13 @@ export function App() {
     planTerrainBlind,
     planningMode,
     routes.length,
+    navDataExpired,
+    datasets.navCycle,
+    // The hemispheric-conflict issues read the route's legs directly.
+    // The terrain / corridor / runway inputs all derive from it too, so
+    // this is belt-and-braces — but an issue list that can go stale
+    // against the route it describes is not a thing to leave to luck.
+    currentRoute,
   ]);
 
   // Per-leg fuel-on-landing for the displayed route (T6). Shares the
@@ -1028,9 +1156,104 @@ export function App() {
     setToast(null);
   }
 
-  function identOf(airportId: string): string {
-    const a = datasets.airports.find((x) => x.id === airportId);
-    return a ? (a.icao ?? a.lid) : airportId;
+  /** Fixes that would make the direct origin→destination leg flyable
+   *  under the current ceiling. Run on demand from the failure message. */
+  function findDetours() {
+    const o = airportByIdent(datasets.airports, origin);
+    const d = airportByIdent(datasets.airports, destination);
+    if (!o || !d || !failedPlan) return;
+    // Search the same span the failed plan did. Pinned airports split
+    // the trip into spans, and only one of them is blocked -- scanning
+    // origin→destination direct would look for detours around terrain
+    // that isn't on the failing leg.
+    const anchors = [
+      o,
+      ...failedPlan.pinned
+        .map((id) => datasets.airports.find((a) => a.id === id))
+        .filter((a): a is NonNullable<typeof a> => !!a),
+      d,
+    ];
+    const found: DetourSuggestion[] = [];
+    for (let i = 0; i < anchors.length - 1; i++) {
+      found.push(
+        ...suggestDetours({
+          from: anchors[i],
+          to: anchors[i + 1],
+          navPoints: datasets.navPoints,
+          band: { minFt: failedPlan.targetFt, maxFt: failedPlan.maxAltFt },
+          flightRule,
+          aircraft: selectedAircraft,
+          dem: demReady ? demSampler : undefined,
+          variation: variationFn,
+        }),
+      );
+    }
+    found.sort((a, b) => a.addedNm - b.addedNm);
+    setDetours(found.slice(0, 3));
+  }
+
+  /** Asks the worker for the lowest ceiling that admits a route. */
+  function findLowestCeiling() {
+    const o = airportByIdent(datasets.airports, origin);
+    const d = airportByIdent(datasets.airports, destination);
+    if (!o || !d || !failedPlan) return;
+    const matches = applyFilters(datasets, filters, selectedAircraft.fuel.type);
+    const candidates = Array.from(
+      new Map(
+        [...airportsInRouteCorridor(matches, o, d), o, d].map((a) => [a.id, a]),
+      ).values(),
+    );
+    requestDiagnosis(
+      {
+        candidates,
+        originId: o.id,
+        destinationId: d.id,
+        aircraft: selectedAircraft,
+        targetAltFt: failedPlan.targetFt,
+        maxAltFt: failedPlan.maxAltFt,
+        flightRule,
+        reserveHr: reserveMin / 60,
+        maxLegHr: capLegTime ? maxLegHr : undefined,
+        startingFuelGal,
+        excludedAirportIds: [...excludedIds],
+        waypoints: [...failedPlan.pinned],
+        navPoints: datasets.navPoints.filter((p) =>
+          failedPlan.pinned.includes(p.id),
+        ),
+      },
+      {
+        onResult: () => {},
+        onError: (m) => setCeilingHint(m),
+        onDiagnosis: (dg) => {
+          const leg =
+            dg.blockerFrom && dg.blockerTo
+              ? `${identOf(dg.blockerFrom)}\u2192${identOf(dg.blockerTo)}`
+              : null;
+          if (dg.lowestWorkableFt === null) {
+            setCeilingHint(
+              leg
+                ? `No ceiling works: ${leg} needs ${dg.blockerRequiredAltFt?.toLocaleString() ?? "more"} ft, beyond this aircraft's published cruise table.`
+                : "No ceiling works for this route with this aircraft.",
+            );
+            return;
+          }
+          setCeilingHint(
+            `Lowest workable ceiling is ${dg.lowestWorkableFt.toLocaleString()} ft` +
+              (leg
+                ? ` \u2014 ${leg} needs ${dg.blockerRequiredAltFt?.toLocaleString() ?? "more"} ft`
+                : ""),
+          );
+        },
+      },
+    );
+  }
+
+  function identOf(id: string): string {
+    const a = datasets.airports.find((x) => x.id === id);
+    if (a) return a.icao ?? a.lid;
+    const p = datasets.navPoints.find((x) => x.id === id);
+    if (p) return p.ident;
+    return id;
   }
 
   function handleExcludeStops(airportIds: string[]) {
@@ -1233,6 +1456,7 @@ export function App() {
       destination,
       aircraftSlug: selectedAircraft.slug,
       targetAltFt,
+      maxAltFt: capAltitude ? maxAltFt : null,
       reserveMin,
       startingFuelGal,
       flightRule,
@@ -1276,6 +1500,10 @@ export function App() {
     setDestination(t.destination);
     setAircraftSlug(t.aircraftSlug);
     setTargetAltFt(t.targetAltFt);
+    // Trips saved before the ceiling shipped have no maxAltFt and load
+    // back unceilinged — which is how they were planned.
+    setCapAltitude(t.maxAltFt != null);
+    if (t.maxAltFt != null) setMaxAltFt(t.maxAltFt);
     setReserveMin(t.reserveMin);
     setStartingFuelGal(t.startingFuelGal);
     setFlightRule(t.flightRule);
@@ -1359,6 +1587,8 @@ export function App() {
                     <PinnedStops
                       pinnedIds={pinnedStopIds}
                       airports={datasets.airports}
+                      navPointsByIdent={datasets.navPointsByIdent}
+                      navPointsById={navPointsById}
                       aircraftFuelType={selectedAircraft.fuel.type}
                       originIdent={origin}
                       destinationIdent={destination}
@@ -1366,6 +1596,15 @@ export function App() {
                       onRemove={handleRemovePin}
                       onReorder={handleReorderPins}
                     />
+                    {datasets.navCycle?.effective && (
+                      <p className="mt-1 text-[10px] text-muted">
+                        Nav data cycle {datasets.navCycle.effective}
+                        {datasets.navCycle.expires
+                          ? ` \u2013 ${datasets.navCycle.expires}`
+                          : ""}
+                        {navDataExpired ? " (expired)" : ""}
+                      </p>
+                    )}
                   </div>
                   <div className="mt-3">
                     <ExcludedAirports
@@ -1421,6 +1660,10 @@ export function App() {
                 onSelect={setAircraftSlug}
                 targetAltFt={targetAltFt}
                 onTargetAltChange={setTargetAltFt}
+                capAltitude={capAltitude}
+                onCapAltitudeChange={setCapAltitude}
+                maxAltFt={maxAltFt}
+                onMaxAltChange={setMaxAltFt}
                 reserveMin={reserveMin}
                 onReserveChange={setReserveMin}
                 startingFuelGal={startingFuelGal}
@@ -1493,6 +1736,58 @@ export function App() {
                   Build interactively →
                 </button>
                 {error && <p className="text-xs text-danger">{error}</p>}
+              {error && capAltitude && detours === null && (
+                <button
+                  type="button"
+                  onClick={findDetours}
+                  className="mt-1 rounded border border-hairline-input bg-card px-2 py-1 text-xs text-ink hover:bg-surface"
+                >
+                  Find a way around
+                </button>
+              )}
+              {error && capAltitude && ceilingHint === null && failedPlan && (
+                <button
+                  type="button"
+                  onClick={findLowestCeiling}
+                  className="ml-1 mt-1 rounded border border-hairline-input bg-card px-2 py-1 text-xs text-ink hover:bg-surface"
+                >
+                  Lowest workable altitude
+                </button>
+              )}
+              {ceilingHint && (
+                <p className="mt-1 text-xs text-muted">{ceilingHint}</p>
+              )}
+              {detours !== null && (
+                <div className="mt-1 text-xs">
+                  {detours.length === 0 ? (
+                    <p className="text-muted">
+                      No nav point makes this leg work under the ceiling
+                      without a large detour.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {detours.map((s) => (
+                        <li key={s.navPoint.id} className="flex items-center gap-2">
+                          <span className="font-mono text-ink">
+                            {s.navPoint.ident}
+                          </span>
+                          <span className="text-muted">
+                            +{Math.round(s.addedNm)} nm ·{" "}
+                            {s.altFt.toLocaleString()} ft
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleAddPins([s.navPoint.id])}
+                            className="rounded border border-hairline-input bg-card px-1.5 py-0.5 text-ink hover:bg-surface"
+                          >
+                            Pin
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               </>
             ) : (
               <p className="text-center text-xs text-muted">
@@ -1505,6 +1800,7 @@ export function App() {
     <main className="relative flex-1">
         <MapView
           airports={matches}
+          navPoints={datasets.navPoints}
           route={currentRoute}
           routeDimmed={isStale}
           hoveredLegIndex={hoveredLegIndex}

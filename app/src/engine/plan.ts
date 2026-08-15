@@ -1,16 +1,17 @@
-import type { Airport } from "@/data/loaders";
+import { isNavPointId, type Airport, type NavPoint } from "@/data/loaders";
 import type { Aircraft } from "@/data/aircraft";
 import {
   buildGraph,
   kShortestPaths,
   type Edge,
+  type EdgeRejection,
   type Path,
   type VariationFn,
 } from "./routing";
 import { costFnById } from "./costFns";
 import { airportSellsCompatibleFuel } from "./filters";
-import type { FlightRule } from "./hemispheric";
-import { usableRange } from "./performance";
+import { hemisphericAltitude, type FlightRule } from "./hemispheric";
+import { maxPublishedCruiseAltFt, usableRange } from "./performance";
 import type { DEMSampler } from "./terrain";
 
 export interface PlanInput {
@@ -21,6 +22,11 @@ export interface PlanInput {
   /** Pilot's chosen target altitude. Each leg flies the lowest legal
    *  hemispheric altitude at or above this for its own course. */
   targetAltFt: number;
+  /** Optional hard ceiling. Legs round *down* to the highest legal
+   *  level under it, and legs with nothing flyable underneath are
+   *  dropped from the graph. null / undefined is the no-ceiling
+   *  behaviour the app had before. */
+  maxAltFt?: number | null;
   flightRule: FlightRule;
   reserveHr: number;
   variation?: VariationFn;
@@ -42,6 +48,14 @@ export interface PlanInput {
   objectives?: string[];
   /** Optional per-objective parameters, keyed by objective id. */
   params?: Record<string, Record<string, number>>;
+  /** Ordered nav points this origin→destination span must be routed
+   *  through. Shapes the ground track without adding stops. */
+  shapePoints?: readonly NavPoint[];
+  /** Called for each edge the altitude band rejects. A ceiling makes
+   *  an empty result an ordinary answer, and an empty result with no
+   *  explanation is a dead end — this is what lets the caller say
+   *  which leg blocked the route and how high it needed to be. */
+  onReject?: (r: EdgeRejection) => void;
   /** Optional progress callback for long searches (e.g. surfaced from
    *  a Web Worker). Invoked with a cumulative node-expansion count —
    *  across every objective (and, via `planWithWaypoints`, every
@@ -87,6 +101,7 @@ export function plan(input: PlanInput): PlannedRoute[] {
     destination,
     aircraft,
     targetAltFt,
+    maxAltFt: input.maxAltFt ?? null,
     flightRule,
     reserveHr,
     variation: input.variation,
@@ -94,6 +109,8 @@ export function plan(input: PlanInput): PlannedRoute[] {
     startingFuelGal: input.startingFuelGal,
     excludedAirportIds: input.excludedAirportIds,
     dem: input.dem,
+    shapePoints: input.shapePoints,
+    onReject: input.onReject,
   });
   // Practical full-tank cruise range at the chosen altitude. Used by
   // the built-in cost functions as the normalization constant for the
@@ -162,12 +179,60 @@ function makeRelayProgress(
 }
 
 export interface PlanWithWaypointsInput extends PlanInput {
-  /** Ordered list of airport ids the route MUST pass through, between
-   *  origin and destination. Each pinned waypoint is a refuel stop if
-   *  it stocks fuel compatible with `aircraft.fuel.type`, otherwise
-   *  it's a pass-through and fuel state carries through to the next
-   *  sub-leg. */
+  /** Ordered list of ids the route MUST pass through, between origin
+   *  and destination. Two kinds are accepted:
+   *
+   *  - **Airport ids** anchor a leg. A pinned airport is a refuel stop
+   *    if it stocks fuel compatible with `aircraft.fuel.type`,
+   *    otherwise a pass-through with fuel state carrying forward.
+   *  - **Nav point ids** ("nav:SEA", "fix:HAROB") shape the ground
+   *    track of whichever airport-anchored span they fall in, without
+   *    becoming a stop. The planner still searches that span for fuel
+   *    stops, so pinning a fix to dodge terrain doesn't force the leg
+   *    to be flown non-stop.
+   */
   waypoints: readonly string[];
+  /** Positions for any nav point ids appearing in `waypoints`.
+   *  Unresolvable ids are ignored rather than failing the plan — a
+   *  saved trip referencing a fix that a later AIRAC cycle retired
+   *  should still produce a route. */
+  navPointsById?: ReadonlyMap<string, NavPoint>;
+}
+
+interface WaypointSpan {
+  from: string;
+  to: string;
+  shapePoints: NavPoint[];
+}
+
+/**
+ * Splits a mixed waypoint list into airport-anchored spans, attaching
+ * each nav point to the span it falls inside.
+ *
+ * `[KSEA, fix:HAROB, KGEG, KBOI]` becomes KSEA→KGEG shaped through
+ * HAROB, then KGEG→KBOI unshaped.
+ */
+export function splitWaypointSpans(
+  origin: string,
+  waypoints: readonly string[],
+  destination: string,
+  navPointsById?: ReadonlyMap<string, NavPoint>,
+): WaypointSpan[] {
+  const spans: WaypointSpan[] = [];
+  let anchor = origin;
+  let pending: NavPoint[] = [];
+  for (const w of waypoints) {
+    if (isNavPointId(w)) {
+      const p = navPointsById?.get(w);
+      if (p) pending.push(p);
+      continue;
+    }
+    spans.push({ from: anchor, to: w, shapePoints: pending });
+    anchor = w;
+    pending = [];
+  }
+  spans.push({ from: anchor, to: destination, shapePoints: pending });
+  return spans;
 }
 
 /** Plans an origin→destination route that must pass through a fixed
@@ -180,7 +245,18 @@ export function planWithWaypoints(input: PlanWithWaypointsInput): PlannedRoute[]
   const { waypoints } = input;
   if (waypoints.length === 0) return plan(input);
 
-  const sequence = [input.origin, ...waypoints, input.destination];
+  const spans = splitWaypointSpans(
+    input.origin,
+    waypoints,
+    input.destination,
+    input.navPointsById,
+  );
+  // A list of nothing but nav points collapses to a single shaped span
+  // from origin to destination — no extra legs, which is exactly the
+  // difference between a shape point and a stop.
+  if (spans.length === 1 && spans[0].shapePoints.length === 0) {
+    return plan(input);
+  }
   const byId = new Map<string, Airport>(input.airports.map((a) => [a.id, a]));
   const fullTanks = input.aircraft.fuel.usable_capacity_gal;
   let startFuel = Math.min(input.startingFuelGal ?? fullTanks, fullTanks);
@@ -190,12 +266,13 @@ export function planWithWaypoints(input: PlanWithWaypointsInput): PlannedRoute[]
   const relayProgress = makeRelayProgress(input.onProgress);
 
   const subResults: PlannedRoute[][] = [];
-  for (let i = 0; i < sequence.length - 1; i++) {
+  for (let i = 0; i < spans.length; i++) {
     const subRoutes = plan({
       ...input,
-      origin: sequence[i],
-      destination: sequence[i + 1],
+      origin: spans[i].from,
+      destination: spans[i].to,
       startingFuelGal: startFuel,
+      shapePoints: spans[i].shapePoints,
       onProgress: relayProgress?.onProgress,
     });
     relayProgress?.advance();
@@ -205,8 +282,8 @@ export function planWithWaypoints(input: PlanWithWaypointsInput): PlannedRoute[]
     // Update fuel state for the next sub-leg's starting fuel based on
     // whether this waypoint can actually refuel us. The destination
     // (last leg) doesn't need this calculation.
-    if (i < sequence.length - 2) {
-      const arrival = byId.get(sequence[i + 1]);
+    if (i < spans.length - 1) {
+      const arrival = byId.get(spans[i].to);
       const refuels =
         !!arrival && airportSellsCompatibleFuel(arrival, input.aircraft.fuel.type);
       if (refuels) {
@@ -281,4 +358,109 @@ function toRoute(
     { distance_nm: 0, time_hr: 0, fuel_gal: 0, stops: legs.length - 1 },
   );
   return { costFnId, cost: path.cost, legs, totals };
+}
+
+/** Why a ceilinged plan came back empty, and what would fix it. */
+export interface CeilingDiagnosis {
+  /** Lowest ceiling at which a route exists, or null if none does at
+   *  any legal level the aircraft can reach. */
+  lowestWorkableFt: number | null;
+  /** The single leg that blocked the requested ceiling, and the
+   *  altitude it needed — the cheap answer, taken from the rejections
+   *  the failed search already produced. */
+  blocker: EdgeRejection | null;
+  /** Ceilings actually tried, for cost transparency in tests. */
+  attempts: number;
+}
+
+/**
+ * Finds the lowest ceiling that admits a route, by binary search over
+ * legal cruising levels.
+ *
+ * Searching *levels* rather than 500 ft steps matters: the answer is
+ * shown to a pilot as an altitude to fly, so every candidate has to be
+ * one they may legally cruise at. It also collapses the search space —
+ * there are a couple of dozen levels between the floor and a piston's
+ * service ceiling, so this converges in four or five plans rather than
+ * scanning hundreds of feet at a time.
+ *
+ * Feasibility is monotone in the ceiling — raising it only ever adds
+ * edges to the graph, never removes them — which is what makes a binary
+ * search valid here rather than merely convenient.
+ *
+ * Returns the blocking leg from the *requested* ceiling either way, so
+ * a failure still explains itself even when no ceiling works.
+ */
+export function diagnoseCeiling(
+  input: PlanWithWaypointsInput,
+): CeilingDiagnosis {
+  const requested = input.maxAltFt;
+  const rejections: EdgeRejection[] = [];
+  const runAt = (maxAltFt: number | null, collect = false) =>
+    planWithWaypoints({
+      ...input,
+      maxAltFt,
+      onProgress: undefined,
+      onReject: collect ? (r) => rejections.push(r) : undefined,
+    }).length > 0;
+
+  // Re-run the requested ceiling once to capture why it failed. The
+  // caller has already had the empty result; this is about the reason.
+  runAt(requested ?? null, true);
+  const blocker = pickBlocker(rejections);
+
+  if (requested == null) return { lowestWorkableFt: null, blocker, attempts: 1 };
+
+  const levels = legalLevelsAbove(
+    requested,
+    maxPublishedCruiseAltFt(input.aircraft),
+    input.flightRule,
+  );
+  let attempts = 1;
+  if (levels.length === 0 || !runAt(levels[levels.length - 1])) {
+    // Even the aircraft's published ceiling doesn't help: no amount of
+    // altitude fixes this route.
+    return { lowestWorkableFt: null, blocker, attempts: attempts + 1 };
+  }
+  attempts++;
+
+  let lo = 0;
+  let hi = levels.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    attempts++;
+    if (runAt(levels[mid])) hi = mid;
+    else lo = mid + 1;
+  }
+  return { lowestWorkableFt: levels[lo], blocker, attempts };
+}
+
+/** The rejection worth reporting: the one demanding the most altitude,
+ *  since clearing it is the binding constraint. */
+function pickBlocker(rejections: readonly EdgeRejection[]): EdgeRejection | null {
+  let best: EdgeRejection | null = null;
+  for (const r of rejections) {
+    if (r.requiredAltFt === undefined) continue;
+    if (!best || r.requiredAltFt > best.requiredAltFt!) best = r;
+  }
+  return best ?? rejections[0] ?? null;
+}
+
+/** Legal cruising levels strictly above `aboveFt`, up to `ceilingFt`,
+ *  ascending. Both course parities are included: a multi-leg route can
+ *  need either, and the search only has to bracket the answer. */
+function legalLevelsAbove(
+  aboveFt: number,
+  ceilingFt: number,
+  rule: FlightRule,
+): number[] {
+  const out: number[] = [];
+  for (const course of [90, 270]) {
+    for (let k = 0; k < 30; k++) {
+      const alt = hemisphericAltitude(aboveFt + 1 + k * 1000, course, rule);
+      if (alt > ceilingFt) break;
+      if (alt > aboveFt && !out.includes(alt)) out.push(alt);
+    }
+  }
+  return out.sort((a, b) => a - b);
 }

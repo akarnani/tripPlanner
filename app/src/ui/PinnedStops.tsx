@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { Airport } from "@/data/loaders";
-import { airportByIdent } from "@/data/loaders";
+import type { Airport, NavPoint } from "@/data/loaders";
+import { resolveWaypointIdent, navPointLabel } from "@/engine/navPoints";
 import type { FuelType } from "@/data/aircraft";
 import { airportSellsCompatibleFuel } from "@/engine/filters";
 import { AirportLink } from "./AirportLink";
@@ -10,6 +10,10 @@ interface Props {
    *  intermediate stops. */
   pinnedIds: readonly string[];
   airports: readonly Airport[];
+  /** Nav points by ident, for resolving typed VOR / fix identifiers. */
+  navPointsByIdent: ReadonlyMap<string, readonly NavPoint[]>;
+  /** Nav points by id, for labelling the pinned list. */
+  navPointsById: ReadonlyMap<string, NavPoint>;
   /** Used to flag pinned airports that don't stock the aircraft's fuel
    *  type — those are pass-through waypoints, not refuel stops. */
   aircraftFuelType: FuelType;
@@ -19,8 +23,8 @@ interface Props {
   /** Append one or more airport ids to the pin list. Called once per
    *  submit (even when the user types multiple ICAOs) so the planner
    *  only re-runs once. */
-  onAdd: (airportIds: string[]) => void;
-  onRemove: (airportId: string) => void;
+  onAdd: (waypointIds: string[]) => void;
+  onRemove: (waypointId: string) => void;
   /** Replace the entire ordered pinned list. Called once on drop. */
   onReorder: (nextPinnedIds: string[]) => void;
 }
@@ -28,6 +32,8 @@ interface Props {
 export function PinnedStops({
   pinnedIds,
   airports,
+  navPointsByIdent,
+  navPointsById,
   aircraftFuelType,
   originIdent,
   destinationIdent,
@@ -37,13 +43,18 @@ export function PinnedStops({
 }: Props) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // A collision note ("you got the airport") is information, not a
+  // failure, and must not render in the danger colour.
+  const [note, setNote] = useState<string | null>(null);
 
   const byId = new Map<string, Airport>();
   for (const a of airports) byId.set(a.id, a);
 
   const labelFor = (id: string) => {
     const a = byId.get(id);
-    return a ? (a.icao ?? a.lid) : id;
+    if (a) return a.icao ?? a.lid;
+    const p = navPointsById.get(id);
+    return p ? p.ident : id;
   };
 
   function submit() {
@@ -58,6 +69,7 @@ export function PinnedStops({
     const dest = destinationIdent.toUpperCase();
     const toAdd: string[] = [];
     const invalid: string[] = [];
+    const collisions: string[] = [];
     const seen = new Set<string>();
     for (const token of tokens) {
       const u = token.toUpperCase();
@@ -65,10 +77,18 @@ export function PinnedStops({
         invalid.push(`${u} (origin/destination)`);
         continue;
       }
-      const a = airportByIdent(airports, token);
-      if (!a) {
+      // Airports win a shared ident (479 navaids collide with an
+      // airport's ICAO or LID), but the losing nav point is reported
+      // so the pilot can see they got KBOI rather than the Boise
+      // VORTAC and correct it if that isn't what they meant.
+      const r = resolveWaypointIdent(u, airports, navPointsByIdent);
+      if (!r) {
         invalid.push(`${u} (unknown)`);
         continue;
+      }
+      const a = r.kind === "airport" ? r.airport! : r.navPoint!;
+      if (r.alsoNavPoint) {
+        collisions.push(`${u} → airport (also ${navPointLabel(r.alsoNavPoint)})`);
       }
       if (pinnedIds.includes(a.id) || seen.has(a.id)) continue;
       seen.add(a.id);
@@ -81,6 +101,7 @@ export function PinnedStops({
       setDraft("");
     }
     setError(invalid.length > 0 ? `couldn't add: ${invalid.join(", ")}` : null);
+    setNote(collisions.length > 0 ? `resolved ${collisions.join("; ")}` : null);
   }
 
   // Reorder by one position. Replaces the old HTML5 drag-and-drop grip,
@@ -107,6 +128,7 @@ export function PinnedStops({
           onChange={(e) => {
             setDraft(e.target.value.toUpperCase());
             setError(null);
+            setNote(null);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -126,13 +148,16 @@ export function PinnedStops({
         </button>
       </div>
       {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+      {note && <p className="mt-1 text-xs text-muted">{note}</p>}
       {pinnedIds.length > 0 && (
         <ol className="mt-2 space-y-1">
           {pinnedIds.map((id, i) => {
             const a = byId.get(id);
-            const hasFuel = a
-              ? airportSellsCompatibleFuel(a, aircraftFuelType)
-              : true; // unknown airport: don't second-guess the user
+            const navPoint = navPointsById.get(id);
+            const hasFuel =
+              a && !navPoint
+                ? airportSellsCompatibleFuel(a, aircraftFuelType)
+                : true; // nav point or unknown: no fuel claim to make
             return (
               <li
                 key={id}
@@ -162,9 +187,17 @@ export function PinnedStops({
                 </div>
                 <span className="w-4 text-right text-muted">{i + 1}.</span>
                 <span className="font-mono">
-                  <AirportLink ident={labelFor(id)} />
+                  {navPoint ? labelFor(id) : <AirportLink ident={labelFor(id)} />}
                 </span>
-                {!hasFuel && (
+                {navPoint && (
+                  <span
+                    title={`${navPointLabel(navPoint)} — shapes the leg's track, not a stop`}
+                    className="rounded bg-[color-mix(in_srgb,var(--muted)_15%,transparent)] px-1 text-xs font-medium uppercase tracking-wide text-muted"
+                  >
+                    overfly
+                  </span>
+                )}
+                {!navPoint && !hasFuel && (
                   <span
                     title={`Doesn't stock ${aircraftFuelType} — treated as a pass-through, fuel state carries through`}
                     className="rounded bg-[color-mix(in_srgb,var(--caution)_15%,transparent)] px-1 text-xs font-medium uppercase tracking-wide text-caution"

@@ -2,11 +2,15 @@ name: Refresh static datasets
 
 on:
   schedule:
-    # Every Wednesday at 12:00 UTC. FAA NASR / CIFP follow a 28-day
-    # cycle, so a weekly cadence catches each cycle within a week of
-    # release. Only NASR / CIFP / DOF run on the schedule; the DEM and
+    # Every Thursday at 18:00 UTC. FAA NASR / CIFP cycles all go
+    # effective on a Thursday, so running Thursday afternoon UTC picks
+    # up a new cycle the same day it becomes effective instead of
+    # trailing it by most of a week (the previous Wednesday schedule
+    # meant every cycle was ~6 days stale before we ever fetched it).
+    # The weekly cadence is still what catches a cycle we missed.
+    # Only NASR / CIFP / DOF run on the schedule; the DEM and
     # magnetic-variation jobs are manual.
-    - cron: "0 12 * * 3"
+    - cron: "0 18 * * 4"
   workflow_dispatch:
     inputs:
       cifp_url:
@@ -85,22 +89,30 @@ jobs:
           # would otherwise commit nothing and look healthy forever.
           # CONUS has ~5k public-use airports; anything under 3,000 means
           # the FAA layout changed or the parse silently dropped records.
+          # navaids: ~1.1k operational VOR-family + NDB stations. The VOR
+          # MON program is shrinking this toward ~589 CONUS VORs by
+          # FY2030, so the floor is set well under today's count to
+          # avoid a false alarm as stations decommission.
+          # fixes: ~7k US enroute-charted RNAV waypoints.
           python3 "$GITHUB_WORKSPACE/.github/scripts/check_counts.py" \
             "$GITHUB_WORKSPACE/data/airports.json:3000" \
-            "$GITHUB_WORKSPACE/data/runways.json:3000"
+            "$GITHUB_WORKSPACE/data/runways.json:3000" \
+            "$GITHUB_WORKSPACE/data/navaids.json:600" \
+            "$GITHUB_WORKSPACE/data/fixes.json:4000"
       - name: Commit refreshed NASR data
         id: commit_nasr
         if: steps.run_nasr.outcome == 'success'
         run: |
-          if [[ -z "$(git status --porcelain data/airports.json data/runways.json)" ]]; then
+          FILES="data/airports.json data/runways.json data/navaids.json data/fixes.json"
+          if [[ -z "$(git status --porcelain $FILES)" ]]; then
             echo "No NASR changes."
             echo "committed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/airports.json data/runways.json
-          git commit -m "Refresh NASR airports + runways"
+          git add $FILES
+          git commit -m "Refresh NASR airports + runways + nav data"
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin HEAD:"$GITHUB_REF_NAME"
           echo "committed=true" >> "$GITHUB_OUTPUT"
@@ -117,9 +129,15 @@ jobs:
           if [[ -n "${CIFP_URL:-}" ]]; then
             urls=("$CIFP_URL")
           else
-            # FAA CIFP zips are published per TPP effective date on a
-            # 56-day cycle, named CIFP_YYMMDD.zip. Generate cycle dates
-            # around today from a known anchor and try newest-first.
+            # FAA CIFP zips are published per AIRAC cycle on a 28-day
+            # cycle, named CIFP_YYMMDD.zip. (This previously stepped by
+            # 56 days, conflating CIFP with the d-TPP; the effect was
+            # that for half of every 56-day window the workflow fetched
+            # a zip a full cycle older than the one already published,
+            # and never even tried the current one.) Generate candidate
+            # dates from a known anchor and try current, then previous,
+            # then next, then one further back — so a run on flip day
+            # still lands if the new zip isn't posted yet.
             urls=()
             while IFS= read -r ymd; do
               urls+=("https://aeronav.faa.gov/Upload_313-d/cifp/CIFP_${ymd}.zip")
@@ -127,9 +145,9 @@ jobs:
           from datetime import date, timedelta
           anchor = date(2026, 5, 14)
           today = date.today()
-          base = (today - anchor).days // 56
+          base = (today - anchor).days // 28
           for o in (base, base - 1, base + 1, base - 2):
-              print((anchor + timedelta(days=o * 56)).strftime('%y%m%d'))
+              print((anchor + timedelta(days=o * 28)).strftime('%y%m%d'))
           PY
                           )
           fi
@@ -296,7 +314,7 @@ jobs:
             echo ""
             echo "| Pipeline | Download | Build | Result |"
             echo "| --- | --- | --- | --- |"
-            echo "| NASR (airports/runways) | n/a | $(fmt "$NASR_RUN") | $(committed "$NASR_COMMIT") |"
+            echo "| NASR (airports/runways/nav) | n/a | $(fmt "$NASR_RUN") | $(committed "$NASR_COMMIT") |"
             echo "| CIFP (approaches) | $(fmt "$CIFP_DL") | $(fmt "$CIFP_RUN") | $(committed "$CIFP_COMMIT") |"
             echo "| DOF (obstacles) | $(fmt "$DOF_DL") | $(fmt "$DOF_RUN") | $(committed "$DOF_COMMIT") |"
           } >> "$GITHUB_STEP_SUMMARY"

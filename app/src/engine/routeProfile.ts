@@ -76,6 +76,11 @@ export function buildRouteProfile(input: {
       cruiseAltFt: leg.cruise_alt_ft,
       aircraft,
       dem,
+      // Carrying `via` through is what keeps the cumulative axis honest:
+      // each leg contributes its own `distance_nm`, so a shaped leg
+      // pushes the following airports' ticks out by the detour instead
+      // of leaving the chart shorter than the route it describes.
+      via: leg.via,
     });
     if (legIndex === 0) {
       airports.push({

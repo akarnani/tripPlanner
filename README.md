@@ -72,9 +72,11 @@ Static datasets in `data/` are produced by jobs that do not run on
 ordinary commits:
 
 - `pipelines/swift/` (SwiftNASR / SwiftCIFP / SwiftDOF) runs weekly on
-  `macos-latest` via `.github/workflows/data-refresh.yml` and commits
-  `airports.json`, `runways.json`, `approaches.json`, and
-  `obstacles.json.gz` back to `main`.
+  `macos-26` via `.github/workflows/data-refresh.yml` and commits
+  `airports.json`, `runways.json`, `navaids.json`, `fixes.json`,
+  `approaches.json`, and `obstacles.json.gz` back to `main`. The cron
+  runs Thursdays because FAA NASR and CIFP cycles go effective on a
+  Thursday, so a new cycle is picked up the day it takes effect.
 - `pipelines/dem_build.py` and `pipelines/magnetic_build.py` produce the
   gzipped binary `terrain_grid.bin.gz` and `magnetic_grid.bin.gz`
   (manual dispatch only).
