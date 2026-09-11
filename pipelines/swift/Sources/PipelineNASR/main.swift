@@ -1,13 +1,19 @@
 import Foundation
 import SwiftNASR
 
-// pipeline-nasr <distribution.zip> <out-dir>
+// pipeline-nasr <distribution> <out-dir>
 //
-// Reads (or downloads, if missing) an FAA NASR distribution zip, parses the
-// airport file, and writes two JSON files to <out-dir>:
+// Reads an FAA NASR distribution, parses the airport file, and writes two
+// JSON files to <out-dir>:
 //
 //   airports.json   one record per public-use airport
 //   runways.json    one record per runway, keyed by airport id
+//
+// <distribution> may be an unzipped distribution directory, a distribution
+// zip, or a path that does not exist yet — in which case the current cycle
+// is downloaded to it. CI passes a directory, because the pavement
+// classification field has to be neutralized before parsing; see
+// .github/scripts/patch_apt_pavement.py.
 //
 // The schema is documented in app/src/data/loaders.ts.
 
@@ -18,28 +24,44 @@ struct PipelineNASR {
     let args = CommandLine.arguments
     guard args.count == 3 else {
       FileHandle.standardError.write(
-        Data("usage: pipeline-nasr <distribution.zip> <out-dir>\n".utf8)
+        Data("usage: pipeline-nasr <distribution-dir|distribution.zip> <out-dir>\n".utf8)
       )
       exit(2)
     }
-    let zipURL = URL(fileURLWithPath: args[1])
+    let sourceURL = URL(fileURLWithPath: args[1])
     let outDir = URL(fileURLWithPath: args[2], isDirectory: true)
     try FileManager.default.createDirectory(
       at: outDir, withIntermediateDirectories: true)
 
-    // fromLocalArchive returns non-optional NASR; fromInternetToFile
-    // still returns NASR? (it can fail to construct a loader).
-    let distribution: NASR =
-      FileManager.default.fileExists(atPath: zipURL.path)
-      ? NASR.fromLocalArchive(zipURL)
-      : NASR.fromInternetToFile(zipURL)!
+    // fromLocalDirectory / fromLocalArchive return non-optional NASR;
+    // fromInternetToFile returns NASR? (nil when no cycle is effective for
+    // today, which is a bad cycle table rather than something to trap on).
+    var isDirectory: ObjCBool = false
+    let exists = FileManager.default.fileExists(
+      atPath: sourceURL.path, isDirectory: &isDirectory)
+    let distribution: NASR
+    if exists && isDirectory.boolValue {
+      distribution = NASR.fromLocalDirectory(sourceURL)
+    } else if exists {
+      distribution = NASR.fromLocalArchive(sourceURL)
+    } else {
+      guard let downloaded = NASR.fromInternetToFile(sourceURL) else {
+        FileHandle.standardError.write(
+          Data("no NASR cycle is effective today; pass a distribution path\n".utf8)
+        )
+        exit(1)
+      }
+      distribution = downloaded
+    }
 
     try await distribution.load()
-    // parse(_:errorHandler:) returns Bool to indicate "keep going".
+    // The error handler decides whether to keep going: a record that
+    // fails to parse is dropped either way, so take .proceed and let the
+    // count checks in CI decide whether too much was lost.
     try await distribution.parse(.airports) { @Sendable error in
       FileHandle.standardError.write(
         Data("parse warning: \(error)\n".utf8))
-      return true
+      return .proceed
     }
 
     // `data` is finalized asynchronously after parse.
