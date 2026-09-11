@@ -9,6 +9,10 @@ on:
     - cron: "0 12 * * 3"
   workflow_dispatch:
     inputs:
+      nasr_url:
+        description: "Override NASR download URL (leave blank for default)"
+        required: false
+        type: string
       cifp_url:
         description: "Override CIFP download URL (leave blank for default)"
         required: false
@@ -44,7 +48,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Select latest Xcode (Swift 6.2 for SwiftCIFP/DOF)
+      # SwiftNASR's manifest is tools-version 6.3 (via StreamingCSV), so
+      # the toolchain has to be Swift 6.3+. If latest-stable ever resolves
+      # to an older toolchain, the build step below says so outright —
+      # pin xcode-version here to a release that ships 6.3.
+      - name: Select latest Xcode (Swift 6.3 for SwiftNASR/CIFP/DOF)
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: latest-stable
@@ -70,24 +78,93 @@ jobs:
 
       - name: Build all pipeline executables
         working-directory: pipelines/swift
-        run: swift build -c release
+        run: |
+          set -euo pipefail
+          # Printed first because a toolchain older than Swift 6.3 fails
+          # here on SwiftNASR's manifest, and the resolver's complaint
+          # doesn't name the toolchain as the reason.
+          swift --version
+          swift build -c release
 
       # ---- NASR ----
+      # SwiftNASR can download the cycle itself, but the distribution has
+      # to be unzipped and pre-processed before parsing (see the patch
+      # step below), so fetch it here the way CIFP and DOF are fetched.
+      - name: Download NASR
+        id: download_nasr
+        continue-on-error: true
+        working-directory: pipelines/swift
+        env:
+          NASR_URL: ${{ inputs.nasr_url }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${NASR_URL:-}" ]]; then
+            urls=("$NASR_URL")
+          else
+            # FAA NASR subscriptions are published per effective date on a
+            # 28-day cycle, named 28DaySubscription_Effective_YYYY-MM-DD.zip.
+            # Generate cycle dates around today from a known anchor and try
+            # newest-first.
+            urls=()
+            while IFS= read -r ymd; do
+              urls+=("https://nfdc.faa.gov/webContent/28DaySub/28DaySubscription_Effective_${ymd}.zip")
+            done < <(python3 - <<'PY'
+          from datetime import date, timedelta
+          anchor = date(2026, 9, 3)
+          today = date.today()
+          base = (today - anchor).days // 28
+          for o in (base, base - 1, base + 1, base - 2):
+              print((anchor + timedelta(days=o * 28)).strftime('%Y-%m-%d'))
+          PY
+                          )
+          fi
+          for u in "${urls[@]}"; do
+            echo "trying $u"
+            if curl -sLfo NASR.zip "$u"; then
+              echo "downloaded $u"; break
+            fi
+          done
+          if [[ ! -s NASR.zip ]]; then
+            echo "::error::no NASR URL succeeded; pass nasr_url via workflow_dispatch"
+            exit 1
+          fi
+          # Only the airport file and the layouts are parsed; the rest of
+          # the distribution is ~2 GB of files this pipeline never opens.
+          # README.txt carries the cycle's effective date, which SwiftNASR
+          # reads to stamp the parsed data.
+          rm -rf nasr-distribution
+          unzip -o -q NASR.zip "APT.txt" "Layout_Data/*" "README.txt" \
+            -d nasr-distribution
+          python3 "$GITHUB_WORKSPACE/.github/scripts/patch_apt_pavement.py" \
+            nasr-distribution
       - name: Run NASR pipeline
         id: run_nasr
+        if: steps.download_nasr.outcome == 'success'
         continue-on-error: true
         working-directory: pipelines/swift
         run: |
           set -euo pipefail
-          swift run -c release pipeline-nasr ./nasr-distribution.zip ../../data
+          swift run -c release pipeline-nasr ./nasr-distribution ../../data
           # Guard against a "succeeded but wrote garbage" outcome — a
           # 0-exit run that emits an empty or implausibly short file
           # would otherwise commit nothing and look healthy forever.
-          # CONUS has ~5k public-use airports; anything under 3,000 means
-          # the FAA layout changed or the parse silently dropped records.
+          #
+          # The 2026-09-03 cycle yields 5,160 airports and 7,487 runways,
+          # and cycle-over-cycle churn runs ~0.1%, so these floors sit 3-5%
+          # under and still fail the regression they were calibrated
+          # against: parsing that cycle without blanking the pavement
+          # classification field drops runway records, yielding 6,732
+          # runways and 399 airports with none. A floor has to be tight
+          # enough to catch that, because losing one record type barely
+          # moves the totals. Re-check these if the numbers move for real.
+          #
+          # Every airport in this dataset has at least one runway, so the
+          # runway_count check is the sharpest of the three: airports whose
+          # runways all failed to parse are left behind with zero.
           python3 "$GITHUB_WORKSPACE/.github/scripts/check_counts.py" \
-            "$GITHUB_WORKSPACE/data/airports.json:3000" \
-            "$GITHUB_WORKSPACE/data/runways.json:3000"
+            "$GITHUB_WORKSPACE/data/airports.json:4900" \
+            "$GITHUB_WORKSPACE/data/runways.json:7100" \
+            --min-positive "$GITHUB_WORKSPACE/data/airports.json:runway_count:5000"
       - name: Commit refreshed NASR data
         id: commit_nasr
         if: steps.run_nasr.outcome == 'success'
@@ -265,6 +342,7 @@ jobs:
       - name: Report per-pipeline status
         if: always()
         env:
+          NASR_DL: ${{ steps.download_nasr.outcome }}
           NASR_RUN: ${{ steps.run_nasr.outcome }}
           NASR_COMMIT: ${{ steps.commit_nasr.outputs.committed }}
           CIFP_DL: ${{ steps.download_cifp.outcome }}
@@ -296,12 +374,12 @@ jobs:
             echo ""
             echo "| Pipeline | Download | Build | Result |"
             echo "| --- | --- | --- | --- |"
-            echo "| NASR (airports/runways) | n/a | $(fmt "$NASR_RUN") | $(committed "$NASR_COMMIT") |"
+            echo "| NASR (airports/runways) | $(fmt "$NASR_DL") | $(fmt "$NASR_RUN") | $(committed "$NASR_COMMIT") |"
             echo "| CIFP (approaches) | $(fmt "$CIFP_DL") | $(fmt "$CIFP_RUN") | $(committed "$CIFP_COMMIT") |"
             echo "| DOF (obstacles) | $(fmt "$DOF_DL") | $(fmt "$DOF_RUN") | $(committed "$DOF_COMMIT") |"
           } >> "$GITHUB_STEP_SUMMARY"
           fail=0
-          for o in "$NASR_RUN" "$CIFP_DL" "$CIFP_RUN" "$DOF_DL" "$DOF_RUN"; do
+          for o in "$NASR_DL" "$NASR_RUN" "$CIFP_DL" "$CIFP_RUN" "$DOF_DL" "$DOF_RUN"; do
             [[ "$o" == "failure" ]] && fail=1
           done
           if [[ $fail -ne 0 ]]; then

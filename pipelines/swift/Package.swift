@@ -19,7 +19,14 @@ let package = Package(
     // Bump these intentionally when the upstream changes you want.
     .package(
       url: "https://github.com/RISCfuture/SwiftNASR.git",
-      revision: "f43a25a918c1957f3d43a3d955affd13806529c4"  // master @ 2026-05
+      // master @ 2026-09. Must stay at or past d1d1865: the FAA's airport
+      // layout effective 2026-09-03 widened the runway Pavement
+      // Classification field from 11 to 16 characters, pushing the
+      // layout's trailing filler to byte 1536 while APT records still ship
+      // 1532 bytes. Earlier revisions sliced that field unconditionally and
+      // died on an out-of-range index (SIGILL, exit 133) before writing
+      // anything. Needs Swift 6.3 to resolve (StreamingCSV's tools-version).
+      revision: "4e289955e9d753f2089f48ffa89870a325e074b1"
     ),
     .package(
       url: "https://github.com/RISCfuture/SwiftCIFP.git",
