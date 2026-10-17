@@ -1,0 +1,31 @@
+// Cloudflare Workers config. The top level is production; `env.staging`
+// deploys a separate Worker (tripplanner-staging) that also hosts PR
+// preview URLs. Deploys run from .github/workflows/deploy.yml and
+// preview.yml — see README "Deploy".
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "tripplanner",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    // Matches the Pages default: unknown paths serve index.html.
+    "not_found_handling": "single-page-application",
+    // Only API calls run the Worker script; everything else is a
+    // static-asset hit and costs no Worker invocation.
+    "run_worker_first": ["/api/*"]
+  },
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "observability": { "enabled": true },
+  "vars": { "ENVIRONMENT": "production" },
+  "env": {
+    "staging": {
+      "name": "tripplanner-staging",
+      "preview_urls": true,
+      // Bindings and vars aren't inherited by wrangler environments.
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      "vars": { "ENVIRONMENT": "staging" }
+    }
+  }
+}

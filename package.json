@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.worker.json",
+    "preview:worker": "npm run build && wrangler dev"
   },
   "dependencies": {
     "@fontsource/b612-mono": "^5.2.7",
@@ -23,6 +24,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261016.1",
     "@playwright/test": "^1.60.0",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
@@ -33,6 +35,7 @@
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
-    "vitest": "^2.1.4"
+    "vitest": "^2.1.4",
+    "wrangler": "^4.151.1"
   }
 }

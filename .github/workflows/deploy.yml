@@ -1,0 +1,102 @@
+name: Deploy
+
+# Every push to main deploys to staging. Production waits for a manual
+# approval on the `production` GitHub environment (Settings →
+# Environments → production → Required reviewers), then deploys the
+# same commit.
+
+on:
+  push:
+    branches: [main]
+  # data-refresh.yml commits datasets to main with GITHUB_TOKEN, and
+  # pushes made with that token don't trigger other workflows — so pick
+  # its commits up once it finishes.
+  workflow_run:
+    workflows: ["Refresh static datasets"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # workflow_run carries the dataset workflow's *trigger* commit;
+          # deploy the current tip of main, which has the data commits.
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.sha }}
+      - id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+
+  # Staging and production each build from the pinned commit with the
+  # same lockfile and inputs, so the bundles are identical.
+  staging:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_MAPTILER_KEY: ${{ vars.VITE_MAPTILER_KEY }}
+      - id: deploy
+        run: .github/scripts/wrangler_deploy.sh --env staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          COMMIT_SHA: ${{ needs.check.outputs.sha }}
+
+  production:
+    needs: [check, staging]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_MAPTILER_KEY: ${{ vars.VITE_MAPTILER_KEY }}
+      - id: deploy
+        run: .github/scripts/wrangler_deploy.sh --env ""
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          COMMIT_SHA: ${{ needs.check.outputs.sha }}

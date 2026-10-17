@@ -12,7 +12,7 @@ A static-site trip planner for pilots of small GA aircraft. Given origin, destin
 npm install
 npm run dev              # vite dev server on http://localhost:5173
 npm run build            # tsc -b && vite build → dist/
-npm run lint             # tsc --noEmit (this repo has no ESLint)
+npm run lint             # tsc --noEmit for app + worker (this repo has no ESLint)
 npm test                 # vitest run (unit tests, *.test.ts colocated)
 npm run test:watch       # vitest in watch mode
 npm run test:e2e         # playwright (tests/e2e/, spawns dev server)
@@ -36,6 +36,7 @@ The app is one Vite project rooted at the repo root (not under `app/`):
 - `app/src/engine/` — pure TypeScript: filters, great-circle geometry, performance interpolation, hemispheric cruise altitude rules, magnetic variation grid, terrain-grid DEM sampler, obstacle proximity, k-shortest-paths routing, and the top-level `plan()` orchestrator. Most engine modules have colocated `*.test.ts` and are designed to be testable without React.
 - `app/src/ui/` — React components (Tailwind). `App.tsx` is the single stateful coordinator: it owns datasets, filters, aircraft selection, current route(s), and the planning spinner; child components are mostly controlled inputs.
 - `app/src/exports/` — GPX, FPL, and PDF exporters fed by a planned route.
+- `worker/` — Cloudflare Worker script for `/api/*` (see Deploy). Keep it thin; route planning stays client-side.
 
 Key flow: `App.tsx` calls `applyFilters(datasets, filters)` → injects origin/destination back into candidates → calls `plan({...})`, which builds a graph in `routing.ts` and runs k-shortest-paths with cost functions from `costFns.ts`. The returned `PlannedRoute[]` is then passed to `analyzeTerrain()` (which uses `TerrainGridDEMSampler` against the gzipped binary DEM grid) and to the obstacle scanner. The map (`MapView.tsx`) is MapLibre GL with a placeholder demo basemap; airports/routes/stops/state borders are GeoJSON layers managed imperatively.
 
@@ -52,7 +53,9 @@ Aircraft performance YAML lives under `aircraft/<slug>/performance.yaml` and is 
 
 ## Deploy
 
-The deployed site runs on Cloudflare Pages, which builds directly from the repo on every push to `main` and posts a per-PR preview URL on pull requests. There's no GitHub Actions deploy workflow — Cloudflare's git integration owns both production and previews. Build command is `npm run build`, output directory is `dist`, and `VITE_MAPTILER_KEY` is set in both the Production and Preview environments via the Cloudflare dashboard. `vite.config.ts` sets `base: "./"` so the bundle works at any path/subdomain.
+The site runs as a Cloudflare Worker with static assets (`wrangler.jsonc`). `dist/` is served by Cloudflare's asset layer with SPA fallback; only `/api/*` runs the Worker script (`worker/index.ts`, typechecked by `tsconfig.worker.json` against `@cloudflare/workers-types`). The top-level wrangler config is production (`tripplanner`); `env.staging` is a separate Worker (`tripplanner-staging`). Wrangler environments don't inherit bindings or vars — add every binding to both.
+
+GitHub Actions owns deploys: `.github/workflows/deploy.yml` deploys staging on every push to `main` (and after each successful dataset refresh, since bot pushes don't trigger workflows), then promotes the same commit to production after manual approval on the `production` GitHub environment. `.github/workflows/preview.yml` uploads each same-repo PR as a preview version of the staging Worker at alias `pr-<n>`. Both call `.github/scripts/wrangler_deploy.sh`. `VITE_MAPTILER_KEY` is a repository Actions variable passed to `npm run build`; `vite.config.ts` sets `base: "./"` so the bundle works at any path/subdomain. `npm run preview:worker` builds and runs `wrangler dev` locally.
 
 ## Conventions
 
