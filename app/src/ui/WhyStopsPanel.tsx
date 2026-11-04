@@ -54,7 +54,7 @@ export function WhyStopsPanel({ getExplanations, onHoverAirport }: Props) {
   }
 
   return (
-    <div className="overflow-hidden rounded-md border border-hairline bg-card shadow-sm">
+    <div className="card overflow-hidden">
       <button
         type="button"
         onClick={handleToggle}

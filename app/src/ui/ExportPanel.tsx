@@ -45,14 +45,14 @@ export function ExportPanel({ route, aircraft, terrain }: Props) {
       <button
         type="button"
         onClick={() => download(`${baseName}.gpx`, toGPX(route, baseName))}
-        className="flex-1 rounded bg-accent px-2 py-1 text-xs font-semibold text-white hover:opacity-90"
+        className="btn btn-primary flex-1 px-2 py-1.5 text-xs"
       >
         GPX
       </button>
       <button
         type="button"
         onClick={() => download(`${baseName}.fpl`, toFPL(route, baseName))}
-        className="flex-1 rounded bg-accent px-2 py-1 text-xs font-semibold text-white hover:opacity-90"
+        className="btn btn-primary flex-1 px-2 py-1.5 text-xs"
       >
         Garmin FPL
       </button>
@@ -61,7 +61,7 @@ export function ExportPanel({ route, aircraft, terrain }: Props) {
         onClick={() =>
           download(`${baseName}.pdf`, toPDF({ route, aircraft, terrain }))
         }
-        className="flex-1 rounded bg-accent px-2 py-1 text-xs font-semibold text-white hover:opacity-90"
+        className="btn btn-primary flex-1 px-2 py-1.5 text-xs"
       >
         PDF
       </button>

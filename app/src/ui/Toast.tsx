@@ -42,7 +42,7 @@ export function Toast({ toast, onDismiss, raised, position = "bottom" }: Props) 
             : "bottom-4")
       }
     >
-      <div className="pointer-events-auto flex items-center gap-3 rounded-md bg-ink px-4 py-2.5 text-card shadow-lg">
+      <div className="pointer-events-auto flex items-center gap-3 rounded-xl bg-ink px-4 py-2.5 text-card shadow-lg">
         <span className="text-xs">{toast.message}</span>
         {toast.actionLabel && toast.onAction && (
           <button

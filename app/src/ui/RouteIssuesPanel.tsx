@@ -38,7 +38,7 @@ export function RouteIssuesPanel({ issues, hoveredLegIndex, onHoverLeg }: Props)
   const coarse = useMediaQuery("(pointer: coarse)");
   if (issues.length === 0) {
     return (
-      <div className="flex items-center gap-2.5 rounded-md border border-hairline bg-card px-3 py-2.5 shadow-sm">
+      <div className="card flex items-center gap-2.5 px-3 py-2.5">
         <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border border-ok bg-[color-mix(in_srgb,var(--ok)_12%,transparent)] text-[10px] text-ok">
           ✓
         </span>
@@ -54,7 +54,7 @@ export function RouteIssuesPanel({ issues, hoveredLegIndex, onHoverLeg }: Props)
   const badgeSeverity = dangerCount > 0 ? "danger" : "caution";
 
   return (
-    <div className="overflow-hidden rounded-md border border-hairline bg-card shadow-sm">
+    <div className="card overflow-hidden">
       <div className="flex items-center gap-2 border-b border-hairline px-3 py-2.5">
         <span className="text-sm font-semibold text-ink">Route issues</span>
         <span
@@ -113,7 +113,7 @@ export function RouteIssuesPanel({ issues, hoveredLegIndex, onHoverLeg }: Props)
                     <button
                       type="button"
                       onClick={issue.action.apply}
-                      className="rounded border border-caution px-2 py-1 text-xs font-semibold text-caution hover:bg-[color-mix(in_srgb,var(--caution)_10%,transparent)]"
+                      className="btn btn-caution px-2 py-1 text-xs"
                     >
                       {issue.action.label}
                     </button>

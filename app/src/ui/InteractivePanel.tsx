@@ -121,7 +121,7 @@ export function InteractivePanel({
         rings show your range from the current departure point — solid
         is with reserves, dashed is everything in the tank.
       </p>
-      <div className="rounded border border-hairline bg-card">
+      <div className="card overflow-hidden">
         <RouteRow
           label="From"
           ident={originIdent}
@@ -165,7 +165,7 @@ export function InteractivePanel({
           destInRange={destInRange}
         />
       </div>
-      <div className="rounded border border-hairline bg-surface p-2 text-xs text-ink">
+      <div className="rounded-lg border border-hairline bg-surface p-2.5 text-xs text-ink">
         <div>
           <span className="text-muted">To destination from here:</span>{" "}
           <span className="whitespace-nowrap font-mono font-medium">
@@ -193,7 +193,7 @@ export function InteractivePanel({
             From {lastStopIdent}, sorted by detour · click to add as next
             stop
           </p>
-          <div className="rounded border border-hairline bg-card">
+          <div className="card overflow-hidden">
             {candidates.map((c) => (
               <CandidateRow
                 key={c.airport.id}
@@ -345,7 +345,7 @@ function LegAndStop({
                   ...opts.map((alt) => ({ value: String(alt), label: fmtFt(alt) })),
                 ]}
                 className={
-                  "rounded border bg-card px-1 py-0.5 text-xs font-mono text-ink " +
+                  "rounded-md border bg-card px-1 py-0.5 text-xs font-mono text-ink " +
                   (isOverride ? "border-accent" : "border-hairline-input")
                 }
                 title={

@@ -60,12 +60,12 @@ export function TripsPanel({
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
           }}
-          className="flex-1 rounded border border-hairline-input bg-card px-2 py-1 text-xs text-ink"
+          className="flex-1 input text-xs"
         />
         <button
           type="button"
           onClick={submit}
-          className="rounded bg-accent px-3 py-1 text-xs font-semibold text-white hover:opacity-90"
+          className="btn btn-primary px-3 py-1 text-xs"
         >
           {justSaved ? "Saved ✓" : "Save"}
         </button>
@@ -75,7 +75,7 @@ export function TripsPanel({
           No saved trips yet. Save the current trip to revisit later.
         </p>
       ) : (
-        <ul className="divide-y divide-hairline rounded border border-hairline bg-card">
+        <ul className="card divide-y divide-hairline overflow-hidden">
           {visible.map((t) => (
             <li
               key={t.name}

@@ -105,7 +105,7 @@ export function ThemeToggle() {
     <div
       role="radiogroup"
       aria-label="Theme"
-      className="inline-flex items-center rounded border border-hairline bg-card p-0.5"
+      className="seg"
     >
       {OPTIONS.map(({ value, label }) => {
         const selected = preference === value;
@@ -117,11 +117,7 @@ export function ThemeToggle() {
             aria-checked={selected}
             aria-pressed={selected}
             onClick={() => setPreference(value)}
-            className={
-              selected
-                ? "rounded bg-accent px-2 py-1 text-xs font-medium text-white"
-                : "rounded px-2 py-1 text-xs font-medium text-muted hover:text-ink"
-            }
+            className={"seg-btn px-2" + (selected ? " seg-btn-active" : "")}
           >
             {label}
           </button>

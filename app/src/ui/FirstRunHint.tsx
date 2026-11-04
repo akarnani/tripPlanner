@@ -39,7 +39,7 @@ export function FirstRunHint({ origin, destination }: Props) {
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center px-4">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-hairline bg-card px-3 py-1.5 shadow-md">
+      <div className="card-raised pointer-events-auto flex items-center gap-3 px-3 py-1.5">
         <span className="text-xs text-ink">
           Press <strong className="font-semibold">Plan trip</strong> to route{" "}
           {origin} → {destination}

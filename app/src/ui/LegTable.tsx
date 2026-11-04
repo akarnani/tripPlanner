@@ -56,7 +56,7 @@ export function LegTable({
   if (routes.length === 0) return null;
   return (
     <div className="flex h-full flex-col">
-      <div className="flex border-b border-hairline bg-card">
+      <div className="flex gap-1 border-b border-hairline bg-card px-2 pt-1.5">
         {routes.map((r, i) => {
           const label = costFnById(r.costFnId)?.label ?? r.costFnId;
           return (
@@ -65,10 +65,10 @@ export function LegTable({
               type="button"
               onClick={() => onSelect(i)}
               className={
-                "flex-1 px-3 py-2 text-xs font-medium " +
+                "-mb-px flex-1 rounded-t-lg border-b-2 px-3 py-2 text-xs font-semibold transition-colors " +
                 (i === selected
-                  ? "border-b-2 border-accent text-ink"
-                  : "text-muted hover:text-ink")
+                  ? "border-accent text-ink"
+                  : "border-transparent text-muted hover:bg-surface hover:text-ink")
               }
             >
               {label} · {r.totals.stops} stop{r.totals.stops === 1 ? "" : "s"}
@@ -149,22 +149,22 @@ function RouteDetail({
     showArr && reserveGal !== undefined && reserveMin !== undefined;
   return (
     <div className="flex flex-1 flex-col overflow-y-auto p-3">
-      <dl className="mb-3 grid grid-cols-3 gap-x-3 gap-y-1 text-xs text-ink">
-        <div>
-          <dt className="text-muted">Distance</dt>
-          <dd className="font-semibold">
+      <dl className="mb-3 grid grid-cols-3 gap-2 text-xs text-ink">
+        <div className="card px-2.5 py-2">
+          <dt className="text-[11px] uppercase tracking-wide text-muted">Distance</dt>
+          <dd className="mt-0.5 whitespace-nowrap text-sm font-semibold tabular-nums">
             {route.totals.distance_nm.toFixed(0)} nm
           </dd>
         </div>
-        <div>
-          <dt className="text-muted">Total time</dt>
-          <dd className="font-semibold">
+        <div className="card px-2.5 py-2">
+          <dt className="text-[11px] uppercase tracking-wide text-muted">Total time</dt>
+          <dd className="mt-0.5 whitespace-nowrap text-sm font-semibold tabular-nums">
             {route.totals.time_hr.toFixed(1)} hr
           </dd>
         </div>
-        <div>
-          <dt className="text-muted">Fuel</dt>
-          <dd className="font-semibold">
+        <div className="card px-2.5 py-2">
+          <dt className="text-[11px] uppercase tracking-wide text-muted">Fuel</dt>
+          <dd className="mt-0.5 whitespace-nowrap text-sm font-semibold tabular-nums">
             {route.totals.fuel_gal.toFixed(1)} gal
           </dd>
         </div>
@@ -172,7 +172,7 @@ function RouteDetail({
       <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr className="border-b border-hairline text-left text-muted">
+          <tr className="border-b border-hairline text-left text-[11px] uppercase tracking-wide text-muted">
             <th className="py-1">Leg</th>
             <th className="py-1 pl-2 text-right">Alt</th>
             <th className="py-1 pl-2 text-right">MC</th>
@@ -246,7 +246,7 @@ function RouteDetail({
                         setDraft("");
                       }}
                       placeholder={toIdent}
-                      className="w-20 rounded border border-hairline-input bg-card px-1 font-mono text-xs uppercase text-ink"
+                      className="w-20 input px-1 py-0.5 font-mono text-xs uppercase"
                     />
                   ) : (
                     <AirportLink ident={toIdent} />
@@ -320,7 +320,7 @@ function RouteDetail({
         <button
           type="button"
           onClick={onEditRoute}
-          className="mt-3 w-full rounded border border-hairline px-3 py-1.5 text-xs font-medium text-muted hover:text-ink"
+          className="btn btn-secondary mt-3 w-full text-xs font-medium text-muted hover:text-ink"
         >
           Edit this route
         </button>

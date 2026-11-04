@@ -31,7 +31,7 @@ export function TripPanel({
         <div>
           <label
             htmlFor="origin"
-            className="block text-xs font-medium uppercase tracking-wide text-muted"
+            className="field-label"
           >
             From
           </label>
@@ -41,13 +41,13 @@ export function TripPanel({
             value={origin}
             onChange={(e) => onOriginChange(e.target.value.toUpperCase())}
             placeholder="KSEA"
-            className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-sm uppercase text-ink"
+            className="mt-1 w-full input font-mono text-sm uppercase"
           />
         </div>
         <div>
           <label
             htmlFor="destination"
-            className="block text-xs font-medium uppercase tracking-wide text-muted"
+            className="field-label"
           >
             To
           </label>
@@ -57,26 +57,22 @@ export function TripPanel({
             value={destination}
             onChange={(e) => onDestinationChange(e.target.value.toUpperCase())}
             placeholder="KBOI"
-            className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-sm uppercase text-ink"
+            className="mt-1 w-full input font-mono text-sm uppercase"
           />
         </div>
       </div>
       <div>
-        <span className="block text-xs font-medium uppercase tracking-wide text-muted">
+        <span className="field-label">
           Flight rule
         </span>
-        <div className="mt-1 inline-flex overflow-hidden rounded border border-hairline-input">
+        <div className="seg mt-1">
           {(["VFR", "IFR"] as FlightRule[]).map((r) => (
             <button
               key={r}
               type="button"
               onClick={() => onFlightRuleChange(r)}
-              className={
-                "px-3 py-1 text-xs font-semibold " +
-                (flightRule === r
-                  ? "bg-accent text-white"
-                  : "bg-card text-ink hover:bg-surface")
-              }
+              aria-pressed={flightRule === r}
+              className={"seg-btn" + (flightRule === r ? " seg-btn-active" : "")}
             >
               {r}
             </button>
@@ -108,7 +104,7 @@ export function TripPanel({
             onChange={(e) =>
               onMaxLegHrChange(Number.parseFloat(e.target.value) || 2)
             }
-            className="w-14 rounded border border-hairline-input bg-card px-1.5 py-0.5 text-sm text-ink disabled:bg-surface disabled:text-muted"
+            className="w-14 input px-1.5 py-0.5"
           />
           hours
         </label>

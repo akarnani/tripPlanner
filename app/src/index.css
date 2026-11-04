@@ -38,6 +38,10 @@ body,
   --caution: #a05e12;
   --danger: #b02a2a;
   --olive: #7a8a3a;
+
+  --shadow-card: 0 1px 2px 0 rgb(60 50 20 / 0.05), 0 1px 3px 0 rgb(60 50 20 / 0.07);
+  --shadow-card-lg: 0 6px 16px -4px rgb(60 50 20 / 0.14), 0 2px 4px -2px rgb(60 50 20 / 0.06);
+  --ring: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .dark {
@@ -55,9 +59,15 @@ body,
   --caution: #ffb02e;
   --danger: #ff6b5e;
   --olive: #6b8a5e;
+
+  --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.3), 0 1px 3px 0 rgb(0 0 0 / 0.25);
+  --shadow-card-lg: 0 8px 20px -6px rgb(0 0 0 / 0.55), 0 2px 4px -2px rgb(0 0 0 / 0.3);
+  --ring: color-mix(in srgb, var(--accent) 38%, transparent);
 }
 
 body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   font-family:
     "Instrument Sans",
     ui-sans-serif,
@@ -71,6 +81,102 @@ body {
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Shared component vocabulary: every card, form control, button and
+   segmented toggle in the panels goes through these so radius, focus
+   ring, shadow and hover states stay consistent in both themes. Sizes
+   and widths stay at the call site (utilities win over this layer). */
+@layer components {
+  .card {
+    @apply rounded-xl border border-hairline bg-card;
+    box-shadow: var(--shadow-card);
+  }
+  .card-raised {
+    @apply rounded-xl border border-hairline bg-card;
+    box-shadow: var(--shadow-card-lg);
+  }
+
+  .field-label {
+    @apply block text-[11px] font-medium uppercase tracking-wide text-muted;
+  }
+
+  .input {
+    @apply rounded-lg border border-hairline-input bg-card px-2.5 py-1.5 text-sm text-ink shadow-sm
+           transition-[border-color,box-shadow] placeholder:text-muted
+           disabled:cursor-not-allowed disabled:bg-surface disabled:text-muted;
+  }
+  .input:focus,
+  .input:focus-visible {
+    border-color: var(--accent);
+    outline: none;
+    box-shadow: 0 0 0 3px var(--ring);
+  }
+
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold
+           transition active:translate-y-px
+           disabled:cursor-not-allowed disabled:opacity-50 disabled:active:translate-y-0;
+  }
+  .btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--ring);
+  }
+  .btn-primary {
+    @apply bg-accent text-white shadow-sm;
+  }
+  .btn-primary:not(:disabled):hover {
+    background: color-mix(in srgb, var(--accent) 86%, black);
+  }
+  .btn-secondary {
+    @apply border border-hairline-input bg-card text-ink shadow-sm hover:bg-surface;
+  }
+  .btn-ghost {
+    @apply text-muted hover:bg-surface hover:text-ink;
+  }
+  .btn-caution {
+    @apply border border-caution text-caution;
+  }
+  .btn-caution:hover {
+    background: color-mix(in srgb, var(--caution) 10%, transparent);
+  }
+
+  /* Segmented control: VFR/IFR, weight assumption, theme. */
+  .seg {
+    @apply inline-flex items-center gap-0.5 rounded-lg border border-hairline bg-surface p-0.5;
+  }
+  .seg-btn {
+    @apply rounded-md px-3 py-1 text-xs font-semibold text-muted transition
+           hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .seg-btn-active {
+    @apply bg-card text-accent shadow-sm hover:text-accent;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px];
+  }
+
+  /* Status pill in the app bar (dataset / terrain readiness). */
+  .pill {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium;
+  }
+
+  .icon-btn {
+    @apply inline-flex items-center justify-center rounded-md text-muted transition hover:bg-surface hover:text-ink;
+  }
+
+  /* Thin progress meter (fuel on board, filter match share). */
+  .meter {
+    @apply h-1.5 w-full overflow-hidden rounded-full bg-surface;
+  }
+  .meter > span {
+    @apply block h-full rounded-full bg-accent transition-[width] duration-300;
+  }
+
+  input[type="checkbox"] {
+    accent-color: var(--accent);
+  }
 }
 
 /* On touch devices a control smaller than 16px makes iOS Safari zoom the
