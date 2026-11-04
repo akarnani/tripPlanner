@@ -4,11 +4,16 @@ Builds `data/airports.json`, `data/runways.json` (and eventually
 `approaches.json` and `obstacles.json`) from FAA source distributions
 using the RISCfuture SwiftNASR / SwiftCIFP / SwiftDOF libraries.
 
-The libraries require Swift 6.3+ and Apple platforms, so this runs on
-`macos-latest` GitHub Actions runners. The Action commits the output
+The libraries require Swift 6.3+. They declare a macOS 26 minimum, but
+that only applies on Apple platforms, and they build on Linux too, so
+CI runs this on `ubuntu-24.04` in the `swift:6.3-noble` container. The Action commits the output
 JSON back to `main` so the static site never sees Swift.
 
-## Local run (macOS)
+## Local run
+
+On macOS with Xcode 26.4+ (Swift 6.3), run it directly. Anywhere with
+Docker, prefix the commands with
+`docker run --rm -v "$PWD/../..":/w -w /w/pipelines/swift swift:6.3-noble`.
 
 ```sh
 cd pipelines/swift

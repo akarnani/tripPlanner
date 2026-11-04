@@ -25,7 +25,7 @@ npx vitest run -t "fewest stops"
 node pipelines/validate_perf.mjs
 ```
 
-The Swift data pipelines (`pipelines/swift/`) require macOS + Swift 6 and are not part of normal app development — GitHub Actions runs them on a schedule and commits the resulting JSON.
+The Swift data pipelines (`pipelines/swift/`) require Swift 6.3+ (macOS, or Linux via the `swift:6.3` Docker image) and are not part of normal app development — GitHub Actions runs them on a schedule and commits the resulting JSON.
 
 ## Architecture
 
@@ -45,7 +45,7 @@ Performance-sensitive UI detail: `handlePlan` in `App.tsx` uses `flushSync` + do
 
 Static datasets live in `data/` and are produced by:
 
-- `pipelines/swift/` — SwiftNASR / SwiftCIFP / SwiftDOF, runs on `macos-latest` via `.github/workflows/data-refresh.yml` (weekly cron + manual dispatch). Outputs `airports.json`, `runways.json`, `approaches.json`, `obstacles.json` and commits back to `main`.
+- `pipelines/swift/` — SwiftNASR / SwiftCIFP / SwiftDOF, runs on Linux in the `swift:6.3-noble` container via `.github/workflows/data-refresh.yml` (weekly cron + manual dispatch). Outputs `airports.json`, `runways.json`, `approaches.json`, `obstacles.json` and commits back to `main`.
 - `pipelines/dem_build.py` and `pipelines/magnetic_build.py` — produce the gzipped binary `terrain_grid.bin.gz` and `magnetic_grid.bin.gz`. Manual dispatch only.
 
 Aircraft performance YAML lives under `aircraft/<slug>/performance.yaml` and is validated in CI by `pipelines/validate_perf.mjs`. The `/poh-extract` Claude Code skill (`.claude/skills/poh-extract/`) generates these files from a POH PDF placed in the aircraft directory.

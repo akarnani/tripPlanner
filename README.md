@@ -72,7 +72,7 @@ Static datasets in `data/` are produced by jobs that do not run on
 ordinary commits:
 
 - `pipelines/swift/` (SwiftNASR / SwiftCIFP / SwiftDOF) runs weekly on
-  `macos-latest` via `.github/workflows/data-refresh.yml` and commits
+  Linux (`swift:6.3-noble` container) via `.github/workflows/data-refresh.yml` and commits
   `airports.json`, `runways.json`, `approaches.json`, and
   `obstacles.json.gz` back to `main`.
 - `pipelines/dem_build.py` and `pipelines/magnetic_build.py` produce the
