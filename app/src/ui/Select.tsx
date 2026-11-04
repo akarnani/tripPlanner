@@ -166,7 +166,7 @@ export function Select({
             bottom: pos.bottom,
             maxHeight: 260,
           }}
-          className="z-40 overflow-y-auto rounded-md border border-hairline bg-card py-1 shadow-lg"
+          className="card-raised z-40 overflow-y-auto py-1"
         >
           {options.map((o, i) => (
             <li

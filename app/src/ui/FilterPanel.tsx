@@ -41,7 +41,7 @@ export function FilterPanel({
         <div>
           <label
             htmlFor="min-runway-ft"
-            className="block text-xs font-medium uppercase tracking-wide text-muted"
+            className="field-label"
           >
             Minimum runway length (ft)
           </label>
@@ -57,7 +57,7 @@ export function FilterPanel({
                 minRunwayFt: Number.parseInt(e.target.value, 10) || 0,
               })
             }
-            className="mt-1 w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink"
+            className="mt-1 w-full input text-sm"
           />
         </div>
       )}
@@ -70,7 +70,7 @@ export function FilterPanel({
       <div>
         <label
           htmlFor="tower-req"
-          className="block text-xs font-medium uppercase tracking-wide text-muted"
+          className="field-label"
         >
           Control tower
         </label>
@@ -84,14 +84,14 @@ export function FilterPanel({
               { value: "required", label: "Towered only" },
               { value: "forbidden", label: "Non-towered only" },
             ]}
-            className="w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink"
+            className="w-full input text-sm"
           />
         </div>
       </div>
       <div>
         <label
           htmlFor="approach-req"
-          className="block text-xs font-medium uppercase tracking-wide text-muted"
+          className="field-label"
         >
           Approach
         </label>
@@ -112,7 +112,7 @@ export function FilterPanel({
               { value: "precision", label: "Precision or LPV" },
               { value: "rnav", label: "RNAV / GPS" },
             ]}
-            className="w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink disabled:bg-surface"
+            className="w-full input text-sm"
           />
         </div>
         {!hasApproachData && (
@@ -129,7 +129,7 @@ export function FilterPanel({
             onChange={(e) =>
               onChange({ ...filters, requireFuel: e.target.checked })
             }
-            className="h-4 w-4 rounded border-hairline-input"
+            className="h-4 w-4 rounded"
           />
           Airport must sell {aircraftFuelType}
         </label>
@@ -138,10 +138,19 @@ export function FilterPanel({
           stops are constrained.
         </p>
       </div>
-      <p className="text-xs text-muted">
-        {matchCount.toLocaleString()} of {totalCount.toLocaleString()} airports
-        match.
-      </p>
+      <div>
+        <div className="meter" aria-hidden="true">
+          <span
+            style={{
+              width: `${totalCount > 0 ? (matchCount / totalCount) * 100 : 0}%`,
+            }}
+          />
+        </div>
+        <p className="mt-1.5 text-xs text-muted">
+          {matchCount.toLocaleString()} of {totalCount.toLocaleString()} airports
+          match.
+        </p>
+      </div>
     </div>
   );
 }

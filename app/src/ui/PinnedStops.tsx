@@ -115,12 +115,12 @@ export function PinnedStops({
             }
           }}
           placeholder="KICAO or KSEA KGEG KBOI"
-          className="w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-xs uppercase text-ink"
+          className="w-full input font-mono text-xs uppercase"
         />
         <button
           type="button"
           onClick={submit}
-          className="shrink-0 rounded border border-hairline-input bg-card px-2 py-1 text-xs text-ink hover:bg-surface"
+          className="btn btn-secondary shrink-0 px-2.5 py-1 text-xs"
         >
           Add
         </button>
@@ -136,7 +136,7 @@ export function PinnedStops({
             return (
               <li
                 key={id}
-                className="flex items-center gap-1 rounded border border-hairline bg-card px-2 py-1 text-xs"
+                className="flex items-center gap-1 rounded-lg border border-hairline bg-card px-2 py-1 text-xs shadow-sm"
               >
                 <div className="-ml-1 flex flex-col text-muted">
                   <button

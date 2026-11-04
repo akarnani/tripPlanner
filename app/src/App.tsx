@@ -75,6 +75,7 @@ import { Toast, type ToastData } from "./ui/Toast";
 import { MapLegend } from "./ui/MapLegend";
 import { FirstRunHint } from "./ui/FirstRunHint";
 import { ThemeToggle } from "./ui/theme";
+import { AppBar, BrandMark, type LoadStatus } from "./ui/AppBar";
 import { usePlanner } from "./ui/usePlanner";
 import { useMediaQuery } from "./ui/useMediaQuery";
 import {
@@ -109,6 +110,8 @@ export function App() {
   const [datasets, setDatasets] = useState<Datasets>(EMPTY_DATASETS);
   const [dataReady, setDataReady] = useState(false);
   const [demReady, setDemReady] = useState(false);
+  const [dataFailed, setDataFailed] = useState(false);
+  const [demFailed, setDemFailed] = useState(false);
   const { requestPlan, cancel, isPlanning, progress } = usePlanner();
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
@@ -228,12 +231,16 @@ export function App() {
       })
       .catch((e) => {
         console.error("dataset load failed:", e);
+        setDataFailed(true);
         setError("Failed to load airport database; reload to retry.");
       });
     demSampler
       .load()
       .then(() => setDemReady(true))
-      .catch((e) => console.warn("DEM grid failed to load:", e));
+      .catch((e) => {
+        console.warn("DEM grid failed to load:", e);
+        setDemFailed(true);
+      });
     magGrid
       .load()
       .catch((e) => console.warn("magnetic grid failed to load:", e));
@@ -1461,7 +1468,7 @@ export function App() {
                   data-state={planButtonState}
                   onClick={isPlanning ? cancel : handlePlan}
                   disabled={!dataReady}
-                  className="w-full rounded bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                  className="btn btn-primary w-full py-2.5"
                 >
                   {!dataReady ? (
                     "Loading airport database…"
@@ -1533,7 +1540,7 @@ export function App() {
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
-            className="absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-md border border-hairline bg-card px-3 py-2 text-sm font-medium text-ink shadow-md hover:bg-surface"
+            className="absolute left-3 top-3 z-10 flex items-center gap-1.5 card-raised px-3 py-2 text-sm font-medium text-ink hover:bg-surface"
           >
             <span aria-hidden="true">☰</span> Trip
           </button>
@@ -1548,7 +1555,7 @@ export function App() {
           <button
             type="button"
             onClick={() => setProfileOpen(true)}
-            className="absolute bottom-3 right-3 z-10 rounded-md border border-hairline bg-card px-2.5 py-1.5 text-xs font-medium text-ink shadow-md hover:bg-surface"
+            className="absolute bottom-3 right-3 z-10 card-raised px-2.5 py-1.5 text-xs font-medium text-ink hover:bg-surface"
           >
             Profile ▴
           </button>
@@ -1570,7 +1577,7 @@ export function App() {
             banner (easy to miss while panning the chart). */}
         {isStale && (
           <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center px-4">
-            <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-caution bg-[color-mix(in_srgb,var(--caution)_14%,var(--card))] px-3 py-2 shadow-lg">
+            <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-caution bg-[color-mix(in_srgb,var(--caution)_14%,var(--card))] px-3 py-2 shadow-lg">
               <p className="text-xs text-caution">
                 <strong>Plan out of date</strong>
                 {staleDiffs.length > 0 && <> — {staleDiffs[0]}</>}
@@ -1701,7 +1708,7 @@ export function App() {
 
   const savedSummaryEl = loadedTripSummary ? (
     <div className="space-y-3 p-4">
-      <div className="rounded border border-hairline bg-card p-3">
+      <div className="card p-3">
         <p className="text-xs font-semibold text-ink">Saved route summary</p>
         <p className="mt-1 font-mono text-xs text-ink">
           {[origin, ...loadedTripSummary.stopIdents, destination].map(
@@ -1719,7 +1726,7 @@ export function App() {
           {loadedTripSummary.fuel_gal.toFixed(1)} gal
         </p>
       </div>
-      <div className="rounded border border-hairline bg-card p-3">
+      <div className="card p-3">
         <p className="text-xs text-caution">
           <strong>Inputs may have changed</strong> since this trip was saved —
           replan to refresh the route.
@@ -1747,13 +1754,27 @@ export function App() {
   // ---- Desktop (≥ lg): the original three-column workspace ----
   // Shared column contents — assembled as fixed desktop columns, and as
   // the tablet drawer + rail.
+  const airportsStatus: LoadStatus = dataReady
+    ? "ready"
+    : dataFailed
+      ? "failed"
+      : "loading";
+  const terrainStatus: LoadStatus = demReady
+    ? "ready"
+    : demFailed
+      ? "failed"
+      : "loading";
+  const appBar = (
+    <AppBar
+      airports={airportsStatus}
+      terrain={terrainStatus}
+      controls={headerControls}
+    />
+  );
+
   const inputScroller = (
     <div className="flex-1 overflow-y-auto">
-      <div className="space-y-4 p-4 pb-0">
-        <header className="flex items-center justify-between gap-2">
-          <h1 className="text-lg font-semibold text-ink">Trip Planner</h1>
-          {headerControls}
-        </header>
+      <div className="space-y-3 p-4 pb-0">
         {inputSections}
       </div>
       {/* Sticky footer inside the scroll container: the primary action
@@ -1781,17 +1802,20 @@ export function App() {
   // ---- Desktop (≥1024): the three-column workspace ----
   if (isDesktop) {
     return (
-      <div className="flex h-full w-full bg-surface text-ink">
-        <aside className="relative flex w-80 shrink-0 flex-col border-r border-hairline bg-surface">
-          {inputScroller}
-        </aside>
-        {mapMain}
-        {/* The right rail is always mounted (T7) so planning doesn't
-            reflow the map; before the first plan it shows an empty
-            state or the summary of a just-loaded saved trip. */}
-        <aside className="flex w-80 shrink-0 flex-col border-l border-hairline bg-surface">
-          {resultsRail}
-        </aside>
+      <div className="flex h-full w-full flex-col bg-surface text-ink">
+        {appBar}
+        <div className="flex min-h-0 flex-1">
+          <aside className="relative flex w-80 shrink-0 flex-col border-r border-hairline bg-surface">
+            {inputScroller}
+          </aside>
+          {mapMain}
+          {/* The right rail is always mounted (T7) so planning doesn't
+              reflow the map; before the first plan it shows an empty
+              state or the summary of a just-loaded saved trip. */}
+          <aside className="flex w-80 shrink-0 flex-col border-l border-hairline bg-surface">
+            {resultsRail}
+          </aside>
+        </div>
       </div>
     );
   }
@@ -1799,11 +1823,14 @@ export function App() {
   // ---- Tablet (768–1023): map + results rail, inputs in a drawer ----
   if (isTablet) {
     return (
-      <div className="relative flex h-full w-full overflow-hidden bg-surface text-ink">
-        {mapMain}
-        <aside className="flex w-72 shrink-0 flex-col border-l border-hairline bg-surface">
-          {resultsRail}
-        </aside>
+      <div className="relative flex h-full w-full flex-col overflow-hidden bg-surface text-ink">
+        {appBar}
+        <div className="flex min-h-0 flex-1">
+          {mapMain}
+          <aside className="flex w-72 shrink-0 flex-col border-l border-hairline bg-surface">
+            {resultsRail}
+          </aside>
+        </div>
         {drawerOpen && (
           <button
             type="button"
@@ -1902,8 +1929,15 @@ export function App() {
 
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-surface text-ink">
-      <header className="pt-safe z-10 flex items-center gap-2 border-b border-hairline bg-surface px-4 pb-2">
-        <h1 className="flex-1 text-base font-semibold text-ink">Trip Planner</h1>
+      <header className="pt-safe z-10 flex items-center gap-2.5 border-b border-hairline bg-card px-4 pb-2">
+        {/* Brand mark only where it fits beside the controls without
+            wrapping the title (≈ 420 px and up). */}
+        <span className="hidden min-[420px]:block">
+          <BrandMark size="sm" />
+        </span>
+        <h1 className="min-w-0 flex-1 whitespace-nowrap text-base font-semibold tracking-tight text-ink">
+          Trip Planner
+        </h1>
         {headerControls}
       </header>
       {mapMain}

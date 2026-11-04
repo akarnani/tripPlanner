@@ -61,21 +61,21 @@ export function Section({
   }
 
   return (
-    <div className="overflow-hidden rounded-md border border-hairline bg-card">
+    <div className="card overflow-hidden">
       <button
         type="button"
         onClick={toggle}
         aria-expanded={open}
         disabled={!collapsible}
         className={
-          "flex min-h-[24px] w-full items-center justify-between gap-2 px-3 py-2.5 text-left " +
-          (collapsible ? "" : "cursor-default")
+          "flex min-h-[24px] w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors " +
+          (collapsible ? "hover:bg-surface" : "cursor-default")
         }
       >
-        <span className="text-sm font-semibold text-ink">{title}</span>
+        <span className="text-[13px] font-semibold tracking-tight text-ink">{title}</span>
         <span className="flex items-center gap-2">
           {!open && summary && (
-            <span className="rounded-full bg-surface px-2 py-0.5 text-xs text-muted">
+            <span className="rounded-full border border-hairline bg-surface px-2 py-0.5 text-[11px] text-muted">
               {summary}
             </span>
           )}
@@ -93,7 +93,7 @@ export function Section({
         </span>
       </button>
       {open && (
-        <div className="border-t border-hairline px-3 py-3">{children}</div>
+        <div className="border-t border-hairline px-4 py-3.5">{children}</div>
       )}
     </div>
   );

@@ -46,7 +46,7 @@ export function RunwayPanel({
         <div>
           <label
             htmlFor="runway-buffer"
-            className="block text-xs uppercase tracking-wide text-muted"
+            className="field-label"
           >
             Buffer
           </label>
@@ -65,16 +65,16 @@ export function RunwayPanel({
                   buffer_ft: Number.parseInt(e.target.value, 10) || 0,
                 })
               }
-              className="w-20 rounded border border-hairline-input bg-card px-2 py-1 font-mono text-ink disabled:bg-surface"
+              className="w-20 input font-mono"
             />
             <span className="text-muted">ft beyond POH required</span>
           </div>
         </div>
         <div>
-          <span className="block text-xs uppercase tracking-wide text-muted">
+          <span className="field-label">
             Weight assumption
           </span>
-          <div className="mt-1 inline-flex overflow-hidden rounded border border-hairline-input">
+          <div className="seg mt-1">
             {(
               [
                 { id: "estimated", label: "Estimated" },
@@ -86,11 +86,9 @@ export function RunwayPanel({
                 type="button"
                 disabled={!settings.enabled || disabled}
                 onClick={() => onChange({ ...settings, weight: opt.id })}
+                aria-pressed={settings.weight === opt.id}
                 className={
-                  "px-3 py-1 text-xs font-medium disabled:bg-surface disabled:text-muted " +
-                  (settings.weight === opt.id
-                    ? "bg-accent text-white"
-                    : "bg-card text-ink hover:bg-surface")
+                  "seg-btn" + (settings.weight === opt.id ? " seg-btn-active" : "")
                 }
               >
                 {opt.label}
@@ -107,7 +105,7 @@ export function RunwayPanel({
         <div>
           <label
             htmlFor="runway-isa"
-            className="block text-xs uppercase tracking-wide text-muted"
+            className="field-label"
           >
             Assumed temperature
           </label>
@@ -127,7 +125,7 @@ export function RunwayPanel({
                   isa_delta_c: Number.parseInt(e.target.value, 10) || 0,
                 })
               }
-              className="w-16 rounded border border-hairline-input bg-card px-2 py-1 font-mono text-ink disabled:bg-surface"
+              className="w-16 input font-mono"
             />
             <span className="text-muted">°C</span>
           </div>

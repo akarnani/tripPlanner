@@ -30,7 +30,7 @@ export function AircraftPanel({
   return (
     <div className="space-y-3">
       <div>
-        <label className="block text-xs font-medium uppercase tracking-wide text-muted">
+        <label className="field-label">
           Aircraft
         </label>
         <div className="mt-1">
@@ -42,26 +42,26 @@ export function AircraftPanel({
               value: a.slug,
               label: `${a.make} ${a.model}`,
             }))}
-            className="w-full rounded border border-hairline-input bg-card px-2 py-1 text-sm text-ink"
+            className="w-full input text-sm"
           />
         </div>
       </div>
       <div className="grid grid-cols-3 gap-x-2 gap-y-1">
         <label
           htmlFor="target-altitude"
-          className="block text-xs font-medium uppercase tracking-wide text-muted"
+          className="field-label"
         >
           Target altitude (ft)
         </label>
         <label
           htmlFor="reserve-min"
-          className="block text-xs font-medium uppercase tracking-wide text-muted"
+          className="field-label"
         >
           Reserve (min)
         </label>
         <label
           htmlFor="starting-fuel"
-          className="block text-xs font-medium uppercase tracking-wide text-muted"
+          className="field-label"
         >
           Start fuel (gal)
         </label>
@@ -79,7 +79,7 @@ export function AircraftPanel({
           onChange={(e) =>
             onTargetAltChange(Number.parseInt(e.target.value, 10) || 0)
           }
-          className="w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-sm text-ink"
+          className="w-full input font-mono text-sm"
         />
         <input
           id="reserve-min"
@@ -90,7 +90,7 @@ export function AircraftPanel({
           onChange={(e) =>
             onReserveChange(Number.parseInt(e.target.value, 10) || 0)
           }
-          className="w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-sm text-ink"
+          className="w-full input font-mono text-sm"
         />
         <input
           id="starting-fuel"
@@ -102,8 +102,23 @@ export function AircraftPanel({
           onChange={(e) =>
             onStartingFuelChange(Number.parseFloat(e.target.value) || 0)
           }
-          className="w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-sm text-ink"
+          className="w-full input font-mono text-sm"
         />
+      </div>
+      <div aria-hidden="true">
+        <div className="mb-1 flex justify-between text-[11px] text-muted">
+          <span>Fuel on board</span>
+          <span className="font-mono">
+            {Math.min(startingFuelGal, capacityGal).toFixed(0)} / {capacityGal} gal
+          </span>
+        </div>
+        <div className="meter">
+          <span
+            style={{
+              width: `${capacityGal > 0 ? Math.max(0, Math.min(100, (startingFuelGal / capacityGal) * 100)) : 0}%`,
+            }}
+          />
+        </div>
       </div>
       <p className="text-xs text-muted">
         Each leg flies the next legal hemispheric altitude at or above

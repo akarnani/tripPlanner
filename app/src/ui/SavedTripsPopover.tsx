@@ -76,14 +76,14 @@ export function SavedTripsPopover({ trips, defaultName, onSave, onLoad, onDelete
         onClick={toggle}
         aria-expanded={open}
         aria-haspopup="true"
-        className="rounded border border-hairline bg-card px-2.5 py-1.5 text-xs text-muted hover:text-ink"
+        className="btn btn-secondary px-2.5 py-1.5 text-xs font-medium"
       >
         Saved trips ▾
       </button>
       {open && (
         <div
           style={{ top: panelPos.top, left: panelPos.left, width: PANEL_W }}
-          className="fixed z-30 rounded-md border border-hairline bg-card p-3 shadow-lg"
+          className="card-raised fixed z-30 p-3"
         >
           <TripsPanel
             trips={trips}

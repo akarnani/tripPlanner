@@ -91,12 +91,12 @@ export function ExcludedAirports({
             }
           }}
           placeholder="KICAO or KSEA KGEG KBOI"
-          className="w-full rounded border border-hairline-input bg-card px-2 py-1 font-mono text-xs uppercase text-ink"
+          className="w-full input font-mono text-xs uppercase"
         />
         <button
           type="button"
           onClick={submit}
-          className="shrink-0 rounded border border-hairline-input bg-card px-2 py-1 text-xs text-ink hover:bg-surface"
+          className="btn btn-secondary shrink-0 px-2.5 py-1 text-xs"
         >
           Add
         </button>
