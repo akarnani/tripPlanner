@@ -11,34 +11,25 @@ interface Props {
   terrain: TerrainAnalysis | null;
 }
 
-/** iOS Safari (and iPadOS, which reports as a Mac but has touch)
- *  ignores the `download` attribute on blob URLs, so a normal anchor
- *  click does nothing. Detect it to fall back to opening the file. */
-function isIOS(): boolean {
-  if (typeof navigator === "undefined") return false;
-  return (
-    /iP(hone|ad|od)/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-  );
-}
-
-function download(name: string, type: string, content: BlobPart) {
-  const blob = content instanceof Blob ? content : new Blob([content], { type });
+/** Save generated content as a file. Text exports are wrapped as
+ *  `application/octet-stream` so the browser downloads them instead of
+ *  rendering the XML inline (Safari in particular previews `*+xml` /
+ *  `application/xml` blobs as plain text — which is what made the FPL
+ *  "download" open in the browser and left GPX saves named "untitled").
+ *  The `download` attribute then supplies the real filename. */
+function download(filename: string, content: BlobPart) {
+  // octet-stream even for the PDF Blob, so every export is saved rather
+  // than previewed, with the filename honored.
+  const blob = new Blob([content], { type: "application/octet-stream" });
   const url = URL.createObjectURL(blob);
-  if (isIOS()) {
-    // Open the file so the user can save/share it from the viewer; the
-    // download attribute wouldn't fire here.
-    window.open(url, "_blank");
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-    return;
-  }
   const a = document.createElement("a");
   a.href = url;
-  a.download = name;
+  a.download = filename;
+  a.rel = "noopener";
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 export function ExportPanel({ route, aircraft, terrain }: Props) {
@@ -53,14 +44,14 @@ export function ExportPanel({ route, aircraft, terrain }: Props) {
     <div className="flex gap-2 border-t border-hairline bg-surface p-3">
       <button
         type="button"
-        onClick={() => download(`${baseName}.gpx`, "application/gpx+xml", toGPX(route, baseName))}
+        onClick={() => download(`${baseName}.gpx`, toGPX(route, baseName))}
         className="flex-1 rounded bg-accent px-2 py-1 text-xs font-semibold text-white hover:opacity-90"
       >
         GPX
       </button>
       <button
         type="button"
-        onClick={() => download(`${baseName}.fpl`, "application/xml", toFPL(route, baseName))}
+        onClick={() => download(`${baseName}.fpl`, toFPL(route, baseName))}
         className="flex-1 rounded bg-accent px-2 py-1 text-xs font-semibold text-white hover:opacity-90"
       >
         Garmin FPL
@@ -68,11 +59,7 @@ export function ExportPanel({ route, aircraft, terrain }: Props) {
       <button
         type="button"
         onClick={() =>
-          download(
-            `${baseName}.pdf`,
-            "application/pdf",
-            toPDF({ route, aircraft, terrain }),
-          )
+          download(`${baseName}.pdf`, toPDF({ route, aircraft, terrain }))
         }
         className="flex-1 rounded bg-accent px-2 py-1 text-xs font-semibold text-white hover:opacity-90"
       >
